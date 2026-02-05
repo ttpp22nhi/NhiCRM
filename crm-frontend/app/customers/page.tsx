@@ -5,11 +5,16 @@ import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
 import { CustomerList } from '@/components/CustomerList'
 import { CustomerForm } from '@/components/CustomerForm'
-import { Plus, X } from 'lucide-react'
+import { useAuth } from '@/contexts/AuthContext'
+import { Plus, X, ArrowRightLeft } from 'lucide-react'
 
 export default function CustomersPage() {
+  const { user } = useAuth()
   const [showForm, setShowForm] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
+  
+  // Chỉ Admin và Manager mới có quyền chuyển giao
+  const canTransfer = user?.role === 'admin' || user?.role === 'manager'
 
   const handleCustomerCreated = () => {
     setShowForm(false)
@@ -26,13 +31,32 @@ export default function CustomersPage() {
               <h1 className="text-3xl font-bold text-gray-900">Quản lý khách hàng</h1>
               <p className="text-gray-600 mt-2">Danh sách và thông tin khách hàng</p>
             </div>
-            <button
-              onClick={() => setShowForm(true)}
-              className="flex items-center space-x-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition font-medium"
-            >
-              <Plus className="w-5 h-5" />
-              <span>Thêm khách hàng</span>
-            </button>
+            <div className="flex items-center gap-3">
+              {canTransfer && (
+                <button
+                  onClick={() => {
+                    const handleBulkTransfer = (window as any).__customerListBulkTransfer
+                    if (handleBulkTransfer) {
+                      handleBulkTransfer()
+                    } else {
+                      // Fallback: show error if component not ready
+                      console.error('CustomerList component not ready')
+                    }
+                  }}
+                  className="flex items-center space-x-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition font-medium"
+                >
+                  <ArrowRightLeft className="w-5 h-5" />
+                  <span>Chuyển giao người phụ trách</span>
+                </button>
+              )}
+              <button
+                onClick={() => setShowForm(true)}
+                className="flex items-center space-x-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition font-medium"
+              >
+                <Plus className="w-5 h-5" />
+                <span>Thêm khách hàng</span>
+              </button>
+            </div>
           </div>
 
           <CustomerList key={refreshKey} />

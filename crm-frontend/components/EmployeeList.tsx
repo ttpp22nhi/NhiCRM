@@ -3,10 +3,12 @@
 import { useState, useEffect } from 'react'
 import { apiClient } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
-import { Users, Mail, Shield, UserCheck, AlertCircle, Key, Copy, X, CheckCircle, Edit, Eye, MoreVertical } from 'lucide-react'
+import { Users, Mail, Shield, UserCheck, AlertCircle, Key, Copy, X, CheckCircle, Edit, Eye, MoreVertical, ArrowRightLeft } from 'lucide-react'
 import { EditEmployeeForm } from './EditEmployeeForm'
 import { EmployeeDetailView } from './EmployeeDetailView'
+import { TransferCustomersModal } from './TransferCustomersModal'
 import toast from 'react-hot-toast'
+import { useAlert } from './AlertModal'
 
 interface Employee {
   employee_id: string
@@ -24,6 +26,7 @@ interface EmployeeListProps {
 
 export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
   const { user } = useAuth()
+  const { showConfirm, AlertComponent } = useAlert()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -35,6 +38,7 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
   const [copied, setCopied] = useState(false)
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null)
   const [viewingEmployee, setViewingEmployee] = useState<Employee | null>(null)
+  const [transferringEmployee, setTransferringEmployee] = useState<Employee | null>(null)
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   
   // Chỉ Admin mới có quyền sửa nhân viên
@@ -79,7 +83,14 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
   }
 
   const handleResetPassword = async (employeeId: string, employeeName: string, username: string, email: string) => {
-    if (!confirm(`Bạn có chắc chắn muốn reset password cho ${employeeName}?`)) {
+    const confirmed = await showConfirm({
+      title: 'Xác nhận reset password',
+      message: `Bạn có chắc chắn muốn reset password cho ${employeeName}?`,
+      confirmText: 'Xác nhận',
+      cancelText: 'Hủy'
+    })
+
+    if (!confirmed) {
       return
     }
 
@@ -323,6 +334,18 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
                             </span>
                           </button>
                         )}
+                        {isAdmin && (
+                          <button
+                            onClick={() => {
+                              setTransferringEmployee(employee)
+                              setOpenMenuId(null)
+                            }}
+                            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-purple-700 hover:bg-purple-50 transition text-left"
+                          >
+                            <ArrowRightLeft className="w-4 h-4" />
+                            <span>Chuyển giao khách hàng</span>
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -366,6 +389,18 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal chuyển giao khách hàng */}
+      {transferringEmployee && (
+        <TransferCustomersModal
+          fromEmployee={transferringEmployee}
+          onClose={() => setTransferringEmployee(null)}
+          onSuccess={() => {
+            setTransferringEmployee(null)
+            fetchEmployees()
+          }}
+        />
       )}
 
       {/* Modal hiển thị password mới */}
@@ -434,6 +469,7 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
           </div>
         </div>
       )}
+      {AlertComponent}
     </div>
   )
 }

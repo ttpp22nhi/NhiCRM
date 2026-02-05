@@ -5,6 +5,7 @@ import { apiClient } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { AlertCircle, Search, ChevronDown, X } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { useDebounce } from '@/hooks/useDebounce'
 
 interface Employee {
   employee_id: string
@@ -38,6 +39,20 @@ export function CustomerForm({ onSuccess, onCancel }: CustomerFormProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [showEmployeeDropdown, setShowEmployeeDropdown] = useState(false)
   const employeeDropdownRef = useRef<HTMLDivElement>(null)
+  
+  // State cho duplicate check
+  const [duplicateInfo, setDuplicateInfo] = useState<{
+    isDuplicate: boolean
+    customerName?: string
+    employeeName?: string
+    isOwnCustomer?: boolean
+    field?: 'phone' | 'tax_code'
+  } | null>(null)
+  const [checkingDuplicate, setCheckingDuplicate] = useState(false)
+  
+  // Debounce phone và tax_code để tránh gọi API quá nhiều
+  const debouncedPhone = useDebounce(formData.phone, 500)
+  const debouncedTaxCode = useDebounce(formData.tax_code, 500)
 
   // Chỉ load danh sách nhân viên nếu user là admin hoặc manager
   useEffect(() => {
@@ -59,6 +74,60 @@ export function CustomerForm({ onSuccess, onCancel }: CustomerFormProps) {
       document.removeEventListener('mousedown', handleClickOutside)
     }
   }, [])
+
+  // Hàm kiểm tra trùng lặp
+  const checkDuplicate = async (phone?: string, taxCode?: string) => {
+    // Chỉ kiểm tra nếu có ít nhất một trong hai trường
+    if (!phone && !taxCode) {
+      setDuplicateInfo(null)
+      return
+    }
+
+    // Bỏ qua nếu phone hoặc taxCode rỗng
+    if (phone && phone.trim() === '') phone = undefined
+    if (taxCode && taxCode.trim() === '') taxCode = undefined
+    
+    if (!phone && !taxCode) {
+      setDuplicateInfo(null)
+      return
+    }
+
+    try {
+      setCheckingDuplicate(true)
+      const response = await apiClient.post('/api/customers/check-duplicate', {
+        phone: phone?.trim(),
+        tax_code: taxCode?.trim()
+      })
+
+      if (response.data.success && response.data.is_duplicate) {
+        const customer = response.data.customer
+        setDuplicateInfo({
+          isDuplicate: true,
+          customerName: customer.full_name,
+          employeeName: customer.assigned_employee_name,
+          isOwnCustomer: customer.is_own_customer,
+          field: phone ? 'phone' : 'tax_code'
+        })
+      } else {
+        setDuplicateInfo(null)
+      }
+    } catch (err: any) {
+      console.error('Lỗi khi kiểm tra trùng lặp:', err)
+      // Không hiển thị lỗi cho user, chỉ log
+      setDuplicateInfo(null)
+    } finally {
+      setCheckingDuplicate(false)
+    }
+  }
+
+  // Kiểm tra trùng lặp khi debounced phone hoặc tax_code thay đổi
+  useEffect(() => {
+    if (debouncedPhone || debouncedTaxCode) {
+      checkDuplicate(debouncedPhone, debouncedTaxCode)
+    } else {
+      setDuplicateInfo(null)
+    }
+  }, [debouncedPhone, debouncedTaxCode])
 
   const fetchEmployees = async () => {
     try {
@@ -106,20 +175,66 @@ export function CustomerForm({ onSuccess, onCancel }: CustomerFormProps) {
     setSearchQuery('')
   }
 
+  // Handler cho onBlur của phone và tax_code
+  const handlePhoneBlur = () => {
+    if (formData.phone && formData.phone.trim()) {
+      checkDuplicate(formData.phone.trim(), formData.tax_code?.trim())
+    }
+  }
+
+  const handleTaxCodeBlur = () => {
+    if (formData.tax_code && formData.tax_code.trim()) {
+      checkDuplicate(formData.phone?.trim(), formData.tax_code.trim())
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+
+    // Kiểm tra lại duplicate trước khi submit
+    if (duplicateInfo?.isDuplicate) {
+      toast.error('Không thể tạo khách hàng trùng lặp. Vui lòng kiểm tra lại thông tin.')
+      return
+    }
+
+    // Kiểm tra duplicate một lần nữa trước khi submit (bảo mật)
+    try {
+      const checkResponse = await apiClient.post('/api/customers/check-duplicate', {
+        phone: formData.phone?.trim(),
+        tax_code: formData.tax_code?.trim()
+      })
+
+      if (checkResponse.data.success && checkResponse.data.is_duplicate) {
+        const customer = checkResponse.data.customer
+        if (customer.is_own_customer) {
+          toast.error('Bạn đã quản lý khách hàng này rồi, vui lòng kiểm tra lại danh sách.')
+        } else {
+          toast.error(`Số điện thoại/Mã số thuế này đã được đăng ký cho khách hàng "${customer.full_name}" bởi nhân viên "${customer.assigned_employee_name}".`)
+        }
+        return
+      }
+    } catch (checkErr) {
+      console.error('Lỗi khi kiểm tra duplicate trước khi submit:', checkErr)
+      // Tiếp tục submit nếu có lỗi khi check (không chặn user)
+    }
+
     setLoading(true)
 
     try {
       const response = await apiClient.post('/api/customers', formData)
       if (response.data.success) {
+        toast.success('Tạo khách hàng thành công!')
         onSuccess()
       } else {
-        setError(response.data.message || 'Tạo khách hàng thất bại')
+        const errorMsg = response.data.message || 'Tạo khách hàng thất bại'
+        setError(errorMsg)
+        toast.error(errorMsg)
       }
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Lỗi khi tạo khách hàng')
+      const errorMsg = err.response?.data?.message || 'Lỗi khi tạo khách hàng'
+      setError(errorMsg)
+      toast.error(errorMsg)
     } finally {
       setLoading(false)
     }
@@ -161,10 +276,30 @@ export function CustomerForm({ onSuccess, onCancel }: CustomerFormProps) {
             type="tel"
             value={formData.phone}
             onChange={handleChange}
+            onBlur={handlePhoneBlur}
             required
-            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
+            className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition ${
+              duplicateInfo?.isDuplicate && duplicateInfo.field === 'phone'
+                ? 'border-red-500 focus:ring-red-500'
+                : 'border-gray-300'
+            }`}
             placeholder="Nhập số điện thoại"
           />
+          {checkingDuplicate && (
+            <p className="text-xs text-gray-500 mt-1">Đang kiểm tra...</p>
+          )}
+          {duplicateInfo?.isDuplicate && duplicateInfo.field === 'phone' && (
+            <p className="text-sm text-red-600 mt-1 flex items-center gap-1">
+              <AlertCircle className="w-4 h-4" />
+              {duplicateInfo.isOwnCustomer ? (
+                <span>Bạn đã quản lý khách hàng này rồi, vui lòng kiểm tra lại danh sách.</span>
+              ) : (
+                <span>
+                  Số điện thoại này đã được đăng ký cho khách hàng <strong>{duplicateInfo.customerName}</strong> bởi nhân viên <strong>{duplicateInfo.employeeName}</strong>.
+                </span>
+              )}
+            </p>
+          )}
         </div>
 
         <div>
@@ -285,9 +420,29 @@ export function CustomerForm({ onSuccess, onCancel }: CustomerFormProps) {
                 type="text"
                 value={formData.tax_code}
                 onChange={handleChange}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
+                onBlur={handleTaxCodeBlur}
+                className={`w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition ${
+                  duplicateInfo?.isDuplicate && duplicateInfo.field === 'tax_code'
+                    ? 'border-red-500 focus:ring-red-500'
+                    : 'border-gray-300'
+                }`}
                 placeholder="Nhập mã số thuế"
               />
+          {checkingDuplicate && duplicateInfo?.field === 'tax_code' && (
+            <p className="text-xs text-gray-500 mt-1">Đang kiểm tra...</p>
+          )}
+          {duplicateInfo?.isDuplicate && duplicateInfo.field === 'tax_code' && (
+            <p className="text-sm text-red-600 mt-1 flex items-center gap-1">
+              <AlertCircle className="w-4 h-4" />
+              {duplicateInfo.isOwnCustomer ? (
+                <span>Bạn đã quản lý khách hàng này rồi, vui lòng kiểm tra lại danh sách.</span>
+              ) : (
+                <span>
+                  Mã số thuế này đã được đăng ký cho khách hàng <strong>{duplicateInfo.customerName}</strong> bởi nhân viên <strong>{duplicateInfo.employeeName}</strong>.
+                </span>
+              )}
+            </p>
+          )}
             </div>
           </>
         )}
@@ -412,7 +567,7 @@ export function CustomerForm({ onSuccess, onCancel }: CustomerFormProps) {
         </button>
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || (duplicateInfo?.isDuplicate === true)}
           className="px-6 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {loading ? 'Đang tạo...' : 'Tạo khách hàng'}

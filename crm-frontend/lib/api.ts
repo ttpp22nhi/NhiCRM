@@ -15,10 +15,16 @@ apiClient.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401 || error.response?.status === 403) {
       // Token hết hạn hoặc không hợp lệ
+      // KHÔNG redirect nếu đang ở trang login (để tránh gián đoạn toast)
       if (typeof window !== 'undefined') {
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
-        window.location.href = '/login'
+        const isLoginPage = window.location.pathname === '/login'
+        
+        // Chỉ redirect nếu KHÔNG phải trang login
+        if (!isLoginPage) {
+          localStorage.removeItem('token')
+          localStorage.removeItem('user')
+          window.location.href = '/login'
+        }
       }
     }
     return Promise.reject(error)

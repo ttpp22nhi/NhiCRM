@@ -49,9 +49,32 @@ export function CompleteTaskModal({
         toast.error(errorMsg)
       }
     } catch (err: any) {
-      const errorMsg = err.response?.data?.message || 'Lỗi khi hoàn thành công việc'
-      setError(errorMsg)
-      toast.error(errorMsg)
+      const errorData = err.response?.data || {}
+      const errorMsg = errorData.message || errorData.error || 'Lỗi khi hoàn thành công việc'
+      const errorDetails = errorData.details || errorData.error
+      
+      // Hiển thị lỗi chi tiết hơn
+      const fullErrorMsg = errorDetails && errorDetails !== errorMsg 
+        ? `${errorMsg}\n${errorDetails}` 
+        : errorMsg
+      
+      setError(fullErrorMsg)
+      toast.error(errorMsg, {
+        duration: 5000,
+        style: {
+          maxWidth: '500px',
+          wordBreak: 'break-word'
+        }
+      })
+      
+      // Log chi tiết lỗi để debug
+      if (process.env.NODE_ENV === 'development') {
+        console.error('Lỗi hoàn thành task:', {
+          error: err,
+          response: err.response,
+          errorData
+        })
+      }
     } finally {
       setLoading(false)
     }

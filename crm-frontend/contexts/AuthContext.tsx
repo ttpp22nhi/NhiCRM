@@ -71,7 +71,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       if (error.response) {
         // Lỗi từ server (có response)
-        message = error.response.data?.message || 'Đăng nhập thất bại'
+        // Xử lý các status code khác nhau
+        if (error.response.status === 401) {
+          message = error.response.data?.message || 'Tên đăng nhập hoặc mật khẩu không đúng'
+        } else if (error.response.status === 403) {
+          message = error.response.data?.message || 'Tài khoản không có quyền truy cập'
+        } else {
+          message = error.response.data?.message || 'Đăng nhập thất bại'
+        }
       } else if (error.request) {
         // Request đã được gửi nhưng không nhận được response (backend không chạy hoặc network error)
         message = 'Không thể kết nối đến server. Vui lòng kiểm tra lại kết nối mạng hoặc đảm bảo backend đang chạy.'

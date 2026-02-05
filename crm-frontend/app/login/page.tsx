@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
@@ -15,20 +15,95 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const { login } = useAuth()
   const router = useRouter()
+  const formRef = useRef<HTMLFormElement>(null)
+  
+  // Khôi phục giá trị từ sessionStorage nếu có (để tránh mất dữ liệu khi refresh)
+  useEffect(() => {
+    const savedUsername = sessionStorage.getItem('login_username')
+    if (savedUsername) {
+      setUsername(savedUsername)
+    }
+  }, [])
+  
+  // Lưu username vào sessionStorage khi thay đổi
+  useEffect(() => {
+    if (username) {
+      sessionStorage.setItem('login_username', username)
+    }
+  }, [username])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    e.stopPropagation() // Ngăn chặn event bubbling
+    
+    // Lưu giá trị hiện tại vào biến để đảm bảo không bị mất
+    const currentUsername = username
+    const currentPassword = password
+    
     setError('')
     setLoading(true)
 
     try {
-      await login(username, password)
+      await login(currentUsername, currentPassword)
+      // Xóa sessionStorage khi đăng nhập thành công
+      sessionStorage.removeItem('login_username')
       toast.success('Đăng nhập thành công!')
       router.push('/dashboard')
     } catch (err: any) {
       const errorMessage = err.message || 'Đăng nhập thất bại'
+      
+      // Đảm bảo giữ nguyên giá trị form
+      setUsername(currentUsername)
+      setPassword(currentPassword)
+      
+      // Set error state
       setError(errorMessage)
-      toast.error(errorMessage)
+      
+      // Dismiss toast cũ nếu có (tránh duplicate)
+      toast.dismiss('login-error')
+      
+      // Hiển thị toast ngay lập tức - không cần delay
+      // Toast với duration rất dài (20000ms = 20 giây) để đảm bảo user có đủ thời gian đọc
+      // Hiển thị ở top-center với style nổi bật
+      toast.error(
+        `⚠️ Đăng nhập thất bại\n${errorMessage}`,
+        {
+          id: 'login-error', // ID cố định để tránh duplicate
+          duration: 5000, // 20 giây - rất dài để user có đủ thời gian đọc
+          position: 'top-center',
+          style: {
+            background: '#fee2e2',
+            color: '#991b1b',
+            border: '3px solid #dc2626',
+            padding: '20px 24px',
+            fontSize: '18px',
+            fontWeight: '700',
+            borderRadius: '12px',
+            boxShadow: '0 10px 40px rgba(220, 38, 38, 0.5)',
+            minWidth: '450px',
+            maxWidth: '600px',
+            zIndex: 99999,
+            whiteSpace: 'pre-line', // Cho phép xuống dòng
+            lineHeight: '1.6',
+          },
+          icon: '⚠️',
+          ariaProps: {
+            role: 'alert',
+            'aria-live': 'assertive',
+          },
+        }
+      )
+      
+      // KHÔNG reset form - giữ nguyên TẤT CẢ thông tin (username và password)
+      // Chỉ focus vào password field để user có thể sửa lại nếu cần
+      setTimeout(() => {
+        const passwordInput = document.getElementById('password') as HTMLInputElement
+        if (passwordInput) {
+          passwordInput.focus()
+          // Select text để user dễ xóa và nhập lại nếu muốn
+          passwordInput.select()
+        }
+      }, 300)
     } finally {
       setLoading(false)
     }
@@ -46,11 +121,14 @@ export default function LoginPage() {
         </div>
 
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form ref={formRef} onSubmit={handleSubmit} className="space-y-6" noValidate>
           {error && (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center gap-2 text-red-700">
-              <AlertCircle className="w-5 h-5 flex-shrink-0" />
-              <span className="text-sm">{error}</span>
+            <div className="bg-red-50 border-2 border-red-300 rounded-lg p-4 flex items-start gap-3 text-red-700 animate-in fade-in slide-in-from-top-2">
+              <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-600" />
+              <div className="flex-1">
+                <p className="text-sm font-semibold mb-1 text-red-900">Đăng nhập thất bại</p>
+                <p className="text-sm">{error}</p>
+              </div>
             </div>
           )}
 

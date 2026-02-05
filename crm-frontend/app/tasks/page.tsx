@@ -17,12 +17,14 @@ import {
   Loader2,
   User,
   Phone,
-  Trash2
+  Trash2,
+  UserCircle
 } from 'lucide-react'
 import Calendar from 'react-calendar'
 import 'react-calendar/dist/Calendar.css'
 import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
+import { useAlert } from '@/components/AlertModal'
 
 interface Task {
   task_id: string
@@ -36,12 +38,14 @@ interface Task {
   created_at: number
   assigned_to?: string
   assigned_employee_name?: string
+  assigned_employee_username?: string
 }
 
 type ViewMode = 'list' | 'calendar'
 
 export default function TasksPage() {
   const { user } = useAuth()
+  const { showConfirm, AlertComponent } = useAlert()
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
   const [viewMode, setViewMode] = useState<ViewMode>('list')
@@ -339,9 +343,15 @@ export default function TasksPage() {
                             </div>
                           )}
                           {task.customer_phone && (
-                            <div className="flex items-center gap-2 text-sm text-gray-600">
+                            <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
                               <Phone className="w-4 h-4" />
                               <span>{task.customer_phone}</span>
+                            </div>
+                          )}
+                          {task.assigned_employee_name && (
+                            <div className="flex items-center gap-2 text-sm text-primary-600 mt-2 pt-2 border-t border-gray-200">
+                              <UserCircle className="w-4 h-4" />
+                              <span className="font-medium">Người chăm sóc: {task.assigned_employee_name}</span>
                             </div>
                           )}
                         </div>
@@ -441,6 +451,12 @@ export default function TasksPage() {
                               className="p-3 bg-gray-50 rounded-lg border border-gray-200"
                             >
                               <p className="font-medium text-sm text-gray-900">{task.title}</p>
+                              {task.assigned_employee_name && (
+                                <p className="text-xs text-primary-600 mt-1 flex items-center gap-1">
+                                  <UserCircle className="w-3 h-3" />
+                                  {task.assigned_employee_name}
+                                </p>
+                              )}
                               <p className="text-xs text-gray-500 mt-1">
                                 {formatDate(task.due_date)}
                               </p>
@@ -481,6 +497,7 @@ export default function TasksPage() {
             onCancel={() => setCompletingTaskId(null)}
           />
         )}
+        {AlertComponent}
       </div>
     </ProtectedRoute>
   )
