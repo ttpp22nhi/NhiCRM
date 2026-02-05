@@ -1,0 +1,6 @@
+DB_USER=postgres
+DB_HOST=localhost
+DB_NAME=crm_core_system
+DB_PASSWORD=Mật_Khẩu_Của_Bạn
+DB_PORT=5432
+JWT_SECRET=mot_cai_ma_bi_mat_bat_ky
