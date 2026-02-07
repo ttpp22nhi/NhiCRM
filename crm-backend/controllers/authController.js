@@ -413,3 +413,298 @@ export const updateEmployee = async (req, res) => {
     });
   }
 };
+
+/**
+ * Lấy thống kê trước khi chuyển giao khách hàng (Chỉ Admin)
+ */
+export const getTransferStats = async (req, res) => {
+  const { from_employee_id } = req.query;
+  const { role } = req.user;
+
+  try {
+    // 1. Kiểm tra quyền (chỉ Admin)
+    if (role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Chỉ Admin mới có quyền xem thống kê chuyển giao.'
+      });
+    }
+
+    // 2. Kiểm tra dữ liệu đầu vào
+    if (!from_employee_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'from_employee_id là bắt buộc.'
+      });
+    }
+
+    // 3. Kiểm tra nhân viên có tồn tại không
+    const employeeCheck = await pool.query(
+      'SELECT employee_id, full_name FROM employees WHERE employee_id = $1',
+      [from_employee_id]
+    );
+
+    if (employeeCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Nhân viên không tồn tại.'
+      });
+    }
+
+    // 4. Đếm số lượng khách hàng
+    const customerCountResult = await pool.query(
+      `SELECT COUNT(*) as count 
+       FROM customers 
+       WHERE assigned_to = $1 AND deleted_at IS NULL`,
+      [from_employee_id]
+    );
+    const customerCount = parseInt(customerCountResult.rows[0].count);
+
+    // 5. Đếm số lượng deals đang mở
+    const dealsCountResult = await pool.query(
+      `SELECT COUNT(DISTINCT d.deal_id) as count
+       FROM deals d
+       INNER JOIN customers c ON d.customer_id = c.customer_id
+       WHERE c.assigned_to = $1 
+       AND c.deleted_at IS NULL
+       AND d.stage NOT IN ('closed_won', 'closed_lost', 'Thành công', 'Thất bại')`,
+      [from_employee_id]
+    );
+    const dealsCount = parseInt(dealsCountResult.rows[0].count);
+
+    // 6. Đếm số lượng tasks chưa hoàn thành
+    const tasksCountResult = await pool.query(
+      `SELECT COUNT(*) as count 
+       FROM tasks 
+       WHERE assigned_to = $1 AND is_completed = false`,
+      [from_employee_id]
+    );
+    const tasksCount = parseInt(tasksCountResult.rows[0].count);
+
+    res.json({
+      success: true,
+      data: {
+        employee: {
+          employee_id: from_employee_id,
+          full_name: employeeCheck.rows[0].full_name
+        },
+        customers_count: customerCount,
+        deals_count: dealsCount,
+        tasks_count: tasksCount
+      }
+    });
+  } catch (error) {
+    console.error('Lỗi getTransferStats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi hệ thống khi lấy thống kê chuyển giao.',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Chuyển giao khách hàng hàng loạt từ nhân viên này sang nhân viên khác (Chỉ Admin)
+ * Trong một transaction duy nhất:
+ * - Cập nhật assigned_to trong customers
+ * - Cập nhật deals đang mở (stage khác 'closed_won'/'closed_lost')
+ * - Cập nhật tasks chưa hoàn thành
+ * - Tạo audit log interactions cho mỗi khách hàng
+ * - Tạo notification cho nhân viên tiếp nhận
+ */
+export const transferCustomers = async (req, res) => {
+  const { from_employee_id, to_employee_id } = req.body;
+  const { id: adminId, role } = req.user;
+
+  try {
+    // 1. Kiểm tra quyền (chỉ Admin)
+    if (role !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Chỉ Admin mới có quyền chuyển giao khách hàng.'
+      });
+    }
+
+    // 2. Kiểm tra dữ liệu đầu vào
+    if (!from_employee_id || !to_employee_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'from_employee_id và to_employee_id là bắt buộc.'
+      });
+    }
+
+    if (from_employee_id === to_employee_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Không thể chuyển giao khách hàng cho chính nhân viên đó.'
+      });
+    }
+
+    // 3. Kiểm tra nhân viên có tồn tại không
+    const fromEmployeeCheck = await pool.query(
+      'SELECT employee_id, full_name FROM employees WHERE employee_id = $1',
+      [from_employee_id]
+    );
+
+    if (fromEmployeeCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Nhân viên nguồn không tồn tại.'
+      });
+    }
+
+    const toEmployeeCheck = await pool.query(
+      'SELECT employee_id, full_name FROM employees WHERE employee_id = $1 AND is_active = TRUE',
+      [to_employee_id]
+    );
+
+    if (toEmployeeCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Nhân viên đích không tồn tại hoặc đã bị khóa.'
+      });
+    }
+
+    const fromEmployee = fromEmployeeCheck.rows[0];
+    const toEmployee = toEmployeeCheck.rows[0];
+
+    // 4. Bắt đầu transaction
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      // 5. Đếm số lượng khách hàng sẽ được chuyển
+      const customerCountResult = await client.query(
+        `SELECT COUNT(*) as count 
+         FROM customers 
+         WHERE assigned_to = $1 AND deleted_at IS NULL`,
+        [from_employee_id]
+      );
+      const customerCount = parseInt(customerCountResult.rows[0].count);
+
+      if (customerCount === 0) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          success: false,
+          message: 'Nhân viên này không có khách hàng nào để chuyển giao.'
+        });
+      }
+
+      // 6. Đếm deals đang mở sẽ được chuyển (deals được liên kết với customers qua customer_id)
+      // Phải đếm TRƯỚC khi cập nhật customers
+      const dealsCountResult = await client.query(
+        `SELECT COUNT(DISTINCT d.deal_id) as count
+         FROM deals d
+         INNER JOIN customers c ON d.customer_id = c.customer_id
+         WHERE c.assigned_to = $1 
+         AND c.deleted_at IS NULL
+         AND d.stage NOT IN ('closed_won', 'closed_lost', 'Thành công', 'Thất bại')`,
+        [from_employee_id]
+      );
+      const dealsCount = parseInt(dealsCountResult.rows[0].count);
+
+      // 7. Lấy danh sách customer_id để tạo audit log
+      const customersResult = await client.query(
+        `SELECT customer_id, full_name 
+         FROM customers 
+         WHERE assigned_to = $1 AND deleted_at IS NULL`,
+        [from_employee_id]
+      );
+      const customers = customersResult.rows;
+
+      // 8. Cập nhật assigned_to trong customers
+      await client.query(
+        `UPDATE customers 
+         SET assigned_to = $1, updated_at = $2
+         WHERE assigned_to = $3 AND deleted_at IS NULL`,
+        [to_employee_id, Date.now(), from_employee_id]
+      );
+
+      // 9. Cập nhật tasks chưa hoàn thành
+      const tasksUpdateResult = await client.query(
+        `UPDATE tasks 
+         SET assigned_to = $1
+         WHERE assigned_to = $2 
+         AND is_completed = false`,
+        [to_employee_id, from_employee_id]
+      );
+      const tasksCount = tasksUpdateResult.rowCount;
+
+      // 10. Tạo audit log interactions cho mỗi khách hàng
+      const now = Date.now();
+      const auditContent = `Hệ thống: Chuyển giao người phụ trách từ ${fromEmployee.full_name} sang ${toEmployee.full_name} do thay đổi nhân sự.`;
+
+      for (const customer of customers) {
+        const interactionId = uuidv4();
+        await client.query(
+          `INSERT INTO interactions (
+            interaction_id, customer_id, interaction_type, content,
+            interaction_date, employee_id, status, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            interactionId,
+            customer.customer_id,
+            'system',
+            auditContent,
+            now,
+            adminId, // Admin thực hiện chuyển giao
+            'system',
+            now
+          ]
+        );
+      }
+
+      // 11. Tạo notification cho nhân viên tiếp nhận
+      const notificationId = uuidv4();
+      await client.query(
+        `INSERT INTO public.notifications (
+          notification_id, employee_id, type, title, message, is_read, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          notificationId,
+          to_employee_id,
+          'customer_transfer',
+          'Nhận bàn giao khách hàng',
+          `Bạn vừa nhận bàn giao ${customerCount} khách hàng từ nhân viên ${fromEmployee.full_name}. Vui lòng kiểm tra danh sách.`,
+          false,
+          now
+        ]
+      );
+
+      // 12. Commit transaction
+      await client.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: 'Chuyển giao khách hàng thành công!',
+        data: {
+          customers_transferred: customerCount,
+          deals_transferred: dealsCount,
+          tasks_transferred: tasksCount,
+          from_employee: {
+            employee_id: from_employee_id,
+            full_name: fromEmployee.full_name
+          },
+          to_employee: {
+            employee_id: to_employee_id,
+            full_name: toEmployee.full_name
+          }
+        }
+      });
+    } catch (error) {
+      // Rollback transaction nếu có lỗi
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Lỗi transferCustomers:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi hệ thống khi chuyển giao khách hàng.',
+      error: error.message
+    });
+  }
+};

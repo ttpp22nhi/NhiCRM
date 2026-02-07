@@ -3,6 +3,94 @@ import { v4 as uuidv4 } from 'uuid';
 import pool from '../database.js';
 
 /**
+ * Kiểm tra trùng lặp khách hàng dựa trên số điện thoại hoặc mã số thuế
+ */
+export const checkDuplicateCustomer = async (req, res) => {
+  const { phone, tax_code } = req.body;
+  const { id: userId } = req.user;
+
+  try {
+    // Kiểm tra ít nhất một trong hai trường phải có
+    if (!phone && !tax_code) {
+      return res.status(400).json({
+        success: false,
+        message: 'Vui lòng cung cấp số điện thoại hoặc mã số thuế để kiểm tra.'
+      });
+    }
+
+    let query = `
+      SELECT 
+        c.customer_id,
+        c.full_name,
+        c.phone,
+        c.tax_code,
+        c.assigned_to,
+        e.full_name as assigned_employee_name,
+        e.username as assigned_employee_username
+      FROM customers c
+      LEFT JOIN employees e ON c.assigned_to = e.employee_id
+      WHERE c.deleted_at IS NULL
+    `;
+    const params = [];
+    let paramIndex = 1;
+    const conditions = [];
+
+    // Tìm theo số điện thoại
+    if (phone && phone.trim()) {
+      conditions.push(`c.phone = $${paramIndex++}`);
+      params.push(phone.trim());
+    }
+
+    // Tìm theo mã số thuế (nếu có và không phải empty string)
+    if (tax_code && tax_code.trim() !== '') {
+      conditions.push(`(c.tax_code = $${paramIndex++} AND c.tax_code IS NOT NULL AND c.tax_code != '')`);
+      params.push(tax_code.trim());
+    }
+
+    // Nếu có điều kiện, thêm vào query với OR
+    if (conditions.length > 0) {
+      query += ` AND (${conditions.join(' OR ')})`;
+    }
+
+    query += ' LIMIT 1';
+
+    const result = await pool.query(query, params);
+
+    if (result.rows.length > 0) {
+      const duplicate = result.rows[0];
+      const isOwnCustomer = duplicate.assigned_to === userId;
+
+      return res.json({
+        success: true,
+        is_duplicate: true,
+        customer: {
+          customer_id: duplicate.customer_id,
+          full_name: duplicate.full_name,
+          phone: duplicate.phone,
+          tax_code: duplicate.tax_code,
+          assigned_employee_name: duplicate.assigned_employee_name || 'Chưa gán',
+          assigned_employee_username: duplicate.assigned_employee_username || '',
+          is_own_customer: isOwnCustomer
+        }
+      });
+    }
+
+    // Không tìm thấy trùng lặp
+    return res.json({
+      success: true,
+      is_duplicate: false
+    });
+  } catch (error) {
+    console.error('Lỗi checkDuplicateCustomer:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi hệ thống khi kiểm tra trùng lặp.',
+      error: error.message
+    });
+  }
+};
+
+/**
  * Tạo mới khách hàng và lưu vào Database
  */
 export const createCustomer = async (req, res) => {
@@ -445,6 +533,243 @@ export const deleteCustomer = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Lỗi hệ thống khi xóa khách hàng.',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Chuyển giao khách hàng hàng loạt
+ * - Admin/Manager: Có quyền chuyển giao mọi khách hàng
+ * - Sales: Chỉ được chuyển giao khách hàng của mình
+ */
+export const bulkTransferCustomers = async (req, res) => {
+  const { customer_ids, new_assigned_to_id, transfer_reason, include_completed_tasks } = req.body;
+  const { role, id: userId } = req.user;
+
+  try {
+    // 1. Kiểm tra dữ liệu đầu vào
+    if (!customer_ids || !Array.isArray(customer_ids) || customer_ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Danh sách customer_ids là bắt buộc và phải là mảng không rỗng.'
+      });
+    }
+
+    if (!new_assigned_to_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'new_assigned_to_id là bắt buộc.'
+      });
+    }
+
+    // 2. Kiểm tra nhân viên tiếp nhận có tồn tại không
+    const employeeCheck = await pool.query(
+      'SELECT employee_id, full_name FROM employees WHERE employee_id = $1 AND is_active = TRUE',
+      [new_assigned_to_id]
+    );
+
+    if (employeeCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Nhân viên tiếp nhận không tồn tại hoặc đã bị khóa.'
+      });
+    }
+
+    const newEmployee = employeeCheck.rows[0];
+
+    // 3. Kiểm tra các khách hàng có tồn tại và quyền truy cập
+    const placeholders = customer_ids.map((_, index) => `$${index + 1}`).join(', ');
+    const customersCheckQuery = `
+      SELECT customer_id, full_name, assigned_to, deleted_at
+      FROM customers
+      WHERE customer_id IN (${placeholders})
+    `;
+    const customersCheck = await pool.query(customersCheckQuery, customer_ids);
+
+    if (customersCheck.rows.length !== customer_ids.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Một số khách hàng không tồn tại.'
+      });
+    }
+
+    // Kiểm tra soft delete và phân quyền
+    const validCustomers = [];
+    for (const customer of customersCheck.rows) {
+      if (customer.deleted_at !== null) {
+        return res.status(400).json({
+          success: false,
+          message: `Khách hàng ${customer.full_name} đã bị xóa.`
+        });
+      }
+
+      // Sales chỉ được chuyển giao khách hàng của mình
+      if (role === 'sales' && customer.assigned_to !== userId) {
+        return res.status(403).json({
+          success: false,
+          message: `Bạn không có quyền chuyển giao khách hàng ${customer.full_name}.`
+        });
+      }
+
+      validCustomers.push(customer);
+    }
+
+    // 4. Bắt đầu transaction
+    const client = await pool.connect();
+
+    try {
+      await client.query('BEGIN');
+
+      const now = Date.now();
+      const oldEmployeeNames = {};
+
+      // 5. Lấy thông tin nhân viên cũ cho audit log
+      const uniqueOldEmployeeIds = [...new Set(validCustomers.map(c => c.assigned_to).filter(Boolean))];
+      if (uniqueOldEmployeeIds.length > 0) {
+        const oldEmployeePlaceholders = uniqueOldEmployeeIds.map((_, index) => `$${index + 1}`).join(', ');
+        const oldEmployeesQuery = `
+          SELECT employee_id, full_name
+          FROM employees
+          WHERE employee_id IN (${oldEmployeePlaceholders})
+        `;
+        const oldEmployeesResult = await client.query(oldEmployeesQuery, uniqueOldEmployeeIds);
+        oldEmployeesResult.rows.forEach(emp => {
+          oldEmployeeNames[emp.employee_id] = emp.full_name;
+        });
+      }
+
+      // 6. Xử lý Deals đang mở
+      // Lưu ý: Bảng deals không có trường assigned_to, chỉ liên kết với customers qua customer_id
+      // Khi chuyển giao khách hàng, deals sẽ tự động "chuyển giao" vì liên kết với customer_id
+      // Chỉ đếm các deal có stage KHÔNG PHẢI là 'Thành công' hoặc 'Thất bại' để thông báo
+      const customerPlaceholders = customer_ids.map((_, index) => `$${index + 1}`).join(', ');
+      const dealsCountResult = await client.query(
+        `SELECT COUNT(DISTINCT d.deal_id) as count
+         FROM deals d
+         INNER JOIN customers c ON d.customer_id = c.customer_id
+         WHERE c.customer_id IN (${customerPlaceholders})
+         AND c.deleted_at IS NULL
+         AND d.stage NOT IN ('closed_won', 'closed_lost', 'Thành công', 'Thất bại')`,
+        [...customer_ids]
+      );
+      const dealsCount = parseInt(dealsCountResult.rows[0].count) || 0;
+
+      // 7. Đếm và cập nhật tasks
+      // Nếu include_completed_tasks = true: cập nhật tất cả tasks (bao gồm cả đã hoàn thành)
+      // Nếu include_completed_tasks = false hoặc undefined: chỉ cập nhật tasks chưa hoàn thành
+      let tasksUpdateQuery;
+      if (include_completed_tasks === true) {
+        // Cập nhật tất cả tasks (bao gồm cả đã hoàn thành)
+        tasksUpdateQuery = `
+          UPDATE tasks 
+          SET assigned_to = $1
+          WHERE customer_id IN (${customerPlaceholders})
+          RETURNING task_id
+        `;
+      } else {
+        // Chỉ cập nhật tasks chưa hoàn thành (mặc định)
+        tasksUpdateQuery = `
+          UPDATE tasks 
+          SET assigned_to = $1
+          WHERE customer_id IN (${customerPlaceholders})
+          AND is_completed = false
+          RETURNING task_id
+        `;
+      }
+      
+      const tasksUpdateResult = await client.query(
+        tasksUpdateQuery,
+        [new_assigned_to_id, ...customer_ids]
+      );
+      const tasksCount = tasksUpdateResult.rowCount || 0;
+
+      // 8. Cập nhật assigned_to trong customers
+      await client.query(
+        `UPDATE customers 
+         SET assigned_to = $1, updated_at = $2
+         WHERE customer_id IN (${customerPlaceholders}) AND deleted_at IS NULL`,
+        [new_assigned_to_id, now, ...customer_ids]
+      );
+
+      // 9. Tạo audit log interactions cho mỗi khách hàng
+      // Với mỗi khách hàng được chuyển giao, tự động chèn 1 dòng vào bảng interactions
+      for (const customer of validCustomers) {
+        const interactionId = uuidv4();
+        const oldEmployeeName = customer.assigned_to ? (oldEmployeeNames[customer.assigned_to] || 'Chưa gán') : 'Chưa gán';
+        
+        // Format content theo yêu cầu: 'BÀN GIAO HỆ THỐNG: Khách hàng và các công việc đang dang dở được chuyển từ [Tên người cũ] sang [Tên người mới].'
+        const content = `BÀN GIAO HỆ THỐNG: Khách hàng và các công việc đang dang dở được chuyển từ ${oldEmployeeName} sang ${newEmployee.full_name}.${transfer_reason ? ` Lý do: ${transfer_reason}` : ''}`;
+
+        await client.query(
+          `INSERT INTO interactions (
+            interaction_id, customer_id, interaction_type, content,
+            interaction_date, employee_id, status, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [
+            interactionId,
+            customer.customer_id,
+            'system',
+            content.trim(),
+            now,
+            userId, // Người thực hiện chuyển giao
+            'system',
+            now
+          ]
+        );
+      }
+
+      // 10. Gửi thông báo hệ thống cho nhân viên tiếp nhận
+      // Thông báo số lượng Deal và Task cụ thể vừa nhận được
+      const notificationId = uuidv4();
+      const taskDescription = include_completed_tasks 
+        ? `${tasksCount} task (bao gồm cả đã hoàn thành)`
+        : `${tasksCount} task chưa hoàn thành`;
+      const notificationMessage = `Bạn vừa nhận bàn giao ${validCustomers.length} khách hàng với ${dealsCount} deal đang mở và ${taskDescription}. Vui lòng kiểm tra danh sách.`;
+      
+      await client.query(
+        `INSERT INTO public.notifications (
+          notification_id, employee_id, type, title, message, is_read, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          notificationId,
+          new_assigned_to_id,
+          'customer_bulk_transfer',
+          'Nhận bàn giao khách hàng hàng loạt',
+          notificationMessage,
+          false,
+          now
+        ]
+      );
+
+      // 11. Commit transaction
+      await client.query('COMMIT');
+
+      res.json({
+        success: true,
+        message: `Đã chuyển giao thành công ${validCustomers.length} khách hàng cho ${newEmployee.full_name}.`,
+        data: {
+          customers_transferred: validCustomers.length,
+          deals_count: dealsCount,
+          tasks_transferred: tasksCount,
+          new_employee: {
+            employee_id: new_assigned_to_id,
+            full_name: newEmployee.full_name
+          }
+        }
+      });
+    } catch (error) {
+      // Rollback transaction nếu có lỗi
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    console.error('Lỗi bulkTransferCustomers:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi hệ thống khi chuyển giao khách hàng hàng loạt.',
       error: error.message
     });
   }

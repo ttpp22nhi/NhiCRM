@@ -136,7 +136,7 @@ export const createTask = async (req, res) => {
       try {
         const notificationId = uuidv4()
         await pool.query(
-          `INSERT INTO notifications (
+          `INSERT INTO public.notifications (
             notification_id, employee_id, type, title, message, is_read, created_at
           ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
           [
@@ -175,19 +175,36 @@ export const createTask = async (req, res) => {
  * Khi hoàn thành, tự động tạo interaction
  */
 export const updateTask = async (req, res) => {
+  // Log request để debug
+  console.log('=== updateTask Request ===')
+  console.log('Params:', req.params)
+  console.log('Body:', req.body)
+  console.log('User:', req.user)
+  
   const { id } = req.params
-  const { role, id: userId } = req.user
-  const { is_completed, completion_content, title, due_date, priority } = req.body
+  const { role, id: userId } = req.user || {}
+  const { is_completed, completion_content, title, due_date, priority } = req.body || {}
+
+  // Kiểm tra user có tồn tại không
+  if (!req.user || !userId) {
+    console.error('Lỗi: req.user không tồn tại hoặc không có userId')
+    return res.status(401).json({
+      success: false,
+      message: 'Không xác thực được người dùng.',
+      error: 'Token không hợp lệ hoặc đã hết hạn.'
+    })
+  }
 
   try {
     // Lấy thông tin task hiện tại
-    const taskQuery = 'SELECT * FROM tasks WHERE task_id = $1'
+    const taskQuery = 'SELECT * FROM public.tasks WHERE task_id = $1'
     const taskResult = await pool.query(taskQuery, [id])
 
     if (taskResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        message: 'Task không tồn tại.'
+        message: 'Task không tồn tại.',
+        error: `Task với ID ${id} không được tìm thấy trong database.`
       })
     }
 
@@ -197,7 +214,8 @@ export const updateTask = async (req, res) => {
     if (role === 'sales' && task.assigned_to !== userId) {
       return res.status(403).json({
         success: false,
-        message: 'Bạn không có quyền sửa task này.'
+        message: 'Bạn không có quyền sửa task này.',
+        error: `Sales chỉ có thể sửa task được gán cho mình. Task này được gán cho employee_id: ${task.assigned_to}, nhưng bạn là: ${userId}`
       })
     }
 
@@ -207,32 +225,57 @@ export const updateTask = async (req, res) => {
       if (!task.customer_id) {
         return res.status(400).json({
           success: false,
-          message: 'Task này không liên kết với khách hàng, không thể tạo interaction.'
+          message: 'Task này không liên kết với khách hàng, không thể tạo interaction.',
+          error: `Task ${id} không có customer_id. Để hoàn thành task với kết quả, task phải được liên kết với một khách hàng.`
+        })
+      }
+
+      // Kiểm tra customer có tồn tại và chưa bị xóa không
+      const customerCheck = await pool.query(
+        'SELECT customer_id FROM public.customers WHERE customer_id = $1 AND deleted_at IS NULL',
+        [task.customer_id]
+      )
+      
+      if (customerCheck.rows.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Khách hàng liên kết với task này không tồn tại hoặc đã bị xóa.',
+          error: `Customer với ID ${task.customer_id} không tồn tại hoặc đã bị xóa (soft delete).`
         })
       }
 
       // Tạo interaction từ completion_content
-      const interactionId = uuidv4()
-      const now = Date.now()
+      try {
+        const interactionId = uuidv4()
+        const now = Date.now()
 
-      const interactionQuery = `
-        INSERT INTO interactions (
-          interaction_id, customer_id, interaction_type, content, 
-          interaction_date, employee_id, status, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING *
-      `
+        const interactionQuery = `
+          INSERT INTO public.interactions (
+            interaction_id, customer_id, interaction_type, content, 
+            interaction_date, employee_id, status, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          RETURNING *
+        `
 
-      await pool.query(interactionQuery, [
-        interactionId,
-        task.customer_id,
-        'other', // Loại tương tác mặc định cho task completion
-        `[Hoàn thành Task] ${completion_content}`,
-        now,
-        userId,
-        'success',
-        now
-      ])
+        await pool.query(interactionQuery, [
+          interactionId,
+          task.customer_id,
+          'other', // Loại tương tác mặc định cho task completion
+          `[Hoàn thành Task] ${completion_content}`,
+          now,
+          userId,
+          'success',
+          now
+        ])
+      } catch (interactionError) {
+        console.error('Lỗi khi tạo interaction:', interactionError)
+        return res.status(500).json({
+          success: false,
+          message: 'Lỗi khi tạo interaction từ kết quả công việc.',
+          error: interactionError.message,
+          details: 'Không thể lưu kết quả công việc vào lịch sử tương tác. Vui lòng thử lại.'
+        })
+      }
     }
 
     // Cập nhật task
@@ -261,21 +304,45 @@ export const updateTask = async (req, res) => {
     }
 
     if (updateFields.length === 0) {
+      console.log('Không có trường nào để cập nhật. Body:', req.body)
       return res.status(400).json({
         success: false,
-        message: 'Không có trường nào để cập nhật.'
+        message: 'Không có trường nào để cập nhật.',
+        error: 'Tất cả các trường trong request đều undefined hoặc null.',
+        receivedBody: req.body,
+        debug: {
+          is_completed,
+          completion_content,
+          title,
+          due_date,
+          priority
+        }
       })
     }
 
     updateValues.push(id)
     const updateQuery = `
-      UPDATE tasks 
+      UPDATE public.tasks 
       SET ${updateFields.join(', ')}
       WHERE task_id = $${paramIndex}
       RETURNING *
     `
 
+    console.log('Update query:', updateQuery)
+    console.log('Update values:', updateValues)
+    console.log('Task ID:', id)
+
     const result = await pool.query(updateQuery, updateValues)
+    
+    console.log('Update result:', result.rows.length > 0 ? 'Success' : 'No rows updated')
+
+    if (result.rows.length === 0) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cập nhật task thất bại.',
+        error: 'Không có dòng nào được cập nhật. Có thể task đã bị xóa hoặc có lỗi trong quá trình cập nhật.'
+      })
+    }
 
     res.json({
       success: true,
@@ -284,10 +351,35 @@ export const updateTask = async (req, res) => {
     })
   } catch (error) {
     console.error('Lỗi updateTask:', error)
-    res.status(500).json({
+    console.error('Chi tiết lỗi:', {
+      taskId: id,
+      userId,
+      role,
+      body: req.body,
+      stack: error.stack
+    })
+    
+    // Kiểm tra loại lỗi cụ thể
+    let errorMessage = 'Lỗi hệ thống khi cập nhật task.'
+    let statusCode = 500
+    
+    if (error.code === '23505') { // Unique violation
+      errorMessage = 'Dữ liệu trùng lặp. Vui lòng kiểm tra lại.'
+      statusCode = 400
+    } else if (error.code === '23503') { // Foreign key violation
+      errorMessage = 'Dữ liệu tham chiếu không hợp lệ.'
+      statusCode = 400
+    } else if (error.code === '42P01') { // Table does not exist
+      errorMessage = 'Bảng không tồn tại trong database.'
+      statusCode = 500
+    }
+    
+    res.status(statusCode).json({
       success: false,
-      message: 'Lỗi hệ thống khi cập nhật task.',
-      error: error.message
+      message: errorMessage,
+      error: error.message,
+      errorCode: error.code,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     })
   }
 }

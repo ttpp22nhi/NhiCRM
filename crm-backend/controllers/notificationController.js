@@ -10,7 +10,7 @@ export const getNotifications = async (req, res) => {
   try {
     let query = `
       SELECT *
-      FROM notifications
+      FROM public.notifications
       WHERE employee_id = $1
     `
     const params = [userId]
@@ -46,7 +46,7 @@ export const markAsRead = async (req, res) => {
 
   try {
     // Kiểm tra thông báo có thuộc về user không
-    const checkQuery = 'SELECT * FROM notifications WHERE notification_id = $1 AND employee_id = $2'
+    const checkQuery = 'SELECT * FROM public.notifications WHERE notification_id = $1 AND employee_id = $2'
     const checkResult = await pool.query(checkQuery, [id, userId])
 
     if (checkResult.rows.length === 0) {
@@ -58,7 +58,7 @@ export const markAsRead = async (req, res) => {
 
     // Đánh dấu đã đọc
     await pool.query(
-      'UPDATE notifications SET is_read = true WHERE notification_id = $1',
+      'UPDATE public.notifications SET is_read = true WHERE notification_id = $1',
       [id]
     )
 
@@ -84,7 +84,7 @@ export const markAllAsRead = async (req, res) => {
 
   try {
     await pool.query(
-      'UPDATE notifications SET is_read = true WHERE employee_id = $1 AND is_read = false',
+      'UPDATE public.notifications SET is_read = true WHERE employee_id = $1 AND is_read = false',
       [userId]
     )
 

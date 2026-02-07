@@ -2,9 +2,9 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import { register, login, changePassword, getEmployees, getEmployeeById, resetPassword, updateEmployee } from './controllers/authController.js';
+import { register, login, changePassword, getEmployees, getEmployeeById, resetPassword, updateEmployee, transferCustomers, getTransferStats } from './controllers/authController.js';
 import { verifyToken, verifyAdmin } from './middleware/auth.js';
-import { createCustomer, getCustomers, updateCustomer, deleteCustomer } from './controllers/customerController.js';
+import { createCustomer, getCustomers, updateCustomer, deleteCustomer, checkDuplicateCustomer, bulkTransferCustomers } from './controllers/customerController.js';
 import { createInteraction, getInteractionsByCustomer } from './controllers/interactionController.js';
 import { getDashboardStats } from './controllers/dashboardController.js';
 import { getTasks, createTask, updateTask, deleteTask } from './controllers/taskController.js';
@@ -20,7 +20,7 @@ const app = express();
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3001',
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
@@ -296,6 +296,73 @@ app.post('/api/employees/:id/reset-password', verifyToken, verifyAdmin, resetPas
 
 /**
  * @swagger
+ * /api/employees/transfer-customers:
+ *   post:
+ *     summary: Chuyển giao khách hàng hàng loạt (Chỉ Admin)
+ *     tags: [Employees]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - from_employee_id
+ *               - to_employee_id
+ *             properties:
+ *               from_employee_id:
+ *                 type: string
+ *                 description: ID nhân viên nguồn
+ *               to_employee_id:
+ *                 type: string
+ *                 description: ID nhân viên đích
+ *     responses:
+ *       200:
+ *         description: Chuyển giao thành công
+ *       400:
+ *         description: Dữ liệu không hợp lệ
+ *       401:
+ *         description: Chưa đăng nhập
+ *       403:
+ *         description: Không có quyền (chỉ Admin)
+ *       404:
+ *         description: Không tìm thấy nhân viên
+ */
+app.post('/api/employees/transfer-customers', verifyToken, verifyAdmin, transferCustomers);
+
+/**
+ * @swagger
+ * /api/employees/transfer-stats:
+ *   get:
+ *     summary: Lấy thống kê trước khi chuyển giao khách hàng (Chỉ Admin)
+ *     tags: [Employees]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: from_employee_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID nhân viên nguồn
+ *     responses:
+ *       200:
+ *         description: Thống kê chuyển giao
+ *       400:
+ *         description: Dữ liệu không hợp lệ
+ *       401:
+ *         description: Chưa đăng nhập
+ *       403:
+ *         description: Không có quyền (chỉ Admin)
+ *       404:
+ *         description: Không tìm thấy nhân viên
+ */
+app.get('/api/employees/transfer-stats', verifyToken, verifyAdmin, getTransferStats);
+
+/**
+ * @swagger
  * /api/customers:
  *   post:
  *     summary: Tạo khách hàng mới
@@ -438,8 +505,52 @@ app.post('/api/employees/:id/reset-password', verifyToken, verifyAdmin, resetPas
  */
 app.post('/api/customers', verifyToken, createCustomer);
 app.get('/api/customers', verifyToken, getCustomers);
+app.post('/api/customers/check-duplicate', verifyToken, checkDuplicateCustomer);
 app.put('/api/customers/:id', verifyToken, updateCustomer);
 app.delete('/api/customers/:id', verifyToken, deleteCustomer);
+
+/**
+ * @swagger
+ * /api/customers/bulk-transfer:
+ *   patch:
+ *     summary: Chuyển giao khách hàng hàng loạt
+ *     tags: [Customers]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - customer_ids
+ *               - new_assigned_to_id
+ *             properties:
+ *               customer_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Danh sách ID khách hàng cần chuyển giao
+ *               new_assigned_to_id:
+ *                 type: string
+ *                 description: ID nhân viên tiếp nhận mới
+ *               transfer_reason:
+ *                 type: string
+ *                 description: Lý do chuyển giao (tùy chọn)
+ *     responses:
+ *       200:
+ *         description: Chuyển giao thành công
+ *       400:
+ *         description: Dữ liệu không hợp lệ
+ *       401:
+ *         description: Chưa đăng nhập
+ *       403:
+ *         description: Không có quyền
+ *       404:
+ *         description: Không tìm thấy nhân viên
+ */
+app.patch('/api/customers/bulk-transfer', verifyToken, bulkTransferCustomers);
 
 /**
  * @swagger
@@ -576,7 +687,24 @@ app.get('/health', (req, res) => {
   res.json({ status: 'UP', timestamp: Date.now() });
 });
 
-// Xử lý lỗi 404
+// Error handler middleware - phải đặt sau tất cả routes
+app.use((err, req, res, next) => {
+  console.error('=== Unhandled Error ===');
+  console.error('Error:', err);
+  console.error('Request URL:', req.url);
+  console.error('Request Method:', req.method);
+  console.error('Request Body:', req.body);
+  console.error('Stack:', err.stack);
+  
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Lỗi hệ thống không xác định.',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+  });
+});
+
+// Xử lý lỗi 404 - phải đặt sau error handler
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'API Route không tìm thấy.' });
 });
