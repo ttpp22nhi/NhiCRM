@@ -9,6 +9,11 @@ const inter = Inter({ subsets: ['latin', 'vietnamese'] })
 export const metadata: Metadata = {
   title: 'CRM MobiFone',
   description: 'Hệ thống quản lý khách hàng MobiFone',
+  icons: {
+    icon: '/mobifone_favicon.png',
+    shortcut: '/mobifone_favicon.png',
+    apple: '/mobifone_favicon.png',
+  },
 }
 
 export default function RootLayout({

@@ -2,13 +2,15 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import { register, login, changePassword, getEmployees, getEmployeeById, resetPassword, updateEmployee, transferCustomers, getTransferStats } from './controllers/authController.js';
+import { register, login, changePassword, getEmployees, getSalesEmployees, getEmployeeById, resetPassword, updateEmployee, transferCustomers, getTransferStats } from './controllers/authController.js';
 import { verifyToken, verifyAdmin } from './middleware/auth.js';
-import { createCustomer, getCustomers, updateCustomer, deleteCustomer, checkDuplicateCustomer, bulkTransferCustomers } from './controllers/customerController.js';
+import { createCustomer, getCustomers, updateCustomer, deleteCustomer, checkDuplicateCustomer, bulkTransferCustomers, getCustomerOwnershipHistory } from './controllers/customerController.js';
 import { createInteraction, getInteractionsByCustomer } from './controllers/interactionController.js';
 import { getDashboardStats } from './controllers/dashboardController.js';
 import { getTasks, createTask, updateTask, deleteTask } from './controllers/taskController.js';
 import { getNotifications, markAsRead, markAllAsRead } from './controllers/notificationController.js';
+import { createTransferRequest, getPendingTransferRequests, approveTransferRequest, getMyTransferRequests, checkCustomerPendingTransfer, getApprovalLogs } from './controllers/transferController.js';
+import { getDeals, createDeal, updateDeal } from './controllers/dealsController.js';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger.js';
 
 // Tải biến môi trường
@@ -164,6 +166,22 @@ app.post('/api/auth/change-password', verifyToken, changePassword);
  *         description: Không có quyền (chỉ Admin)
  */
 app.get('/api/employees', verifyToken, verifyAdmin, getEmployees);
+
+/**
+ * @swagger
+ * /api/employees/sales:
+ *   get:
+ *     summary: Lấy danh sách nhân viên Sales (dành cho Sales)
+ *     tags: [Employees]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Danh sách nhân viên Sales
+ *       401:
+ *         description: Chưa đăng nhập
+ */
+app.get('/api/employees/sales', verifyToken, getSalesEmployees);
 
 /**
  * @swagger
@@ -508,6 +526,7 @@ app.get('/api/customers', verifyToken, getCustomers);
 app.post('/api/customers/check-duplicate', verifyToken, checkDuplicateCustomer);
 app.put('/api/customers/:id', verifyToken, updateCustomer);
 app.delete('/api/customers/:id', verifyToken, deleteCustomer);
+app.get('/api/customers/:customerId/ownership-history', verifyToken, getCustomerOwnershipHistory);
 
 /**
  * @swagger
@@ -631,6 +650,39 @@ app.delete('/api/tasks/:id', verifyToken, deleteTask);
 
 /**
  * @swagger
+ * /api/deals:
+ *   get:
+ *     summary: Lấy danh sách deals
+ *     tags: [Deals]
+ *     security:
+ *       - bearerAuth: []
+ */
+app.get('/api/deals', verifyToken, getDeals);
+
+/**
+ * @swagger
+ * /api/deals:
+ *   post:
+ *     summary: Tạo deal mới
+ *     tags: [Deals]
+ *     security:
+ *       - bearerAuth: []
+ */
+app.post('/api/deals', verifyToken, createDeal);
+
+/**
+ * @swagger
+ * /api/deals/:id:
+ *   patch:
+ *     summary: Cập nhật deal
+ *     tags: [Deals]
+ *     security:
+ *       - bearerAuth: []
+ */
+app.patch('/api/deals/:id', verifyToken, updateDeal);
+
+/**
+ * @swagger
  * /api/notifications:
  *   get:
  *     summary: Lấy danh sách thông báo
@@ -661,6 +713,178 @@ app.patch('/api/notifications/:id/read', verifyToken, markAsRead);
  *       - bearerAuth: []
  */
 app.patch('/api/notifications/read-all', verifyToken, markAllAsRead);
+
+/**
+ * Transfer Request Routes
+ */
+/**
+ * @swagger
+ * /api/transfer/request:
+ *   post:
+ *     summary: Tạo yêu cầu chuyển giao khách hàng (Sales)
+ *     tags: [Transfer Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - customer_ids
+ *               - receiver_id
+ *             properties:
+ *               customer_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *               receiver_id:
+ *                 type: string
+ *               note:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Tạo yêu cầu thành công
+ *       400:
+ *         description: Dữ liệu không hợp lệ
+ *       401:
+ *         description: Chưa đăng nhập
+ *       403:
+ *         description: Không có quyền
+ */
+app.post('/api/transfer/request', verifyToken, createTransferRequest);
+
+/**
+ * @swagger
+ * /api/transfer/pending:
+ *   get:
+ *     summary: Lấy danh sách yêu cầu chuyển giao đang chờ (Manager/Admin)
+ *     tags: [Transfer Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Danh sách yêu cầu chuyển giao
+ *       401:
+ *         description: Chưa đăng nhập
+ *       403:
+ *         description: Không có quyền
+ */
+app.get('/api/transfer/pending', verifyToken, getPendingTransferRequests);
+
+/**
+ * @swagger
+ * /api/transfer/approve/{id}:
+ *   patch:
+ *     summary: Phê duyệt hoặc từ chối yêu cầu chuyển giao (Manager/Admin)
+ *     tags: [Transfer Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - action
+ *             properties:
+ *               action:
+ *                 type: string
+ *                 enum: [approve, reject]
+ *     responses:
+ *       200:
+ *         description: Xử lý yêu cầu thành công
+ *       400:
+ *         description: Dữ liệu không hợp lệ
+ *       401:
+ *         description: Chưa đăng nhập
+ *       403:
+ *         description: Không có quyền
+ */
+app.patch('/api/transfer/approve/:id', verifyToken, approveTransferRequest);
+
+/**
+ * @swagger
+ * /api/transfer/my-requests:
+ *   get:
+ *     summary: Lấy danh sách yêu cầu chuyển giao của người dùng hiện tại
+ *     tags: [Transfer Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Danh sách yêu cầu chuyển giao
+ *       401:
+ *         description: Chưa đăng nhập
+ */
+app.get('/api/transfer/my-requests', verifyToken, getMyTransferRequests);
+
+/**
+ * @swagger
+ * /api/transfer/check-pending/{customerId}:
+ *   get:
+ *     summary: Kiểm tra xem khách hàng có đang chờ chuyển giao không
+ *     tags: [Transfer Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: customerId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Trạng thái chuyển giao
+ *       401:
+ *         description: Chưa đăng nhập
+ */
+app.get('/api/transfer/check-pending/:customerId', verifyToken, checkCustomerPendingTransfer);
+
+/**
+ * @swagger
+ * /api/transfer/approval-logs:
+ *   get:
+ *     summary: Lấy lịch sử phê duyệt chuyển giao (Manager/Admin)
+ *     tags: [Transfer Requests]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *       - in: query
+ *         name: transfer_request_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: approver_id
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Danh sách lịch sử phê duyệt
+ *       401:
+ *         description: Chưa đăng nhập
+ *       403:
+ *         description: Không có quyền
+ */
+app.get('/api/transfer/approval-logs', verifyToken, getApprovalLogs);
 
 /**
  * @swagger

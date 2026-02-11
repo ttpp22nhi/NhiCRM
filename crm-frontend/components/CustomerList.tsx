@@ -3,14 +3,16 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiClient } from '@/lib/api'
-import { Users, Phone, Mail, MapPin, Building, AlertCircle, User, Search, Filter, X, FileSpreadsheet, ChevronLeft, ChevronRight, Pencil, Trash2, ArrowRightLeft, CheckSquare } from 'lucide-react'
+import { Users, Phone, Mail, MapPin, Building, AlertCircle, User, Search, Filter, X, FileSpreadsheet, ChevronLeft, ChevronRight, Pencil, Trash2, ArrowRightLeft, CheckSquare, Send, Clock, DollarSign, Plus } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { saveAs } from 'file-saver'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useAuth } from '@/contexts/AuthContext'
 import { EditCustomerForm } from './EditCustomerForm'
 import { BulkTransferModal } from './BulkTransferModal'
+import { TransferRequestModal } from './TransferRequestModal'
 import { AlertModal } from './AlertModal'
+import { DealModal } from './DealModal'
 import toast from 'react-hot-toast'
 
 interface Customer {
@@ -67,6 +69,10 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
   const [deleting, setDeleting] = useState(false)
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<string>>(new Set())
   const [showBulkTransferModal, setShowBulkTransferModal] = useState(false)
+  const [showTransferRequestModal, setShowTransferRequestModal] = useState(false)
+  const [showDealModal, setShowDealModal] = useState(false)
+  const [selectedCustomerForDeal, setSelectedCustomerForDeal] = useState<string | null>(null)
+  const [pendingTransferCustomers, setPendingTransferCustomers] = useState<Set<string>>(new Set())
   const typeFilterRef = useRef<HTMLDivElement>(null)
 
   // Debounce searchQuery với delay 500ms để tránh gọi API quá nhiều lần
@@ -97,6 +103,28 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
   useEffect(() => {
     fetchCustomers()
   }, [debouncedSearchQuery, selectedTypes, currentPage, pageSize])
+
+  // Kiểm tra trạng thái pending transfer cho các khách hàng (chỉ cho Sales)
+  useEffect(() => {
+    if (user?.role === 'sales' && customers.length > 0) {
+      const checkPendingTransfers = async () => {
+        const pendingSet = new Set<string>()
+        for (const customer of customers) {
+          try {
+            const response = await apiClient.get(`/api/transfer/check-pending/${customer.customer_id}`)
+            if (response.data.success && response.data.has_pending) {
+              pendingSet.add(customer.customer_id)
+            }
+          } catch (error) {
+            // Ignore errors for individual checks
+            console.error(`Error checking pending transfer for customer ${customer.customer_id}:`, error)
+          }
+        }
+        setPendingTransferCustomers(pendingSet)
+      }
+      checkPendingTransfers()
+    }
+  }, [customers, user?.role])
 
   // Đóng dropdown khi click outside
   useEffect(() => {
@@ -220,6 +248,29 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
   const handleBulkTransferSuccess = () => {
     setSelectedCustomerIds(new Set())
     fetchCustomers()
+  }
+
+  const handleTransferRequestSuccess = () => {
+    setSelectedCustomerIds(new Set())
+    fetchCustomers()
+    // Refresh pending status
+    if (user?.role === 'sales' && customers.length > 0) {
+      const checkPendingTransfers = async () => {
+        const pendingSet = new Set<string>()
+        for (const customer of customers) {
+          try {
+            const response = await apiClient.get(`/api/transfer/check-pending/${customer.customer_id}`)
+            if (response.data.success && response.data.has_pending) {
+              pendingSet.add(customer.customer_id)
+            }
+          } catch (error) {
+            console.error(`Error checking pending transfer for customer ${customer.customer_id}:`, error)
+          }
+        }
+        setPendingTransferCustomers(pendingSet)
+      }
+      checkPendingTransfers()
+    }
   }
 
   const selectedCustomers = customers.filter(c => selectedCustomerIds.has(c.customer_id))
@@ -457,6 +508,24 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
             )}
           </div>
 
+          {/* Nút Tạo Deal mới */}
+          <button
+            type="button"
+            onClick={() => {
+              if (selectedCustomerIds.size === 1) {
+                const customerId = Array.from(selectedCustomerIds)[0]
+                setSelectedCustomerForDeal(customerId)
+              }
+              setShowDealModal(true)
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0074BD] text-white rounded-lg hover:bg-[#005a94] transition text-sm font-medium whitespace-nowrap"
+          >
+            <Plus className="w-4 h-4" />
+            <DollarSign className="w-4 h-4" />
+            <span className="hidden sm:inline">Tạo Deal mới</span>
+            <span className="sm:hidden">Deal</span>
+          </button>
+
           {/* Nút Xuất Excel */}
           <button
             type="button"
@@ -554,12 +623,20 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
                       </span>
                     </div>
                     <div className="min-w-0 flex-1">
-                      <button
-                        onClick={() => router.push(`/customers/${customer.customer_id}`)}
-                        className="text-xs font-medium text-primary-600 hover:text-primary-700 truncate text-left transition"
-                      >
-                        {customer.full_name}
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => router.push(`/customers/${customer.customer_id}`)}
+                          className="text-xs font-medium text-primary-600 hover:text-primary-700 truncate text-left transition"
+                        >
+                          {customer.full_name}
+                        </button>
+                        {pendingTransferCustomers.has(customer.customer_id) && (
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-yellow-100 text-yellow-700 rounded text-[10px] font-medium" title="Đang chờ phê duyệt chuyển giao">
+                            <Clock className="w-3 h-3" />
+                            <span>Đang chờ chuyển</span>
+                          </span>
+                        )}
+                      </div>
                       {customer.company_name && (
                         <div className="text-xs text-gray-500 truncate flex items-center gap-1" title={customer.company_name}>
                           <Building className="w-3 h-3 flex-shrink-0" />
@@ -762,7 +839,7 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
                 Đã chọn: <span className="text-primary-600">{selectedCustomerIds.size}</span> khách hàng
               </span>
             </div>
-            {/* Chỉ Admin và Manager mới có quyền chuyển giao */}
+            {/* Admin và Manager: Chuyển giao trực tiếp */}
             {(user?.role === 'admin' || user?.role === 'manager') && (
               <>
                 <div className="h-6 w-px bg-gray-300"></div>
@@ -772,6 +849,19 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
                 >
                   <ArrowRightLeft className="w-4 h-4" />
                   <span>Chuyển giao người phụ trách</span>
+                </button>
+              </>
+            )}
+            {/* Sales: Gửi yêu cầu chuyển giao */}
+            {user?.role === 'sales' && (
+              <>
+                <div className="h-6 w-px bg-gray-300"></div>
+                <button
+                  onClick={() => setShowTransferRequestModal(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition font-medium text-sm"
+                >
+                  <Send className="w-4 h-4" />
+                  <span>Gửi yêu cầu chuyển giao</span>
                 </button>
               </>
             )}
@@ -794,6 +884,35 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
             setSelectedCustomerIds(new Set())
           }}
           onSuccess={handleBulkTransferSuccess}
+        />
+      )}
+
+      {/* Modal Gửi yêu cầu chuyển giao (Sales) */}
+      {showTransferRequestModal && (
+        <TransferRequestModal
+          selectedCustomers={selectedCustomers}
+          onClose={() => {
+            setShowTransferRequestModal(false)
+            setSelectedCustomerIds(new Set())
+          }}
+          onSuccess={handleTransferRequestSuccess}
+        />
+      )}
+
+      {/* Modal Tạo Deal mới */}
+      {showDealModal && (
+        <DealModal
+          deal={null}
+          customerId={selectedCustomerForDeal || undefined}
+          onClose={() => {
+            setShowDealModal(false)
+            setSelectedCustomerForDeal(null)
+          }}
+          onSuccess={() => {
+            setShowDealModal(false)
+            setSelectedCustomerForDeal(null)
+            toast.success('Tạo deal thành công!')
+          }}
         />
       )}
 

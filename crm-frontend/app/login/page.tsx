@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
+import Image from 'next/image'
 import { LogIn, User, Lock, AlertCircle, Eye, EyeOff } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -113,8 +114,15 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 to-primary-100 px-4">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-primary-600 rounded-full mb-4">
-            <LogIn className="w-8 h-8 text-white" />
+          <div className="flex justify-center mb-6">
+            <Image
+              src="/logo-mobifone.png"
+              alt="MobiFone Logo"
+              width={240}
+              height={240}
+              className="object-contain"
+              priority
+            />
           </div>
           <h1 className="text-3xl font-bold text-gray-900">Đăng nhập</h1>
           <p className="text-gray-600 mt-2">Hệ thống CRM MobiFone</p>

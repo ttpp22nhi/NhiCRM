@@ -6,9 +6,11 @@ import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
 import { InteractionTimeline } from '@/components/InteractionTimeline'
 import { AddInteractionModal } from '@/components/AddInteractionModal'
+import { DealModal } from '@/components/DealModal'
 import { apiClient } from '@/lib/api'
 import { 
   ArrowLeft, 
+  ArrowRight,
   Phone, 
   Mail, 
   MapPin, 
@@ -18,7 +20,12 @@ import {
   Loader2,
   AlertCircle,
   FileText,
-  Plus
+  Plus,
+  History,
+  Clock,
+  ArrowRightLeft,
+  Info,
+  DollarSign
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 
@@ -42,6 +49,14 @@ interface Customer {
   updated_at?: number | string
 }
 
+const STAGES = [
+  { id: 'tiep_can', label: 'Tiếp cận' },
+  { id: 'tu_van', label: 'Tư vấn' },
+  { id: 'bao_gia', label: 'Báo giá' },
+  { id: 'thuong_thao', label: 'Thương thảo' },
+  { id: 'thanh_cong', label: 'Thành công' }
+]
+
 export default function CustomerDetailPage() {
   const params = useParams()
   const router = useRouter()
@@ -52,10 +67,19 @@ export default function CustomerDetailPage() {
   const [error, setError] = useState('')
   const [showAddModal, setShowAddModal] = useState(false)
   const [timelineRefreshKey, setTimelineRefreshKey] = useState(0)
+  const [ownershipHistory, setOwnershipHistory] = useState<any[]>([])
+  const [latestTransferNote, setLatestTransferNote] = useState<any>(null)
+  const [loadingHistory, setLoadingHistory] = useState(false)
+  const [activeTab, setActiveTab] = useState<'interactions' | 'deals'>('interactions')
+  const [deals, setDeals] = useState<any[]>([])
+  const [loadingDeals, setLoadingDeals] = useState(false)
+  const [showDealModal, setShowDealModal] = useState(false)
 
   useEffect(() => {
     if (customerId) {
       fetchCustomer()
+      fetchOwnershipHistory()
+      fetchDeals()
     }
   }, [customerId])
 
@@ -90,6 +114,36 @@ export default function CustomerDetailPage() {
     }
   }
 
+  const fetchOwnershipHistory = async () => {
+    try {
+      setLoadingHistory(true)
+      const response = await apiClient.get(`/api/customers/${customerId}/ownership-history`)
+      if (response.data.success) {
+        setOwnershipHistory(response.data.data.ownership_history || [])
+        setLatestTransferNote(response.data.data.latest_transfer_note)
+      }
+    } catch (err: any) {
+      console.error('Error fetching ownership history:', err)
+      // Không hiển thị error toast vì đây là tính năng bổ sung
+    } finally {
+      setLoadingHistory(false)
+    }
+  }
+
+  const fetchDeals = async () => {
+    try {
+      setLoadingDeals(true)
+      const response = await apiClient.get(`/api/deals?customer_id=${customerId}`)
+      if (response.data.success) {
+        setDeals(response.data.data || [])
+      }
+    } catch (err: any) {
+      console.error('Error fetching deals:', err)
+    } finally {
+      setLoadingDeals(false)
+    }
+  }
+
   const formatDate = (timestamp: number | string) => {
     const ts = typeof timestamp === 'string' ? parseInt(timestamp, 10) : timestamp
     
@@ -108,6 +162,28 @@ export default function CustomerDetailPage() {
     const month = String(date.getMonth() + 1).padStart(2, '0')
     const year = date.getFullYear()
     return `${day}/${month}/${year}`
+  }
+
+  const formatDateTime = (timestamp: number | string) => {
+    const ts = typeof timestamp === 'string' ? parseInt(timestamp, 10) : timestamp
+    
+    if (isNaN(ts) || ts === null || ts === undefined || ts === 0) {
+      return 'N/A'
+    }
+    
+    const timestampMs = ts.toString().length === 10 ? ts * 1000 : ts
+    const date = new Date(timestampMs)
+    
+    if (isNaN(date.getTime())) {
+      return 'N/A'
+    }
+    
+    const day = String(date.getDate()).padStart(2, '0')
+    const month = String(date.getMonth() + 1).padStart(2, '0')
+    const year = date.getFullYear()
+    const hours = String(date.getHours()).padStart(2, '0')
+    const minutes = String(date.getMinutes()).padStart(2, '0')
+    return `${day}/${month}/${year} ${hours}:${minutes}`
   }
 
   const getCustomerTypeLabel = (type: string) => {
@@ -183,6 +259,41 @@ export default function CustomerDetailPage() {
             <p className="text-gray-600 mt-2">Thông tin chi tiết khách hàng</p>
           </div>
 
+          {/* Highlight Ghi chú bàn giao */}
+          {latestTransferNote && (
+            <div className="mb-6 bg-gradient-to-r from-blue-50 to-indigo-50 border-l-4 border-blue-500 rounded-lg shadow-md p-4">
+              <div className="flex items-start gap-3">
+                <div className="flex-shrink-0 mt-0.5">
+                  <Info className="w-6 h-6 text-blue-600" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-2">
+                    <h3 className="text-lg font-bold text-blue-900">Ghi chú bàn giao</h3>
+                    <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded text-xs font-medium">
+                      {formatDateTime(latestTransferNote.created_at)}
+                    </span>
+                  </div>
+                  <p className="text-gray-800 mb-2 whitespace-pre-wrap">{latestTransferNote.approval_note}</p>
+                  <div className="flex items-center gap-4 text-sm text-gray-600">
+                    <span>
+                      <span className="font-medium">Người phê duyệt:</span> {latestTransferNote.approver_name}
+                    </span>
+                    {latestTransferNote.sender_name && (
+                      <span>
+                        <span className="font-medium">Từ:</span> {latestTransferNote.sender_name}
+                      </span>
+                    )}
+                    {latestTransferNote.receiver_name && (
+                      <span>
+                        <span className="font-medium">Đến:</span> {latestTransferNote.receiver_name}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Thông tin chính */}
             <div className="lg:col-span-2 space-y-6">
@@ -253,19 +364,130 @@ export default function CustomerDetailPage() {
                 </div>
               )}
 
-              {/* Lịch sử tương tác */}
-              <div className="bg-white rounded-lg shadow p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold text-gray-900">Lịch sử tương tác</h3>
-                  <button
-                    onClick={() => setShowAddModal(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition text-sm font-medium"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Thêm tương tác</span>
-                  </button>
+              {/* Tabs: Lịch sử tương tác và Cơ hội */}
+              <div className="bg-white rounded-lg shadow">
+                {/* Tab Navigation */}
+                <div className="border-b border-gray-200">
+                  <nav className="flex -mb-px">
+                    <button
+                      onClick={() => setActiveTab('interactions')}
+                      className={`flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 transition ${
+                        activeTab === 'interactions'
+                          ? 'border-primary-600 text-primary-600'
+                          : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                      }`}
+                    >
+                      <FileText className="w-4 h-4" />
+                      <span>Lịch sử tương tác</span>
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('deals')}
+                      className={`flex items-center gap-2 px-6 py-4 text-sm font-medium border-b-2 transition ${
+                        activeTab === 'deals'
+                          ? 'border-primary-600 text-primary-600'
+                          : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                      }`}
+                    >
+                      <DollarSign className="w-4 h-4" />
+                      <span>Cơ hội</span>
+                      {deals.length > 0 && (
+                        <span className="ml-1 px-2 py-0.5 text-xs font-semibold rounded-full bg-primary-100 text-primary-700">
+                          {deals.length}
+                        </span>
+                      )}
+                    </button>
+                  </nav>
                 </div>
-                <InteractionTimeline customerId={customerId} refreshKey={timelineRefreshKey} />
+
+                {/* Tab Content */}
+                <div className="p-6">
+                  {activeTab === 'interactions' ? (
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-gray-900">Lịch sử tương tác</h3>
+                        <button
+                          onClick={() => setShowAddModal(true)}
+                          className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition text-sm font-medium"
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>Thêm tương tác</span>
+                        </button>
+                      </div>
+                      <InteractionTimeline customerId={customerId} refreshKey={timelineRefreshKey} />
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-gray-900">Cơ hội bán hàng</h3>
+                        <button
+                          onClick={() => setShowDealModal(true)}
+                          className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition text-sm font-medium"
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>Tạo Deal mới</span>
+                        </button>
+                      </div>
+                      {loadingDeals ? (
+                        <div className="flex items-center justify-center py-8">
+                          <Loader2 className="w-6 h-6 animate-spin text-primary-600" />
+                        </div>
+                      ) : deals.length === 0 ? (
+                        <p className="text-center text-gray-500 py-8">Chưa có deal nào cho khách hàng này</p>
+                      ) : (
+                        <div className="space-y-4">
+                          {deals.map((deal) => (
+                            <div
+                              key={deal.deal_id}
+                              className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition"
+                            >
+                              <div className="flex items-start justify-between">
+                                <div className="flex-1">
+                                  <h4 className="font-semibold text-gray-900 mb-2">{deal.title}</h4>
+                                  <div className="grid grid-cols-2 gap-4 text-sm">
+                                    <div>
+                                      <span className="text-gray-500">Giá trị:</span>
+                                      <span className="ml-2 font-semibold text-gray-900">
+                                        {new Intl.NumberFormat('vi-VN', {
+                                          style: 'currency',
+                                          currency: 'VND'
+                                        }).format(deal.amount)}
+                                      </span>
+                                    </div>
+                                    <div>
+                                      <span className="text-gray-500">Giai đoạn:</span>
+                                      <span className="ml-2 font-semibold text-gray-900">
+                                        {STAGES.find(s => s.id === deal.stage)?.label || deal.stage}
+                                      </span>
+                                    </div>
+                                    {deal.expected_closing_date && (
+                                      <div>
+                                        <span className="text-gray-500">Ngày dự kiến:</span>
+                                        <span className="ml-2 text-gray-900">
+                                          {formatDate(deal.expected_closing_date)}
+                                        </span>
+                                      </div>
+                                    )}
+                                    <div>
+                                      <span className="text-gray-500">Trạng thái:</span>
+                                      <span className={`ml-2 px-2 py-0.5 rounded text-xs font-medium ${
+                                        deal.status === 'active' ? 'bg-green-100 text-green-700' :
+                                        deal.status === 'closed' ? 'bg-gray-100 text-gray-700' :
+                                        'bg-red-100 text-red-700'
+                                      }`}>
+                                        {deal.status === 'active' ? 'Đang hoạt động' :
+                                         deal.status === 'closed' ? 'Đã đóng' : 'Đã hủy'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -308,6 +530,70 @@ export default function CustomerDetailPage() {
                   )}
                 </div>
               </div>
+
+              {/* Lịch sử sở hữu */}
+              <div className="bg-white rounded-lg shadow p-6">
+                <h2 className="text-xl font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                  <History className="w-5 h-5 text-primary-600" />
+                  Lịch sử sở hữu
+                </h2>
+                {loadingHistory ? (
+                  <div className="flex items-center justify-center py-4">
+                    <Loader2 className="w-5 h-5 animate-spin text-primary-600" />
+                  </div>
+                ) : ownershipHistory.length === 0 ? (
+                  <p className="text-sm text-gray-500 text-center py-4">Chưa có lịch sử chuyển giao</p>
+                ) : (
+                  <div className="space-y-4">
+                    {ownershipHistory.map((item, index) => (
+                      <div
+                        key={item.interaction_id}
+                        className={`border-l-4 pl-4 pb-4 ${
+                          item.is_current
+                            ? 'border-primary-500 bg-primary-50'
+                            : 'border-gray-300'
+                        } ${index < ownershipHistory.length - 1 ? 'border-b border-gray-200' : ''}`}
+                      >
+                        <div className="flex items-start gap-2 mb-2">
+                          <ArrowRightLeft className={`w-4 h-4 mt-0.5 ${item.is_current ? 'text-primary-600' : 'text-gray-400'}`} />
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className={`text-sm font-semibold ${item.is_current ? 'text-primary-900' : 'text-gray-700'}`}>
+                                {item.from_employee_name}
+                              </span>
+                              <ArrowRight className="w-3 h-3 text-gray-400" />
+                              <span className={`text-sm font-semibold ${item.is_current ? 'text-primary-900' : 'text-gray-700'}`}>
+                                {item.to_employee_name}
+                              </span>
+                              {item.is_current && (
+                                <span className="px-2 py-0.5 bg-primary-100 text-primary-700 rounded text-xs font-medium">
+                                  Hiện tại
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-gray-600 mb-1">
+                              <div className="flex items-center gap-1">
+                                <Clock className="w-3 h-3" />
+                                <span>{formatDateTime(item.created_at)}</span>
+                              </div>
+                              {item.duration_days !== null && (
+                                <span className="text-gray-500">
+                                  ({item.duration_days} ngày)
+                                </span>
+                              )}
+                            </div>
+                            {item.transfer_reason && (
+                              <p className="text-xs text-gray-600 mt-1 italic">
+                                Lý do: {item.transfer_reason}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -321,6 +607,19 @@ export default function CustomerDetailPage() {
             setTimelineRefreshKey(prev => prev + 1)
           }}
         />
+
+        {/* Deal Modal - Reuse from deals page */}
+        {showDealModal && (
+          <DealModal
+            deal={null}
+            customerId={customerId}
+            onClose={() => setShowDealModal(false)}
+            onSuccess={() => {
+              fetchDeals()
+              setShowDealModal(false)
+            }}
+          />
+        )}
       </div>
     </ProtectedRoute>
   )

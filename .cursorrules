@@ -1,0 +1,20 @@
+# CRM MobiFone - Multi-module Rules
+
+## 📂 Project Structure
+- Frontend: Rooted in `./crm_frontend` (Next.js 14)
+- Backend: Rooted in `./crm_backend` (Node.js/Express)
+
+## 🎯 Specific Rules
+- **API Base URL:** Frontend nên gọi API đến `http://localhost:3000/api` (môi trường dev).
+- **Logo Usage:** Logo chính thức đặt tại `./crm_frontend/public/logo-mobifone.png`. Luôn dùng đường dẫn `/logo-mobifone.png` trong code React.
+- **Backend Auth:** Khi chỉnh sửa code trong `./crm_backend`, luôn đảm bảo các route chuyển giao (transfer) có middleware `verifyAdmin`.
+- **Frontend UI:** Khi chỉnh sửa code trong `./crm_frontend`, sử dụng Tailwind CSS và các icons từ Lucide.
+
+## 🎨 Branding
+- Primary Color: #0074BD (MobiFone Blue).
+- Logo Placement: Sidebar top và Login page center.
+- Logo Path: `/logo-mobifone.png` (Nằm trong crm_frontend/public/)
+
+## 🛠️ Instructions
+- Khi chỉnh sửa UI, hãy luôn tham chiếu đến logo tại `/logo-mobifone.png`.
+- Đảm bảo logo trên trang Login có kích thước lớn (width: 240px) và logo trên Sidebar có kích thước nhỏ (width: 150px).

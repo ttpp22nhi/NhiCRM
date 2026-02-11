@@ -138,6 +138,55 @@ export const getEmployees = async (req, res) => {
 };
 
 /**
+ * Lấy danh sách Sales (dành cho Sales để chọn người nhận khi chuyển giao)
+ */
+export const getSalesEmployees = async (req, res) => {
+  const { id: userId } = req.user;
+
+  try {
+    console.log('getSalesEmployees - userId:', userId);
+    
+    // Lấy danh sách Sales đang hoạt động (trừ chính mình)
+    // Sử dụng employees thay vì public.employees để tương thích với schema hiện tại
+    const query = `
+      SELECT 
+        employee_id,
+        username,
+        full_name,
+        email,
+        role,
+        is_active
+      FROM employees
+      WHERE role = 'sales' 
+        AND is_active = true
+        AND employee_id != $1
+      ORDER BY full_name ASC
+    `;
+
+    const result = await pool.query(query, [userId]);
+    console.log('getSalesEmployees - result:', result.rows.length, 'employees found');
+
+    res.json({
+      success: true,
+      data: result.rows,
+      count: result.rowCount
+    });
+  } catch (error) {
+    console.error('Lỗi getSalesEmployees:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      userId
+    });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Không thể lấy danh sách nhân viên Sales.',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
  * Lấy thông tin chi tiết một nhân viên theo ID
  */
 export const getEmployeeById = async (req, res) => {

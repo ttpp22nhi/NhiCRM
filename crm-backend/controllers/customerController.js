@@ -774,3 +774,136 @@ export const bulkTransferCustomers = async (req, res) => {
     });
   }
 };
+
+/**
+ * Lấy lịch sử sở hữu và ghi chú bàn giao của khách hàng
+ * GET /api/customers/:customerId/ownership-history
+ */
+export const getCustomerOwnershipHistory = async (req, res) => {
+  const { customerId } = req.params;
+  const { role, id: userId } = req.user;
+
+  try {
+    // Kiểm tra customer có tồn tại không
+    const customerCheck = await pool.query(
+      'SELECT customer_id, assigned_to FROM customers WHERE customer_id = $1 AND deleted_at IS NULL',
+      [customerId]
+    );
+
+    if (customerCheck.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Khách hàng không tồn tại hoặc đã bị xóa.'
+      });
+    }
+
+    // Kiểm tra quyền: Sales chỉ xem được khách hàng được gán cho mình
+    const customer = customerCheck.rows[0];
+    if (role !== 'admin' && role !== 'manager' && customer.assigned_to !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'Bạn không có quyền xem thông tin khách hàng này.'
+      });
+    }
+
+    // 1. Lấy lịch sử sở hữu từ interactions với type='system' và content chứa "BÀN GIAO HỆ THỐNG"
+    const ownershipHistoryQuery = `
+      SELECT 
+        i.interaction_id,
+        i.content,
+        i.created_at,
+        i.interaction_date,
+        e.full_name as employee_name,
+        e.username as employee_username,
+        e.employee_id
+      FROM interactions i
+      LEFT JOIN employees e ON i.employee_id = e.employee_id
+      WHERE i.customer_id = $1
+        AND i.interaction_type = 'system'
+        AND i.content LIKE '%BÀN GIAO HỆ THỐNG%'
+      ORDER BY i.created_at DESC
+    `;
+
+    const ownershipResult = await pool.query(ownershipHistoryQuery, [customerId]);
+
+    // 2. Lấy ghi chú bàn giao gần nhất từ transfer_approval_logs
+    const latestTransferNoteQuery = `
+      SELECT 
+        tal.approval_note,
+        tal.created_at,
+        tal.action,
+        approver.full_name as approver_name,
+        approver.username as approver_username,
+        sender.full_name as sender_name,
+        receiver.full_name as receiver_name
+      FROM transfer_approval_logs tal
+      LEFT JOIN employees approver ON tal.approver_id = approver.employee_id
+      LEFT JOIN employees sender ON tal.sender_id = sender.employee_id
+      LEFT JOIN employees receiver ON tal.receiver_id = receiver.employee_id
+      LEFT JOIN transfer_requests tr ON tal.transfer_request_id = tr.transfer_request_id
+      WHERE $1 = ANY(tr.customer_ids)
+        AND tal.action = 'approve'
+      ORDER BY tal.created_at DESC
+      LIMIT 1
+    `;
+
+    const transferNoteResult = await pool.query(latestTransferNoteQuery, [customerId]);
+
+    // 3. Parse ownership history để trích xuất thông tin người phụ trách
+    const ownershipHistory = ownershipResult.rows.map((row, index) => {
+      // Parse content để lấy tên người cũ và người mới
+      // Format: "BÀN GIAO HỆ THỐNG: Khách hàng và các công việc đang dang dở được chuyển từ [Tên người cũ] sang [Tên người mới]..."
+      const content = row.content || '';
+      const fromMatch = content.match(/từ\s+([^s]+?)\s+sang/);
+      const toMatch = content.match(/sang\s+([^(]+?)(?:\s*\(|$)/);
+      const reasonMatch = content.match(/Lý do:\s*(.+?)(?:\.|$)/);
+
+      const fromName = fromMatch ? fromMatch[1].trim() : 'Chưa gán';
+      const toName = toMatch ? toMatch[1].trim() : row.employee_name || 'Không xác định';
+      const reason = reasonMatch ? reasonMatch[1].trim() : null;
+
+      // Tính thời gian quản lý (từ lần chuyển giao này đến lần tiếp theo, hoặc đến hiện tại)
+      const nextTransfer = ownershipResult.rows[index + 1];
+      const startTime = row.created_at;
+      const endTime = nextTransfer ? nextTransfer.created_at : null;
+
+      return {
+        interaction_id: row.interaction_id,
+        from_employee_name: fromName,
+        to_employee_name: toName,
+        to_employee_id: row.employee_id,
+        to_employee_username: row.employee_username,
+        transfer_reason: reason,
+        created_at: row.created_at,
+        interaction_date: row.interaction_date,
+        start_time: startTime,
+        end_time: endTime,
+        duration_days: endTime ? Math.floor((endTime - startTime) / (1000 * 60 * 60 * 24)) : null,
+        is_current: index === 0 // Lần chuyển giao gần nhất là người hiện tại
+      };
+    });
+
+    res.json({
+      success: true,
+      data: {
+        ownership_history: ownershipHistory,
+        latest_transfer_note: transferNoteResult.rows.length > 0 ? {
+          approval_note: transferNoteResult.rows[0].approval_note,
+          created_at: transferNoteResult.rows[0].created_at,
+          approver_name: transferNoteResult.rows[0].approver_name,
+          approver_username: transferNoteResult.rows[0].approver_username,
+          sender_name: transferNoteResult.rows[0].sender_name,
+          receiver_name: transferNoteResult.rows[0].receiver_name,
+          action: transferNoteResult.rows[0].action
+        } : null
+      }
+    });
+  } catch (error) {
+    console.error('Lỗi getCustomerOwnershipHistory:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi hệ thống khi lấy lịch sử sở hữu khách hàng.',
+      error: error.message
+    });
+  }
+};
