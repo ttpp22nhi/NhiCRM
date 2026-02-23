@@ -4,17 +4,22 @@ import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import Image from 'next/image'
-import { LogOut, Users, LayoutDashboard, User, ChevronDown, UserCircle, Key, CheckSquare, Clock, FileText, Menu, X } from 'lucide-react'
+import { LogOut, Users, LayoutDashboard, User, ChevronDown, UserCircle, Key, CheckSquare, FileText, Menu, X, Building2, Shield, ArrowRightLeft, GitBranch, Settings } from 'lucide-react'
 import Link from 'next/link'
 import toast from 'react-hot-toast'
 import { NotificationBell } from './NotificationBell'
+import { SubscriptionBanner } from './SubscriptionBanner'
 
 export function Navbar() {
   const { user, logout } = useAuth()
   const router = useRouter()
   const [showDropdown, setShowDropdown] = useState(false)
+  const [showAdminMenu, setShowAdminMenu] = useState(false)
+  const [showBizMenu, setShowBizMenu] = useState(false)
   const [showMobileMenu, setShowMobileMenu] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const adminMenuRef = useRef<HTMLDivElement>(null)
+  const bizMenuRef = useRef<HTMLDivElement>(null)
   const mobileMenuRef = useRef<HTMLDivElement>(null)
 
   const handleLogout = () => {
@@ -23,29 +28,30 @@ export function Navbar() {
     router.push('/login')
   }
 
-  // Đóng dropdown khi click outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setShowDropdown(false)
-      }
-      if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target as Node)) {
-        setShowMobileMenu(false)
-      }
+      const target = event.target as Node
+      if (dropdownRef.current && !dropdownRef.current.contains(target)) setShowDropdown(false)
+      if (adminMenuRef.current && !adminMenuRef.current.contains(target)) setShowAdminMenu(false)
+      if (bizMenuRef.current && !bizMenuRef.current.contains(target)) setShowBizMenu(false)
+      if (mobileMenuRef.current && !mobileMenuRef.current.contains(target)) setShowMobileMenu(false)
     }
-
     document.addEventListener('mousedown', handleClickOutside)
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-    }
+    return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
   const getRoleLabel = (role?: string) => {
     switch (role) {
+      case 'super_admin':
+        return 'Super Admin'
       case 'admin':
         return 'Admin'
+      case 'director':
+        return 'Giám đốc'
       case 'manager':
         return 'Quản lý'
+      case 'leader':
+        return 'Tổ trưởng'
       case 'sales':
         return 'Sales'
       default:
@@ -53,12 +59,21 @@ export function Navbar() {
     }
   }
 
+  /** Super Admin chưa chọn công ty: chỉ dùng được Hệ thống → Tenants; vào công ty xong mới thấy đủ menu. */
+  const isSuperAdminNoTenant = user?.role === 'super_admin' && (user?.tenant_id == null || user?.tenant_id === '')
+
   const getRoleColor = (role?: string) => {
     switch (role) {
+      case 'super_admin':
+        return 'bg-red-100 text-red-700'
       case 'admin':
         return 'bg-purple-100 text-purple-700'
+      case 'director':
+        return 'bg-indigo-100 text-indigo-700'
       case 'manager':
         return 'bg-indigo-100 text-indigo-700'
+      case 'leader':
+        return 'bg-cyan-100 text-cyan-700'
       case 'sales':
         return 'bg-blue-100 text-blue-700'
       default:
@@ -67,11 +82,13 @@ export function Navbar() {
   }
 
   return (
-    <nav className="bg-white shadow-md border-b border-gray-200">
+    <>
+      <SubscriptionBanner />
+      <nav className="bg-white shadow-md border-b border-gray-200">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16">
           <div className="flex items-center">
-            <Link href="/dashboard" className="flex items-center space-x-3">
+            <Link href={isSuperAdminNoTenant ? '/system/tenants' : '/dashboard'} className="flex items-center space-x-3">
               <Image
                 src="/logo-mobifone.png"
                 alt="MobiFone Logo"
@@ -83,45 +100,101 @@ export function Navbar() {
               {/* <span className="text-xl font-bold text-gray-900 hidden sm:block">CRM MobiFone</span> */}
             </Link>
             {/* Desktop Menu */}
-            <div className="hidden md:flex md:ml-10 md:space-x-4">
+            <div className="hidden md:flex md:ml-10 md:items-center md:space-x-1">
+              {!isSuperAdminNoTenant && (
+                <>
               <Link
                 href="/dashboard"
-                className="text-gray-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium transition"
+                className="text-gray-700 hover:text-primary-600 hover:bg-gray-50 px-3 py-2 rounded-md text-sm font-medium transition"
               >
                 Dashboard
               </Link>
-              <Link
-                href="/customers"
-                className="text-gray-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium transition"
-              >
-                Khách hàng
-              </Link>
-              <Link
-                href="/tasks"
-                className="text-gray-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium transition"
-              >
-                Công việc
-              </Link>
-              <Link
-                href="/deals"
-                className="text-gray-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium transition"
-              >
-                Cơ hội
-              </Link>
-              {user?.role === 'admin' && (
-                <Link
-                  href="/employees"
-                  className="text-gray-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium transition"
+
+              {/* Nghiệp vụ - sub-menu */}
+              <div className="relative" ref={bizMenuRef}>
+                <button
+                  onClick={() => { setShowBizMenu(!showBizMenu); setShowAdminMenu(false) }}
+                  className="flex items-center gap-1 text-gray-700 hover:text-primary-600 hover:bg-gray-50 px-3 py-2 rounded-md text-sm font-medium transition"
                 >
-                  Nhân viên
+                  Nghiệp vụ
+                  <ChevronDown className={`w-4 h-4 transition-transform ${showBizMenu ? 'rotate-180' : ''}`} />
+                </button>
+                {showBizMenu && (
+                  <div className="absolute left-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+                    <Link href="/customers" onClick={() => setShowBizMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                      <Users className="w-4 h-4" />
+                      Khách hàng
+                    </Link>
+                    <Link href="/deals" onClick={() => setShowBizMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                      <FileText className="w-4 h-4" />
+                      Cơ hội
+                    </Link>
+                    <Link href="/tasks" onClick={() => setShowBizMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                      <CheckSquare className="w-4 h-4" />
+                      Công việc
+                    </Link>
+                  </div>
+                )}
+              </div>
+                </>
+              )}
+
+              {/* Hệ thống - chỉ Super Admin (quản lý tenants) */}
+              {user?.role === 'super_admin' && (
+                <Link
+                  href="/system/tenants"
+                  className="flex items-center gap-1 text-gray-700 hover:text-primary-600 hover:bg-gray-50 px-3 py-2 rounded-md text-sm font-medium transition"
+                >
+                  <Settings className="w-4 h-4" />
+                  Hệ thống
                 </Link>
               )}
-              {(user?.role === 'manager' || user?.role === 'admin') && (
+
+              {/* Quản trị - sub-menu (admin/super_admin) - ẩn khi super_admin chưa chọn tenant */}
+              {(user?.role === 'admin' || (user?.role === 'super_admin' && !isSuperAdminNoTenant)) && (
+                <div className="relative" ref={adminMenuRef}>
+                  <button
+                    onClick={() => { setShowAdminMenu(!showAdminMenu); setShowBizMenu(false) }}
+                    className="flex items-center gap-1 text-gray-700 hover:text-primary-600 hover:bg-gray-50 px-3 py-2 rounded-md text-sm font-medium transition"
+                  >
+                    Quản trị
+                    <ChevronDown className={`w-4 h-4 transition-transform ${showAdminMenu ? 'rotate-180' : ''}`} />
+                  </button>
+                  {showAdminMenu && (
+                    <div className="absolute left-0 mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+                      <Link href="/organization-structure" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                        <GitBranch className="w-4 h-4" />
+                        Cây cấu trúc công ty
+                      </Link>
+                      <Link href="/organization" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                        <Building2 className="w-4 h-4" />
+                        Quản lý tổ chức
+                      </Link>
+                      <Link href="/permissions" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                        <Shield className="w-4 h-4" />
+                        Phân quyền
+                      </Link>
+                      <Link href="/employees" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                        <Users className="w-4 h-4" />
+                        Nhân viên
+                      </Link>
+                      <Link href="/transfers" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                        <ArrowRightLeft className="w-4 h-4" />
+                        Quản lý chuyển giao
+                      </Link>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Quản lý chuyển giao - chỉ Manager (không phải admin) */}
+              {user?.role === 'manager' && (
                 <Link
                   href="/transfers"
-                  className="text-gray-700 hover:text-primary-600 px-3 py-2 rounded-md text-sm font-medium transition"
+                  className="flex items-center gap-1 text-gray-700 hover:text-primary-600 hover:bg-gray-50 px-3 py-2 rounded-md text-sm font-medium transition"
                 >
-                  Quản lý chuyển giao
+                  <ArrowRightLeft className="w-4 h-4" />
+                  Chuyển giao
                 </Link>
               )}
             </div>
@@ -140,8 +213,8 @@ export function Navbar() {
               )}
             </button>
 
-            {/* Notification Bell */}
-            <NotificationBell />
+            {/* Notification Bell - ẩn khi super_admin chưa chọn tenant (API cần tenant) */}
+            {!isSuperAdminNoTenant && <NotificationBell />}
             
             {/* User Dropdown */}
             <div className="relative" ref={dropdownRef}>
@@ -174,6 +247,8 @@ export function Navbar() {
                     </span>
                   </div>
                   
+                  {!isSuperAdminNoTenant && (
+                    <>
                   <Link
                     href="/profile"
                     onClick={() => setShowDropdown(false)}
@@ -202,6 +277,8 @@ export function Navbar() {
                   </Link>
                   
                   <div className="border-t border-gray-200 my-1"></div>
+                    </>
+                  )}
                   
                   <button
                     onClick={() => {
@@ -223,6 +300,8 @@ export function Navbar() {
         {showMobileMenu && (
           <div ref={mobileMenuRef} className="md:hidden border-t border-gray-200">
             <div className="px-2 pt-2 pb-3 space-y-1">
+              {!isSuperAdminNoTenant && (
+                <>
               <Link
                 href="/dashboard"
                 onClick={() => setShowMobileMenu(false)}
@@ -231,51 +310,74 @@ export function Navbar() {
                 <LayoutDashboard className="w-5 h-5" />
                 <span>Dashboard</span>
               </Link>
-              <Link
-                href="/customers"
-                onClick={() => setShowMobileMenu(false)}
-                className="flex items-center space-x-2 text-gray-700 hover:text-primary-600 hover:bg-gray-100 px-3 py-2 rounded-md text-base font-medium transition"
-              >
-                <Users className="w-5 h-5" />
-                <span>Khách hàng</span>
-              </Link>
-              <Link
-                href="/tasks"
-                onClick={() => setShowMobileMenu(false)}
-                className="flex items-center space-x-2 text-gray-700 hover:text-primary-600 hover:bg-gray-100 px-3 py-2 rounded-md text-base font-medium transition"
-              >
-                <CheckSquare className="w-5 h-5" />
-                <span>Công việc</span>
-              </Link>
-              {user?.role === 'admin' && (
-                <Link
-                  href="/employees"
-                  onClick={() => setShowMobileMenu(false)}
-                  className="flex items-center space-x-2 text-gray-700 hover:text-primary-600 hover:bg-gray-100 px-3 py-2 rounded-md text-base font-medium transition"
-                >
+              <div className="border-t border-gray-100 pt-2">
+                <p className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Nghiệp vụ</p>
+                <Link href="/customers" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
                   <Users className="w-5 h-5" />
-                  <span>Nhân viên</span>
+                  <span>Khách hàng</span>
                 </Link>
-              )}
-              {(user?.role === 'manager' || user?.role === 'admin') && (
-                <Link
-                  href="/transfers"
-                  onClick={() => setShowMobileMenu(false)}
-                  className="flex items-center space-x-2 text-gray-700 hover:text-primary-600 hover:bg-gray-100 px-3 py-2 rounded-md text-base font-medium transition"
-                >
+                <Link href="/deals" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
                   <FileText className="w-5 h-5" />
-                  <span>Quản lý chuyển giao</span>
+                  <span>Cơ hội</span>
+                </Link>
+                <Link href="/tasks" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                  <CheckSquare className="w-5 h-5" />
+                  <span>Công việc</span>
+                </Link>
+              </div>
+                </>
+              )}
+              {user?.role === 'super_admin' && (
+                <div className="border-t border-gray-100 pt-2">
+                  <p className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Hệ thống</p>
+                  <Link href="/system/tenants" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                    <Settings className="w-5 h-5" />
+                    <span>Quản lý công ty (Tenants)</span>
+                  </Link>
+                </div>
+              )}
+              {(user?.role === 'admin' || (user?.role === 'super_admin' && !isSuperAdminNoTenant)) && (
+                <div className="border-t border-gray-100 pt-2">
+                  <p className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Quản trị</p>
+                  <Link href="/organization-structure" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                    <GitBranch className="w-5 h-5" />
+                    <span>Cây cấu trúc công ty</span>
+                  </Link>
+                  <Link href="/organization" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                    <Building2 className="w-5 h-5" />
+                    <span>Quản lý tổ chức</span>
+                  </Link>
+                  <Link href="/permissions" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                    <Shield className="w-5 h-5" />
+                    <span>Phân quyền</span>
+                  </Link>
+                  <Link href="/employees" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                    <Users className="w-5 h-5" />
+                    <span>Nhân viên</span>
+                  </Link>
+                  <Link href="/transfers" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                    <ArrowRightLeft className="w-5 h-5" />
+                    <span>Quản lý chuyển giao</span>
+                  </Link>
+                </div>
+              )}
+              {user?.role === 'manager' && (
+                <Link href="/transfers" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md">
+                  <ArrowRightLeft className="w-5 h-5" />
+                  <span>Chuyển giao</span>
                 </Link>
               )}
               <div className="border-t border-gray-200 pt-2 mt-2">
-                <Link
-                  href="/profile"
-                  onClick={() => setShowMobileMenu(false)}
-                  className="flex items-center space-x-2 text-gray-700 hover:text-primary-600 hover:bg-gray-100 px-3 py-2 rounded-md text-base font-medium transition"
-                >
-                  <UserCircle className="w-5 h-5" />
-                  <span>Trang cá nhân</span>
-                </Link>
+                {!isSuperAdminNoTenant && (
+                  <Link
+                    href="/profile"
+                    onClick={() => setShowMobileMenu(false)}
+                    className="flex items-center space-x-2 text-gray-700 hover:text-primary-600 hover:bg-gray-100 px-3 py-2 rounded-md text-base font-medium transition"
+                  >
+                    <UserCircle className="w-5 h-5" />
+                    <span>Trang cá nhân</span>
+                  </Link>
+                )}
                 <button
                   onClick={() => {
                     setShowMobileMenu(false)
@@ -292,6 +394,7 @@ export function Navbar() {
         )}
       </div>
     </nav>
+    </>
   )
 }
 

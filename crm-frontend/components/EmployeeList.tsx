@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { apiClient } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { Users, Mail, Shield, UserCheck, AlertCircle, Key, Copy, X, CheckCircle, Edit, Eye, MoreVertical, ArrowRightLeft } from 'lucide-react'
@@ -18,6 +19,10 @@ interface Employee {
   role: string
   is_active: boolean
   created_at: number | string
+  department_id?: string
+  department_name?: string
+  title?: string
+  rank?: string
 }
 
 interface EmployeeListProps {
@@ -40,19 +45,42 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
   const [viewingEmployee, setViewingEmployee] = useState<Employee | null>(null)
   const [transferringEmployee, setTransferringEmployee] = useState<Employee | null>(null)
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
-  
-  // Chỉ Admin mới có quyền sửa nhân viên
-  const isAdmin = user?.role === 'admin'
+  const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null)
+  const actionButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+
+  const isAdmin = user?.role === 'admin' || user?.role === 'super_admin'
 
   useEffect(() => {
     fetchEmployees()
   }, [refreshKey])
 
+  // Cập nhật vị trí dropdown khi mở và khi scroll/resize
+  useEffect(() => {
+    if (!openMenuId) {
+      setMenuPosition(null)
+      return
+    }
+    const btn = actionButtonRefs.current[openMenuId]
+    const updatePos = () => {
+      if (btn) {
+        const rect = btn.getBoundingClientRect()
+        setMenuPosition({ top: rect.bottom + 4, left: rect.right - 192 })
+      }
+    }
+    updatePos()
+    window.addEventListener('scroll', updatePos, true)
+    window.addEventListener('resize', updatePos)
+    return () => {
+      window.removeEventListener('scroll', updatePos, true)
+      window.removeEventListener('resize', updatePos)
+    }
+  }, [openMenuId])
+
   // Đóng menu khi click outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as HTMLElement
-      if (!target.closest('.action-menu-container')) {
+      if (!target.closest('.action-menu-container') && !target.closest('.action-menu-dropdown-portal')) {
         setOpenMenuId(null)
       }
     }
@@ -283,71 +311,13 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
                 <td className="px-3 py-3">
                   <div className="relative action-menu-container">
                     <button
+                      ref={el => { actionButtonRefs.current[employee.employee_id] = el }}
                       onClick={() => setOpenMenuId(openMenuId === employee.employee_id ? null : employee.employee_id)}
                       className="inline-flex items-center justify-center w-8 h-8 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition"
                       title="Thao tác"
                     >
                       <MoreVertical className="w-4 h-4" />
                     </button>
-                    
-                    {openMenuId === employee.employee_id && (
-                      <div className="absolute right-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1">
-                        <button
-                          onClick={() => {
-                            setViewingEmployee(employee)
-                            setOpenMenuId(null)
-                          }}
-                          className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition text-left"
-                        >
-                          <Eye className="w-4 h-4" />
-                          <span>Xem chi tiết</span>
-                        </button>
-                        {isAdmin && (
-                          <button
-                            onClick={() => {
-                              setEditingEmployee(employee)
-                              setOpenMenuId(null)
-                            }}
-                            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-blue-700 hover:bg-blue-50 transition text-left"
-                          >
-                            <Edit className="w-4 h-4" />
-                            <span>Sửa thông tin</span>
-                          </button>
-                        )}
-                        {isAdmin && (
-                          <button
-                            onClick={() => {
-                              handleResetPassword(
-                                employee.employee_id,
-                                employee.full_name,
-                                employee.username,
-                                employee.email
-                              )
-                              setOpenMenuId(null)
-                            }}
-                            disabled={resettingId === employee.employee_id}
-                            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-orange-700 hover:bg-orange-50 transition text-left disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            <Key className="w-4 h-4" />
-                            <span>
-                              {resettingId === employee.employee_id ? 'Đang reset...' : 'Reset mật khẩu'}
-                            </span>
-                          </button>
-                        )}
-                        {isAdmin && (
-                          <button
-                            onClick={() => {
-                              setTransferringEmployee(employee)
-                              setOpenMenuId(null)
-                            }}
-                            className="w-full flex items-center gap-2 px-4 py-2 text-sm text-purple-700 hover:bg-purple-50 transition text-left"
-                          >
-                            <ArrowRightLeft className="w-4 h-4" />
-                            <span>Chuyển giao khách hàng</span>
-                          </button>
-                        )}
-                      </div>
-                    )}
                   </div>
                 </td>
               </tr>
@@ -355,6 +325,67 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
           </tbody>
         </table>
       </div>
+
+      {/* Dropdown Thao tác render qua Portal để không bị cắt bởi overflow */}
+      {openMenuId && menuPosition && typeof document !== 'undefined' && (() => {
+        const employee = employees.find(e => e.employee_id === openMenuId)
+        if (!employee) return null
+        const menu = (
+          <div
+            className="action-menu-dropdown-portal fixed w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-[9999]"
+            style={{ top: menuPosition.top, left: menuPosition.left }}
+          >
+            <button
+              onClick={() => {
+                setViewingEmployee(employee)
+                setOpenMenuId(null)
+              }}
+              className="w-full flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition text-left"
+            >
+              <Eye className="w-4 h-4" />
+              <span>Xem chi tiết</span>
+            </button>
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  setEditingEmployee(employee)
+                  setOpenMenuId(null)
+                }}
+                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-blue-700 hover:bg-blue-50 transition text-left"
+              >
+                <Edit className="w-4 h-4" />
+                <span>Sửa thông tin</span>
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  handleResetPassword(employee.employee_id, employee.full_name, employee.username, employee.email)
+                  setOpenMenuId(null)
+                }}
+                disabled={resettingId === employee.employee_id}
+                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-orange-700 hover:bg-orange-50 transition text-left disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Key className="w-4 h-4" />
+                <span>{resettingId === employee.employee_id ? 'Đang reset...' : 'Reset mật khẩu'}</span>
+              </button>
+            )}
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  setTransferringEmployee(employee)
+                  setOpenMenuId(null)
+                }}
+                className="w-full flex items-center gap-2 px-4 py-2 text-sm text-purple-700 hover:bg-purple-50 transition text-left"
+              >
+                <ArrowRightLeft className="w-4 h-4" />
+                <span>Chuyển giao khách hàng</span>
+              </button>
+            )}
+          </div>
+        )
+        return createPortal(menu, document.body)
+      })()}
 
       {/* Modal xem thông tin nhân viên */}
       {viewingEmployee && (

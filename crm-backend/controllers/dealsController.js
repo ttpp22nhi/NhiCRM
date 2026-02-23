@@ -1,15 +1,24 @@
 import pool from '../database.js'
 import { v4 as uuidv4 } from 'uuid'
+import { getTenantId } from '../utils/tenantHelper.js'
+import { getAccessScope, buildDealFilter } from '../services/permissionService.js'
 
 /**
  * Lấy danh sách deals
- * Phân quyền: Sales chỉ thấy deal của mình, Admin/Manager thấy tất cả
+ * Phân quyền động: getAccessScope(userId, 'deals', 'read')
  */
 export const getDeals = async (req, res) => {
-  const { role, id: userId } = req.user
-  const { customer_id, assigned_to, stage, status } = req.query // Filters
+  const { id: userId } = req.user
+  const { customer_id, assigned_to, stage, status } = req.query
 
   try {
+    const tenantId = getTenantId(req)
+    const access = await getAccessScope(userId, 'deals', 'read', tenantId)
+    const { clause: accessClause, params: accessParams, paramIndex: paramIndexAfter } = buildDealFilter(access, 2)
+
+    let params = [tenantId, ...accessParams]
+    let paramIndex = paramIndexAfter
+
     let query = `
       SELECT 
         d.*,
@@ -19,19 +28,12 @@ export const getDeals = async (req, res) => {
         e.full_name as assigned_employee_name,
         e.username as assigned_employee_username
       FROM deals d
-      LEFT JOIN customers c ON d.customer_id = c.customer_id AND c.deleted_at IS NULL
+      LEFT JOIN customers c ON d.customer_id = c.customer_id AND c.deleted_at IS NULL AND c.tenant_id = d.tenant_id
       LEFT JOIN employees e ON d.assigned_to = e.employee_id
-      WHERE 1=1
+      WHERE d.tenant_id = $1 AND (${accessClause})
     `
-    const params = []
-    let paramIndex = 1
 
-    // Phân quyền: Sales chỉ thấy deal của mình
-    if (role === 'sales') {
-      query += ` AND d.assigned_to = $${paramIndex++}`
-      params.push(userId)
-    } else if (assigned_to) {
-      // Admin/Manager có thể lọc theo nhân viên
+    if (assigned_to) {
       query += ` AND d.assigned_to = $${paramIndex++}`
       params.push(assigned_to)
     }
@@ -78,51 +80,37 @@ export const getDeals = async (req, res) => {
 export const createDeal = async (req, res) => {
   const { role, id: userId } = req.user
   const { customer_id, title, amount, stage, expected_closing_date, assigned_to } = req.body
+  const tenantId = getTenantId(req)
 
   try {
-    // Validation
     if (!title) {
-      return res.status(400).json({
-        success: false,
-        message: 'Tiêu đề deal là bắt buộc.'
-      })
+      return res.status(400).json({ success: false, message: 'Tiêu đề deal là bắt buộc.' })
     }
 
-    // Kiểm tra customer nếu có
     if (customer_id) {
       const customerCheck = await pool.query(
-        'SELECT customer_id FROM customers WHERE customer_id = $1 AND deleted_at IS NULL',
-        [customer_id]
+        'SELECT customer_id FROM customers WHERE customer_id = $1 AND tenant_id = $2 AND deleted_at IS NULL',
+        [customer_id, tenantId]
       )
       if (customerCheck.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Khách hàng không tồn tại hoặc đã bị xóa.'
-        })
+        return res.status(404).json({ success: false, message: 'Khách hàng không tồn tại hoặc đã bị xóa.' })
       }
     }
 
-    // Xác định assigned_to
     let finalAssignedTo = assigned_to
     if (role === 'sales') {
-      // Sales chỉ có thể tạo deal cho chính mình
       finalAssignedTo = userId
     } else if (!finalAssignedTo) {
-      // Admin/Manager nếu không chỉ định thì gán cho chính mình
       finalAssignedTo = userId
     }
 
-    // Kiểm tra assigned_to có tồn tại không
     if (finalAssignedTo) {
       const employeeCheck = await pool.query(
-        'SELECT employee_id FROM employees WHERE employee_id = $1 AND is_active = true',
-        [finalAssignedTo]
+        'SELECT employee_id FROM employees WHERE employee_id = $1 AND tenant_id = $2 AND is_active = true',
+        [finalAssignedTo, tenantId]
       )
       if (employeeCheck.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Nhân viên được gán không tồn tại hoặc không hoạt động.'
-        })
+        return res.status(404).json({ success: false, message: 'Nhân viên được gán không tồn tại hoặc không thuộc đơn vị của bạn.' })
       }
     }
 
@@ -163,22 +151,13 @@ export const createDeal = async (req, res) => {
     const insertQuery = `
       INSERT INTO deals (
         deal_id, customer_id, title, amount, stage, status,
-        expected_closing_date, assigned_to, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        expected_closing_date, assigned_to, tenant_id, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *
     `
-
     const result = await pool.query(insertQuery, [
-      dealId,
-      customer_id || null,
-      title.trim(),
-      finalAmount,
-      finalStage,
-      'active',
-      finalExpectedClosingDate,
-      finalAssignedTo,
-      now,
-      now
+      dealId, customer_id || null, title.trim(), finalAmount, finalStage, 'active',
+      finalExpectedClosingDate, finalAssignedTo, tenantId, now, now
     ])
 
     // Lấy thông tin đầy đủ với JOIN
@@ -220,23 +199,17 @@ export const updateDeal = async (req, res) => {
   const { id } = req.params
   const { title, amount, stage, status, expected_closing_date, assigned_to, customer_id } = req.body
 
+  const tenantId = getTenantId(req)
+
   try {
-    // Kiểm tra deal có tồn tại không
     const dealCheck = await pool.query(
-      'SELECT * FROM deals WHERE deal_id = $1',
-      [id]
+      'SELECT * FROM deals WHERE deal_id = $1 AND tenant_id = $2',
+      [id, tenantId]
     )
-
     if (dealCheck.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Deal không tồn tại.'
-      })
+      return res.status(404).json({ success: false, message: 'Deal không tồn tại.' })
     }
-
     const deal = dealCheck.rows[0]
-
-    // Phân quyền: Sales chỉ có thể cập nhật deal của mình
     if (role === 'sales' && deal.assigned_to !== userId) {
       return res.status(403).json({
         success: false,
@@ -247,8 +220,8 @@ export const updateDeal = async (req, res) => {
     // Kiểm tra customer nếu có thay đổi
     if (customer_id && customer_id !== deal.customer_id) {
       const customerCheck = await pool.query(
-        'SELECT customer_id FROM customers WHERE customer_id = $1 AND deleted_at IS NULL',
-        [customer_id]
+        'SELECT customer_id FROM customers WHERE customer_id = $1 AND tenant_id = $2 AND deleted_at IS NULL',
+        [customer_id, tenantId]
       )
       if (customerCheck.rows.length === 0) {
         return res.status(404).json({
@@ -269,14 +242,11 @@ export const updateDeal = async (req, res) => {
       }
 
       const employeeCheck = await pool.query(
-        'SELECT employee_id FROM employees WHERE employee_id = $1 AND is_active = true',
-        [assigned_to]
+        'SELECT employee_id FROM employees WHERE employee_id = $1 AND tenant_id = $2 AND is_active = true',
+        [assigned_to, tenantId]
       )
       if (employeeCheck.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Nhân viên được gán không tồn tại hoặc không hoạt động.'
-        })
+        return res.status(404).json({ success: false, message: 'Nhân viên được gán không thuộc đơn vị của bạn.' })
       }
     }
 
@@ -380,16 +350,13 @@ export const updateDeal = async (req, res) => {
     updateFields.push(`updated_at = $${paramIndex++}`)
     updateValues.push(Date.now())
 
-    // Thêm deal_id vào cuối
-    updateValues.push(id)
-
+    updateValues.push(id, tenantId)
     const updateQuery = `
       UPDATE deals 
       SET ${updateFields.join(', ')}
-      WHERE deal_id = $${paramIndex}
+      WHERE deal_id = $${paramIndex} AND tenant_id = $${paramIndex + 1}
       RETURNING *
     `
-
     const result = await pool.query(updateQuery, updateValues)
 
     // Lấy thông tin đầy đủ với JOIN

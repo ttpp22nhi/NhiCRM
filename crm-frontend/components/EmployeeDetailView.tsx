@@ -10,6 +10,10 @@ interface Employee {
   role: string
   is_active: boolean
   created_at: number | string
+  department_id?: string
+  department_name?: string
+  title?: string
+  rank?: string
 }
 
 interface EmployeeDetailViewProps {
@@ -43,10 +47,16 @@ export function EmployeeDetailView({ employee, onClose }: EmployeeDetailViewProp
 
   const getRoleLabel = (role: string) => {
     switch (role) {
+      case 'super_admin':
+        return 'Super Admin'
       case 'admin':
         return 'Quản trị viên'
+      case 'director':
+        return 'Giám đốc'
       case 'manager':
         return 'Quản lý'
+      case 'leader':
+        return 'Tổ trưởng'
       case 'sales':
         return 'Nhân viên bán hàng'
       default:
@@ -56,10 +66,15 @@ export function EmployeeDetailView({ employee, onClose }: EmployeeDetailViewProp
 
   const getRoleColor = (role: string) => {
     switch (role) {
+      case 'super_admin':
+        return 'bg-red-100 text-red-800'
       case 'admin':
         return 'bg-purple-100 text-purple-800'
+      case 'director':
       case 'manager':
         return 'bg-indigo-100 text-indigo-800'
+      case 'leader':
+        return 'bg-cyan-100 text-cyan-800'
       case 'sales':
         return 'bg-blue-100 text-blue-800'
       default:
@@ -129,6 +144,35 @@ export function EmployeeDetailView({ employee, onClose }: EmployeeDetailViewProp
                   {getRoleLabel(employee.role)}
                 </span>
               </div>
+
+              {/* Phòng/Tổ */}
+              {(employee.department_name || employee.department_id) && (
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <User className="w-5 h-5 text-gray-400" />
+                    <label className="text-sm font-medium text-gray-500">Phòng/Tổ</label>
+                  </div>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {employee.department_name || employee.department_id || '—'}
+                  </p>
+                </div>
+              )}
+
+              {/* Chức danh */}
+              {employee.title && (
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <label className="text-sm font-medium text-gray-500 block mb-2">Chức danh</label>
+                  <p className="text-lg font-semibold text-gray-900">{employee.title}</p>
+                </div>
+              )}
+
+              {/* Cấp bậc */}
+              {employee.rank && (
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <label className="text-sm font-medium text-gray-500 block mb-2">Cấp bậc</label>
+                  <p className="text-lg font-semibold text-gray-900">{employee.rank}</p>
+                </div>
+              )}
 
               {/* Trạng thái */}
               <div className="bg-gray-50 rounded-lg p-4">

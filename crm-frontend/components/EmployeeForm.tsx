@@ -1,27 +1,59 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
 import { apiClient } from '@/lib/api'
-import { AlertCircle, CheckCircle } from 'lucide-react'
+import { AlertCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
+
+interface Department {
+  id: string
+  name: string
+  parent_id: string | null
+  type: string
+}
 
 interface EmployeeFormProps {
   onSuccess: () => void
   onCancel: () => void
 }
 
+/** Vai trò khi thêm nhân viên vào công ty. Không có Super Admin — Super Admin là cấp hệ thống, không tạo qua form này. */
+const ROLE_OPTIONS = [
+  { value: 'sales', label: 'Nhân viên bán hàng' },
+  { value: 'leader', label: 'Tổ trưởng' },
+  { value: 'manager', label: 'Quản lý' },
+  { value: 'director', label: 'Giám đốc' },
+  { value: 'admin', label: 'Quản trị viên' }
+]
+
 export function EmployeeForm({ onSuccess, onCancel }: EmployeeFormProps) {
   const { register } = useAuth()
+  const [departments, setDepartments] = useState<Department[]>([])
   const [formData, setFormData] = useState({
     username: '',
     password: '',
     full_name: '',
     email: '',
     role: 'sales',
+    department_id: '' as string,
+    title: '',
+    rank: ''
   })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    const fetch = async () => {
+      try {
+        const res = await apiClient.get('/api/departments/flat')
+        if (res.data.success) setDepartments(res.data.data || [])
+      } catch {
+        // ignore
+      }
+    }
+    fetch()
+  }, [])
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
@@ -43,7 +75,12 @@ export function EmployeeForm({ onSuccess, onCancel }: EmployeeFormProps) {
         formData.password,
         formData.full_name,
         formData.email,
-        formData.role
+        {
+          role: formData.role,
+          department_id: formData.department_id || undefined,
+          title: formData.title || undefined,
+          rank: formData.rank || undefined
+        }
       )
       toast.success('Tạo tài khoản nhân viên thành công!')
       onSuccess()
@@ -110,9 +147,60 @@ export function EmployeeForm({ onSuccess, onCancel }: EmployeeFormProps) {
             onChange={handleChange}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
           >
-            <option value="sales">Nhân viên bán hàng</option>
-            <option value="admin">Quản trị viên</option>
+            {ROLE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
           </select>
+        </div>
+
+        <div>
+          <label htmlFor="department_id" className="block text-sm font-medium text-gray-700 mb-2">
+            Phòng/Tổ
+          </label>
+          <select
+            id="department_id"
+            name="department_id"
+            value={formData.department_id}
+            onChange={handleChange}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
+          >
+            <option value="">-- Chọn Phòng/Tổ --</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.type === 'team' ? '  └ ' : ''}{d.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-2">
+            Chức danh
+          </label>
+          <input
+            id="title"
+            name="title"
+            type="text"
+            value={formData.title}
+            onChange={handleChange}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
+            placeholder="VD: Chuyên viên"
+          />
+        </div>
+
+        <div>
+          <label htmlFor="rank" className="block text-sm font-medium text-gray-700 mb-2">
+            Cấp bậc
+          </label>
+          <input
+            id="rank"
+            name="rank"
+            type="text"
+            value={formData.rank}
+            onChange={handleChange}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
+            placeholder="VD: 1, 2, 3"
+          />
         </div>
 
         <div className="md:col-span-2">

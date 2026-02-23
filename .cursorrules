@@ -1,20 +1,34 @@
-# CRM MobiFone - Multi-module Rules
+# CRM MobiFone - Multi-tenant SaaS & Recursive Auth Rules
 
-## 📂 Project Structure
-- Frontend: Rooted in `./crm_frontend` (Next.js 14)
-- Backend: Rooted in `./crm_backend` (Node.js/Express)
+## 🌐 SaaS Multi-tenancy & Isolation
+- **Tenant ID**: Tất cả bảng dữ liệu (users, departments, customers, role_permissions, v.v.) BẮT BUỘC phải có `tenant_id`.
+- **Global Filter**: Mọi câu lệnh SQL (SELECT, UPDATE, DELETE) phải luôn bao gồm điều kiện `WHERE tenant_id = current_tenant_id`.
+- **System Owner**: Chỉ `super_admin` hệ thống mới không bị ràng buộc bởi `tenant_id` khi quản lý danh sách các công ty (Tenants).
 
-## 🎯 Specific Rules
-- **API Base URL:** Frontend nên gọi API đến `http://localhost:3000/api` (môi trường dev).
-- **Logo Usage:** Logo chính thức đặt tại `./crm_frontend/public/logo-mobifone.png`. Luôn dùng đường dẫn `/logo-mobifone.png` trong code React.
-- **Backend Auth:** Khi chỉnh sửa code trong `./crm_backend`, luôn đảm bảo các route chuyển giao (transfer) có middleware `verifyAdmin`.
-- **Frontend UI:** Khi chỉnh sửa code trong `./crm_frontend`, sử dụng Tailwind CSS và các icons từ Lucide.
+## 🏢 Dynamic Hierarchy (Búp bê Nga)
+- **No Hardcoded Levels**: Không giới hạn 2 cấp Phòng/Tổ. Sử dụng cấu trúc đệ quy vô hạn.
+- **Materialized Path**: Bảng `departments` bắt buộc có cột `path` (TEXT) để lưu vết (ví dụ: `ID1/ID2/ID3`). 
+- **Auto-Path**: Mỗi khi Create/Update một Node, hệ thống phải tự động tính toán lại `path` cho Node đó và tất cả con cháu của nó.
+- **Tenant Boundary**: Logic đệ quy và `path` chỉ được hoạt động bên trong phạm vi của một `tenant_id`.
 
-## 🎨 Branding
-- Primary Color: #0074BD (MobiFone Blue).
-- Logo Placement: Sidebar top và Login page center.
-- Logo Path: `/logo-mobifone.png` (Nằm trong crm_frontend/public/)
+## 🔒 Contextual Authorization (RBAC 2.0)
+- **User Identity**: Quyền hạn = Role + Scope + Department_Node.
+- **Dynamic Scopes**:
+    - `personal`: Chỉ thấy dữ liệu của chính mình (`assigned_to = user_id`).
+    - `current_node`: Thấy dữ liệu trong phòng/tổ hiện tại.
+    - `sub_tree`: Sử dụng cột `path` để lấy dữ liệu của Node hiện tại và TẤT CẢ các Node con bên dưới (không giới hạn độ sâu).
+    - `global`: Thấy toàn bộ dữ liệu trong cùng một `tenant_id`.
+- **Roles**: 
+    - `super_admin`: Quản trị toàn sàn (quản lý bảng tenants).
+    - `tenant_admin`: Quản trị cao nhất của một công ty.
 
-## 🛠️ Instructions
-- Khi chỉnh sửa UI, hãy luôn tham chiếu đến logo tại `/logo-mobifone.png`.
-- Đảm bảo logo trên trang Login có kích thước lớn (width: 240px) và logo trên Sidebar có kích thước nhỏ (width: 150px).
+## 📂 Project Structure & UI
+- **Frontend**: Next.js 14 (`./crm_frontend`). Sử dụng Tailwind CSS & Lucide Icons.
+- **Backend**: Node.js/Express (`./crm_backend`).
+- **Logo**: `/logo-mobifone.png` (Primary Color: #0074BD).
+- **Tree-view UI**: Mọi hiển thị tổ chức/phân quyền phải sử dụng Tree-view Component để thể hiện tính đa cấp.
+
+## 🛠️ Implementation Rules
+- Backend Auth: Sử dụng JWT chứa `user_id`, `role` và `tenant_id`.
+- Middleware: Bắt buộc dùng `verifyTenant` để gán `req.tenantId` trước khi vào Controller.
+- API Base: `http://localhost:3000/api`.

@@ -1,4 +1,5 @@
 import pool from '../database.js'
+import { getTenantId } from '../utils/tenantHelper.js'
 
 /**
  * @swagger
@@ -81,6 +82,7 @@ import pool from '../database.js'
 export const getDashboardStats = async (req, res) => {
   const { role, id: userId } = req.user
   const { period = 'month' } = req.query
+  const tenantId = getTenantId(req)
 
   try {
     // Tính toán khoảng thời gian
@@ -115,61 +117,60 @@ export const getDashboardStats = async (req, res) => {
         startTime = now
     }
 
-    // 1. Tổng quan (Overview)
-    // Tổng doanh số từ các Deal có stage là 'Thành công' hoặc 'closed_won' (không phân biệt hoa thường)
+    // 1. Tổng quan (Overview) — lọc theo tenant
     const revenueQuery = `
       SELECT COALESCE(SUM(amount), 0) as total_revenue
       FROM deals
-      WHERE LOWER(COALESCE(stage, '')) IN ('thành công', 'closed_won', 'đã đóng', 'hoàn thành')
+      WHERE tenant_id = $1 AND LOWER(COALESCE(stage, '')) IN ('thành công', 'closed_won', 'đã đóng', 'hoàn thành')
     `
-    const revenueResult = await pool.query(revenueQuery)
+    const revenueResult = await pool.query(revenueQuery, [tenantId])
     const totalRevenue = parseFloat(revenueResult.rows[0].total_revenue) || 0
 
-    // Tổng số khách hàng (chưa bị xóa)
+    // Tổng số khách hàng (chưa bị xóa) — theo tenant
     let customerCountQuery = `
       SELECT COUNT(*) as total
       FROM customers
-      WHERE deleted_at IS NULL
+      WHERE deleted_at IS NULL AND tenant_id = $1
     `
-    let customerCountParams = []
+    let customerCountParams = [tenantId]
 
     // Phân quyền: Sales chỉ thấy khách hàng của mình
     if (role !== 'admin' && role !== 'manager') {
-      customerCountQuery += ' AND assigned_to = $1'
+      customerCountQuery += ' AND assigned_to = $2'
       customerCountParams.push(userId)
     }
 
     const customerCountResult = await pool.query(customerCountQuery, customerCountParams)
     const totalCustomers = parseInt(customerCountResult.rows[0].total) || 0
 
-    // Số lượng Task chưa hoàn thành
-    let taskQuery = `
+    // Số lượng Task chưa hoàn thành — theo tenant
+    const taskQuery = `
       SELECT COUNT(*) as total
       FROM tasks
-      WHERE is_completed = false
+      WHERE tenant_id = $1 AND is_completed = false
     `
-    const taskResult = await pool.query(taskQuery)
+    const taskResult = await pool.query(taskQuery, [tenantId])
     const pendingTasks = parseInt(taskResult.rows[0].total) || 0
 
-    // Tổng số tương tác trong khoảng thời gian
-    let interactionQuery = `
+    // Tổng số tương tác trong khoảng thời gian — theo tenant
+    const interactionQuery = `
       SELECT COUNT(*) as total
       FROM interactions
-      WHERE created_at >= $1
+      WHERE tenant_id = $1 AND created_at >= $2
     `
-    const interactionResult = await pool.query(interactionQuery, [startTime])
+    const interactionResult = await pool.query(interactionQuery, [tenantId, startTime])
     const totalInteractions = parseInt(interactionResult.rows[0].total) || 0
 
-    // 2. Phân bổ khách hàng theo customer_type
+    // 2. Phân bổ khách hàng theo customer_type — theo tenant
     let customerDistributionQuery = `
       SELECT customer_type, COUNT(*) as count
       FROM customers
-      WHERE deleted_at IS NULL
+      WHERE deleted_at IS NULL AND tenant_id = $1
     `
-    let distributionParams = []
+    let distributionParams = [tenantId]
 
     if (role !== 'admin' && role !== 'manager') {
-      customerDistributionQuery += ' AND assigned_to = $1'
+      customerDistributionQuery += ' AND assigned_to = $2'
       distributionParams.push(userId)
     }
 
@@ -181,7 +182,7 @@ export const getDashboardStats = async (req, res) => {
       count: parseInt(row.count) || 0
     }))
 
-    // 3. Hiệu suất nhân viên
+    // 3. Hiệu suất nhân viên — chỉ trong tenant
     let employeePerformanceQuery = `
       SELECT 
         e.employee_id,
@@ -190,19 +191,19 @@ export const getDashboardStats = async (req, res) => {
         COUNT(DISTINCT CASE WHEN LOWER(COALESCE(d.stage, '')) IN ('thành công', 'closed_won', 'đã đóng', 'hoàn thành') THEN d.deal_id END) as successful_deals,
         COALESCE(SUM(CASE WHEN LOWER(COALESCE(d.stage, '')) IN ('thành công', 'closed_won', 'đã đóng', 'hoàn thành') THEN d.amount ELSE 0 END), 0) as total_revenue
       FROM employees e
-      LEFT JOIN customers c ON e.employee_id = c.assigned_to AND c.deleted_at IS NULL
-      LEFT JOIN deals d ON d.customer_id = c.customer_id
-      WHERE e.is_active = true
+      LEFT JOIN customers c ON e.employee_id = c.assigned_to AND c.deleted_at IS NULL AND c.tenant_id = e.tenant_id
+      LEFT JOIN deals d ON d.customer_id = c.customer_id AND d.tenant_id = e.tenant_id
+      WHERE e.is_active = true AND e.tenant_id = $1
     `
 
     // Phân quyền: Sales chỉ thấy thống kê của mình
     if (role !== 'admin' && role !== 'manager') {
-      employeePerformanceQuery += ' AND e.employee_id = $1'
+      employeePerformanceQuery += ' AND e.employee_id = $2'
     }
 
     employeePerformanceQuery += ' GROUP BY e.employee_id, e.full_name ORDER BY total_revenue DESC, customer_count DESC LIMIT 10'
 
-    const employeeParams = role !== 'admin' && role !== 'manager' ? [userId] : []
+    const employeeParams = role !== 'admin' && role !== 'manager' ? [tenantId, userId] : [tenantId]
     const employeeResult = await pool.query(employeePerformanceQuery, employeeParams)
 
     const employeePerformance = employeeResult.rows.map(row => ({
@@ -213,16 +214,17 @@ export const getDashboardStats = async (req, res) => {
       total_revenue: parseFloat(row.total_revenue) || 0
     }))
 
-    // 4. Trạng thái Deal
+    // 4. Trạng thái Deal — theo tenant
     const dealStagesQuery = `
       SELECT 
         COALESCE(stage, 'Không xác định') as stage,
         COUNT(*) as count
       FROM deals
+      WHERE tenant_id = $1
       GROUP BY stage
       ORDER BY count DESC
     `
-    const dealStagesResult = await pool.query(dealStagesQuery)
+    const dealStagesResult = await pool.query(dealStagesQuery, [tenantId])
 
     const dealStages = dealStagesResult.rows.map(row => ({
       stage: row.stage || 'Không xác định',

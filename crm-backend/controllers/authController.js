@@ -1,41 +1,81 @@
-
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import pool from '../database.js';
+import { getTenantId } from '../utils/tenantHelper.js';
 
 /**
  * Đăng ký nhân viên mới (Chỉ Admin mới có quyền)
  */
+const VALID_ROLES = ['super_admin', 'admin', 'director', 'manager', 'leader', 'sales'];
+
 export const register = async (req, res) => {
-  const { username, password, full_name, email, role } = req.body;
-  
-  // Lấy thông tin admin đang tạo tài khoản (từ verifyToken middleware)
-  const created_by = req.user.id;
+  const { username, password, full_name, email, role, department_id, title, rank } = req.body;
 
   try {
-    // 1. Kiểm tra username đã tồn tại chưa
-    const checkUser = await pool.query('SELECT username FROM employees WHERE username = $1', [username]);
-    if (checkUser.rows.length > 0) {
-      return res.status(400).json({ success: false, message: 'Tên đăng nhập đã tồn tại.' });
+    const tenantId = getTenantId(req);
+
+    const tenantRow = await pool.query(
+      'SELECT max_users FROM tenants WHERE id = $1 AND is_active = TRUE',
+      [tenantId]
+    );
+    if (tenantRow.rows.length === 0) {
+      return res.status(400).json({ success: false, message: 'Tenant không tồn tại hoặc đã bị khóa.' });
+    }
+    const countRow = await pool.query(
+      'SELECT COUNT(*) AS cnt FROM employees WHERE tenant_id = $1',
+      [tenantId]
+    );
+    const totalUsers = parseInt(countRow.rows[0].cnt, 10);
+    if (totalUsers >= tenantRow.rows[0].max_users) {
+      return res.status(400).json({
+        success: false,
+        message: `Đã đạt giới hạn số nhân viên (tối đa ${tenantRow.rows[0].max_users}). Vui lòng nâng cấp gói.`
+      });
     }
 
-    // 2. Mã hóa mật khẩu
+    const checkUser = await pool.query(
+      'SELECT username FROM employees WHERE username = $1 AND tenant_id = $2',
+      [username, tenantId]
+    );
+    if (checkUser.rows.length > 0) {
+      return res.status(400).json({ success: false, message: 'Tên đăng nhập đã tồn tại trong tenant này.' });
+    }
+
+    const finalRole = role || 'sales';
+    if (!VALID_ROLES.includes(finalRole)) {
+      return res.status(400).json({ success: false, message: 'Vai trò không hợp lệ.' });
+    }
+
+    // 2. Kiểm tra department_id nếu có (phải thuộc cùng tenant)
+    if (department_id) {
+      const deptCheck = await pool.query(
+        'SELECT id FROM departments WHERE id = $1 AND tenant_id = $2',
+        [department_id, tenantId]
+      );
+      if (deptCheck.rows.length === 0) {
+        return res.status(400).json({ success: false, message: 'Phòng/Tổ không tồn tại hoặc không thuộc tenant của bạn.' });
+      }
+    }
+
+    // 3. Mã hóa mật khẩu
     const saltRounds = 10;
     const password_hash = await bcrypt.hash(password, saltRounds);
 
-    // 3. Chuẩn bị dữ liệu (UUID và Unix Timestamp)
+    // 4. Chuẩn bị dữ liệu (UUID và Unix Timestamp)
     const employee_id = uuidv4();
     const created_at = Date.now();
 
-    // 4. Lưu vào Database (Quy tắc: Không dùng khóa ngoại ở DB, ID là string/UUID)
-    // Lưu ý: Nếu bảng có cột created_by, có thể lưu ID của admin tạo
+    // 5. Lưu vào Database (gán tenant_id để Data Isolation)
     const query = `
-      INSERT INTO employees (employee_id, username, password_hash, full_name, email, role, is_active, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      RETURNING employee_id, username, full_name, email, role;
+      INSERT INTO employees (employee_id, username, password_hash, full_name, email, role, department_id, title, rank, tenant_id, is_active, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+      RETURNING employee_id, username, full_name, email, role, department_id, title, rank;
     `;
-    const values = [employee_id, username, password_hash, full_name, email, role || 'sales', true, created_at];
+    const values = [
+      employee_id, username, password_hash, full_name, email, finalRole,
+      department_id || null, title || null, rank || null, tenantId, true, created_at
+    ];
 
     const result = await pool.query(query, values);
 
@@ -46,20 +86,66 @@ export const register = async (req, res) => {
     });
   } catch (error) {
     console.error('Lỗi Register:', error);
+    if (error.code === '23505') {
+      const detail = (error.detail || '').toLowerCase();
+      if (detail.includes('username')) {
+        return res.status(400).json({ success: false, message: 'Tên đăng nhập đã tồn tại trong tenant này.' });
+      }
+      if (detail.includes('email')) {
+        return res.status(400).json({ success: false, message: 'Email đã được sử dụng trong tenant này.' });
+      }
+      return res.status(400).json({ success: false, message: 'Tên đăng nhập hoặc email đã tồn tại.' });
+    }
     res.status(500).json({ success: false, message: 'Lỗi hệ thống khi tạo tài khoản.' });
   }
 };
 
 /**
- * Đăng nhập nhân viên
+ * Đăng nhập nhân viên (SaaS multi-tenant).
+ * - Có domain (body hoặc subdomain): truy vấn theo username + tenant_id.
+ * - Không domain: truy vấn theo username (cho Super Admin hoặc khi chỉ có 1 tài khoản trùng tên). Nếu nhiều tenant cùng username → bắt buộc gửi domain.
  */
 export const login = async (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, domain: bodyDomain } = req.body;
 
   try {
-    // 1. Tìm nhân viên theo username
-    const query = 'SELECT * FROM employees WHERE username = $1 AND is_active = TRUE';
-    const result = await pool.query(query, [username]);
+    let domainRaw = (bodyDomain && String(bodyDomain).trim()) || '';
+    if (!domainRaw && req.headers.host) {
+      const host = String(req.headers.host).split(':')[0];
+      const parts = host.split('.');
+      if (parts.length >= 2) {
+        domainRaw = parts[0];
+      }
+    }
+    const domainNorm = domainRaw ? domainRaw.toLowerCase().replace(/\s+/g, '-') : '';
+
+    let result;
+
+    if (domainNorm) {
+      const tenantRow = await pool.query(
+        'SELECT id FROM tenants WHERE LOWER(TRIM(domain)) = $1 AND is_active = TRUE',
+        [domainNorm]
+      );
+      if (tenantRow.rows.length === 0) {
+        return res.status(400).json({ success: false, message: 'Domain công ty không tồn tại hoặc đã bị khóa.' });
+      }
+      const tenantId = tenantRow.rows[0].id;
+      result = await pool.query(
+        'SELECT * FROM employees WHERE username = $1 AND tenant_id = $2 AND is_active = TRUE',
+        [username, tenantId]
+      );
+    } else {
+      result = await pool.query(
+        'SELECT * FROM employees WHERE username = $1 AND is_active = TRUE',
+        [username]
+      );
+      if (result.rows.length > 1) {
+        return res.status(400).json({
+          success: false,
+          message: 'Có nhiều tài khoản trùng tên đăng nhập. Vui lòng nhập Domain công ty (trường domain) hoặc đăng nhập qua URL đơn vị (ví dụ: tenant1.yourcrm.com).'
+        });
+      }
+    }
 
     if (result.rows.length === 0) {
       return res.status(401).json({ success: false, message: 'Tài khoản không tồn tại hoặc bị khóa.' });
@@ -73,11 +159,12 @@ export const login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Mật khẩu không chính xác.' });
     }
 
-    // 3. Tạo JWT Token
+    // 3. Tạo JWT Token (kèm tenant_id cho Data Isolation)
     const payload = {
       id: employee.employee_id,
       username: employee.username,
-      role: employee.role
+      role: employee.role,
+      tenant_id: employee.tenant_id || null
     };
 
     const token = jwt.sign(payload, process.env.JWT_SECRET || 'crm_secret_key_2025', {
@@ -93,7 +180,8 @@ export const login = async (req, res) => {
         username: employee.username,
         full_name: employee.full_name,
         email: employee.email,
-        role: employee.role
+        role: employee.role,
+        tenant_id: employee.tenant_id || null
       }
     });
   } catch (error) {
@@ -103,25 +191,31 @@ export const login = async (req, res) => {
 };
 
 /**
- * Lấy danh sách nhân viên (Chỉ Admin mới có quyền)
+ * Lấy danh sách nhân viên (Chỉ Admin; chỉ nhân viên cùng tenant)
  */
 export const getEmployees = async (req, res) => {
+  const tenantId = getTenantId(req);
   try {
-    // Lấy danh sách tất cả nhân viên (không bao gồm password_hash)
     const query = `
       SELECT 
-        employee_id,
-        username,
-        full_name,
-        email,
-        role,
-        is_active,
-        created_at
-      FROM employees
-      ORDER BY created_at DESC
+        e.employee_id,
+        e.username,
+        e.full_name,
+        e.email,
+        e.role,
+        e.department_id,
+        e.title,
+        e.rank,
+        e.is_active,
+        e.created_at,
+        d.name as department_name,
+        d.type as department_type
+      FROM employees e
+      LEFT JOIN departments d ON e.department_id = d.id AND d.tenant_id = e.tenant_id
+      WHERE e.tenant_id = $1
+      ORDER BY e.created_at DESC
     `;
-
-    const result = await pool.query(query);
+    const result = await pool.query(query, [tenantId]);
 
     res.json({
       success: true,
@@ -130,9 +224,9 @@ export const getEmployees = async (req, res) => {
     });
   } catch (error) {
     console.error('Lỗi getEmployees:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Không thể lấy danh sách nhân viên từ cơ sở dữ liệu.' 
+    res.status(500).json({
+      success: false,
+      message: 'Không thể lấy danh sách nhân viên từ cơ sở dữ liệu.'
     });
   }
 };
@@ -146,8 +240,7 @@ export const getSalesEmployees = async (req, res) => {
   try {
     console.log('getSalesEmployees - userId:', userId);
     
-    // Lấy danh sách Sales đang hoạt động (trừ chính mình)
-    // Sử dụng employees thay vì public.employees để tương thích với schema hiện tại
+    const tenantId = getTenantId(req);
     const query = `
       SELECT 
         employee_id,
@@ -157,13 +250,13 @@ export const getSalesEmployees = async (req, res) => {
         role,
         is_active
       FROM employees
-      WHERE role = 'sales' 
+      WHERE tenant_id = $1
+        AND role = 'sales'
         AND is_active = true
-        AND employee_id != $1
+        AND employee_id != $2
       ORDER BY full_name ASC
     `;
-
-    const result = await pool.query(query, [userId]);
+    const result = await pool.query(query, [tenantId, userId]);
     console.log('getSalesEmployees - result:', result.rows.length, 'employees found');
 
     res.json({
@@ -187,26 +280,32 @@ export const getSalesEmployees = async (req, res) => {
 };
 
 /**
- * Lấy thông tin chi tiết một nhân viên theo ID
+ * Lấy thông tin chi tiết một nhân viên theo ID (cùng tenant)
  */
 export const getEmployeeById = async (req, res) => {
-  const { id } = req.params; // employee_id
+  const { id } = req.params;
+  const tenantId = getTenantId(req);
 
   try {
     const query = `
       SELECT 
-        employee_id,
-        username,
-        full_name,
-        email,
-        role,
-        is_active,
-        created_at
-      FROM employees
-      WHERE employee_id = $1
+        e.employee_id,
+        e.username,
+        e.full_name,
+        e.email,
+        e.role,
+        e.department_id,
+        e.title,
+        e.rank,
+        e.is_active,
+        e.created_at,
+        d.name as department_name,
+        d.type as department_type
+      FROM employees e
+      LEFT JOIN departments d ON e.department_id = d.id AND d.tenant_id = e.tenant_id
+      WHERE e.employee_id = $1 AND e.tenant_id = $2
     `;
-
-    const result = await pool.query(query, [id]);
+    const result = await pool.query(query, [id, tenantId]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ 
@@ -236,10 +335,10 @@ export const resetPassword = async (req, res) => {
   const { id } = req.params; // employee_id
 
   try {
-    // 1. Kiểm tra nhân viên có tồn tại không
+    const tenantId = getTenantId(req);
     const checkEmployee = await pool.query(
-      'SELECT employee_id, username, full_name, email FROM employees WHERE employee_id = $1',
-      [id]
+      'SELECT employee_id, username, full_name, email FROM employees WHERE employee_id = $1 AND tenant_id = $2',
+      [id, tenantId]
     );
 
     if (checkEmployee.rows.length === 0) {
@@ -282,15 +381,13 @@ export const resetPassword = async (req, res) => {
     const saltRounds = 10;
     const password_hash = await bcrypt.hash(newPassword, saltRounds);
 
-    // 4. Cập nhật password trong database
     const updateQuery = `
       UPDATE employees 
       SET password_hash = $1 
-      WHERE employee_id = $2
+      WHERE employee_id = $2 AND tenant_id = $3
       RETURNING employee_id, username, full_name, email;
     `;
-
-    await pool.query(updateQuery, [password_hash, id]);
+    await pool.query(updateQuery, [password_hash, id, tenantId]);
 
     // 5. Trả về password mới (chỉ lần này, không lưu trong log)
     res.json({
@@ -345,10 +442,10 @@ export const changePassword = async (req, res) => {
       });
     }
 
-    // 4. Lấy thông tin user từ database
+    const tenantId = getTenantId(req);
     const userResult = await pool.query(
-      'SELECT employee_id, password_hash FROM employees WHERE employee_id = $1',
-      [id]
+      'SELECT employee_id, password_hash FROM employees WHERE employee_id = $1 AND tenant_id = $2',
+      [id, tenantId]
     );
 
     if (userResult.rows.length === 0) {
@@ -373,10 +470,9 @@ export const changePassword = async (req, res) => {
     const saltRounds = 10;
     const newPasswordHash = await bcrypt.hash(newPassword, saltRounds);
 
-    // 7. Cập nhật mật khẩu mới
     await pool.query(
-      'UPDATE employees SET password_hash = $1 WHERE employee_id = $2',
-      [newPasswordHash, id]
+      'UPDATE employees SET password_hash = $1 WHERE employee_id = $2 AND tenant_id = $3',
+      [newPasswordHash, id, tenantId]
     );
 
     res.json({
@@ -396,58 +492,80 @@ export const changePassword = async (req, res) => {
  * Cập nhật thông tin nhân viên (Chỉ Admin mới có quyền)
  */
 export const updateEmployee = async (req, res) => {
-  const { id } = req.params; // employee_id
-  const { full_name, email, role, is_active } = req.body;
+  const { id } = req.params;
+  const { full_name, email, role, is_active, department_id, title, rank } = req.body;
+  const tenantId = getTenantId(req);
 
   try {
-    // 1. Kiểm tra nhân viên có tồn tại không
     const checkEmployee = await pool.query(
-      'SELECT employee_id FROM employees WHERE employee_id = $1',
-      [id]
+      'SELECT employee_id FROM employees WHERE employee_id = $1 AND tenant_id = $2',
+      [id, tenantId]
     );
-
     if (checkEmployee.rows.length === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Không tìm thấy nhân viên.' 
+      return res.status(404).json({
+        success: false,
+        message: 'Không tìm thấy nhân viên.'
       });
     }
 
-    // 2. Kiểm tra dữ liệu đầu vào
     if (!full_name || !email) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Họ tên và email là bắt buộc.' 
+      return res.status(400).json({
+        success: false,
+        message: 'Họ tên và email là bắt buộc.'
       });
     }
 
-    // 3. Kiểm tra role hợp lệ
-    if (role && !['admin', 'sales', 'manager'].includes(role)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Vai trò không hợp lệ.' 
+    if (role && !VALID_ROLES.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Vai trò không hợp lệ. (super_admin, admin, director, manager, leader, sales)'
       });
     }
 
-    // 4. Cập nhật thông tin nhân viên
+    if (department_id !== undefined && department_id !== null && department_id !== '') {
+      const deptCheck = await pool.query(
+        'SELECT id FROM departments WHERE id = $1 AND tenant_id = $2',
+        [department_id, tenantId]
+      );
+      if (deptCheck.rows.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Phòng/Tổ không tồn tại hoặc không thuộc tenant của bạn.'
+        });
+      }
+    }
+
+    const updates = ['full_name = $1', 'email = $2'];
+    const values = [full_name, email];
+    let idx = 3;
+    if (role !== undefined) {
+      updates.push(`role = $${idx++}`);
+      values.push(role);
+    }
+    if (is_active !== undefined) {
+      updates.push(`is_active = $${idx++}`);
+      values.push(is_active);
+    }
+    if (department_id !== undefined) {
+      updates.push(`department_id = $${idx++}`);
+      values.push(department_id || null);
+    }
+    if (title !== undefined) {
+      updates.push(`title = $${idx++}`);
+      values.push(title || null);
+    }
+    if (rank !== undefined) {
+      updates.push(`rank = $${idx++}`);
+      values.push(rank || null);
+    }
+    values.push(id, tenantId);
     const updateQuery = `
       UPDATE employees 
-      SET 
-        full_name = $1,
-        email = $2,
-        role = COALESCE($3, role),
-        is_active = COALESCE($4, is_active)
-      WHERE employee_id = $5
-      RETURNING employee_id, username, full_name, email, role, is_active, created_at;
+      SET ${updates.join(', ')}
+      WHERE employee_id = $${idx++} AND tenant_id = $${idx}
+      RETURNING employee_id, username, full_name, email, role, department_id, title, rank, is_active, created_at;
     `;
-
-    const result = await pool.query(updateQuery, [
-      full_name,
-      email,
-      role || null,
-      is_active !== undefined ? is_active : null,
-      id
-    ]);
+    const result = await pool.query(updateQuery, values);
 
     res.json({
       success: true,
@@ -464,22 +582,20 @@ export const updateEmployee = async (req, res) => {
 };
 
 /**
- * Lấy thống kê trước khi chuyển giao khách hàng (Chỉ Admin)
+ * Lấy thống kê trước khi chuyển giao khách hàng (Chỉ Admin) — theo tenant
  */
 export const getTransferStats = async (req, res) => {
   const { from_employee_id } = req.query;
   const { role } = req.user;
+  const tenantId = getTenantId(req);
 
   try {
-    // 1. Kiểm tra quyền (chỉ Admin)
     if (role !== 'admin') {
       return res.status(403).json({
         success: false,
         message: 'Chỉ Admin mới có quyền xem thống kê chuyển giao.'
       });
     }
-
-    // 2. Kiểm tra dữ liệu đầu vào
     if (!from_employee_id) {
       return res.status(400).json({
         success: false,
@@ -487,12 +603,10 @@ export const getTransferStats = async (req, res) => {
       });
     }
 
-    // 3. Kiểm tra nhân viên có tồn tại không
     const employeeCheck = await pool.query(
-      'SELECT employee_id, full_name FROM employees WHERE employee_id = $1',
-      [from_employee_id]
+      'SELECT employee_id, full_name FROM employees WHERE employee_id = $1 AND tenant_id = $2',
+      [from_employee_id, tenantId]
     );
-
     if (employeeCheck.rows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -500,33 +614,29 @@ export const getTransferStats = async (req, res) => {
       });
     }
 
-    // 4. Đếm số lượng khách hàng
     const customerCountResult = await pool.query(
       `SELECT COUNT(*) as count 
        FROM customers 
-       WHERE assigned_to = $1 AND deleted_at IS NULL`,
-      [from_employee_id]
+       WHERE assigned_to = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+      [from_employee_id, tenantId]
     );
     const customerCount = parseInt(customerCountResult.rows[0].count);
 
-    // 5. Đếm số lượng deals đang mở
     const dealsCountResult = await pool.query(
       `SELECT COUNT(DISTINCT d.deal_id) as count
        FROM deals d
-       INNER JOIN customers c ON d.customer_id = c.customer_id
-       WHERE c.assigned_to = $1 
-       AND c.deleted_at IS NULL
+       INNER JOIN customers c ON d.customer_id = c.customer_id AND c.tenant_id = d.tenant_id
+       WHERE c.assigned_to = $1 AND c.tenant_id = $2 AND c.deleted_at IS NULL
        AND d.stage NOT IN ('closed_won', 'closed_lost', 'Thành công', 'Thất bại')`,
-      [from_employee_id]
+      [from_employee_id, tenantId]
     );
     const dealsCount = parseInt(dealsCountResult.rows[0].count);
 
-    // 6. Đếm số lượng tasks chưa hoàn thành
     const tasksCountResult = await pool.query(
       `SELECT COUNT(*) as count 
        FROM tasks 
-       WHERE assigned_to = $1 AND is_completed = false`,
-      [from_employee_id]
+       WHERE assigned_to = $1 AND tenant_id = $2 AND is_completed = false`,
+      [from_employee_id, tenantId]
     );
     const tasksCount = parseInt(tasksCountResult.rows[0].count);
 
@@ -564,24 +674,21 @@ export const getTransferStats = async (req, res) => {
 export const transferCustomers = async (req, res) => {
   const { from_employee_id, to_employee_id } = req.body;
   const { id: adminId, role } = req.user;
+  const tenantId = getTenantId(req);
 
   try {
-    // 1. Kiểm tra quyền (chỉ Admin)
     if (role !== 'admin') {
       return res.status(403).json({
         success: false,
         message: 'Chỉ Admin mới có quyền chuyển giao khách hàng.'
       });
     }
-
-    // 2. Kiểm tra dữ liệu đầu vào
     if (!from_employee_id || !to_employee_id) {
       return res.status(400).json({
         success: false,
         message: 'from_employee_id và to_employee_id là bắt buộc.'
       });
     }
-
     if (from_employee_id === to_employee_id) {
       return res.status(400).json({
         success: false,
@@ -589,12 +696,10 @@ export const transferCustomers = async (req, res) => {
       });
     }
 
-    // 3. Kiểm tra nhân viên có tồn tại không
     const fromEmployeeCheck = await pool.query(
-      'SELECT employee_id, full_name FROM employees WHERE employee_id = $1',
-      [from_employee_id]
+      'SELECT employee_id, full_name FROM employees WHERE employee_id = $1 AND tenant_id = $2',
+      [from_employee_id, tenantId]
     );
-
     if (fromEmployeeCheck.rows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -603,10 +708,9 @@ export const transferCustomers = async (req, res) => {
     }
 
     const toEmployeeCheck = await pool.query(
-      'SELECT employee_id, full_name FROM employees WHERE employee_id = $1 AND is_active = TRUE',
-      [to_employee_id]
+      'SELECT employee_id, full_name FROM employees WHERE employee_id = $1 AND tenant_id = $2 AND is_active = TRUE',
+      [to_employee_id, tenantId]
     );
-
     if (toEmployeeCheck.rows.length === 0) {
       return res.status(404).json({
         success: false,
@@ -617,18 +721,15 @@ export const transferCustomers = async (req, res) => {
     const fromEmployee = fromEmployeeCheck.rows[0];
     const toEmployee = toEmployeeCheck.rows[0];
 
-    // 4. Bắt đầu transaction
     const client = await pool.connect();
-
     try {
       await client.query('BEGIN');
 
-      // 5. Đếm số lượng khách hàng sẽ được chuyển
       const customerCountResult = await client.query(
         `SELECT COUNT(*) as count 
          FROM customers 
-         WHERE assigned_to = $1 AND deleted_at IS NULL`,
-        [from_employee_id]
+         WHERE assigned_to = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+        [from_employee_id, tenantId]
       );
       const customerCount = parseInt(customerCountResult.rows[0].count);
 
@@ -640,47 +741,39 @@ export const transferCustomers = async (req, res) => {
         });
       }
 
-      // 6. Đếm deals đang mở sẽ được chuyển (deals được liên kết với customers qua customer_id)
-      // Phải đếm TRƯỚC khi cập nhật customers
       const dealsCountResult = await client.query(
         `SELECT COUNT(DISTINCT d.deal_id) as count
          FROM deals d
-         INNER JOIN customers c ON d.customer_id = c.customer_id
-         WHERE c.assigned_to = $1 
-         AND c.deleted_at IS NULL
+         INNER JOIN customers c ON d.customer_id = c.customer_id AND c.tenant_id = d.tenant_id
+         WHERE c.assigned_to = $1 AND c.tenant_id = $2 AND c.deleted_at IS NULL
          AND d.stage NOT IN ('closed_won', 'closed_lost', 'Thành công', 'Thất bại')`,
-        [from_employee_id]
+        [from_employee_id, tenantId]
       );
       const dealsCount = parseInt(dealsCountResult.rows[0].count);
 
-      // 7. Lấy danh sách customer_id để tạo audit log
       const customersResult = await client.query(
         `SELECT customer_id, full_name 
          FROM customers 
-         WHERE assigned_to = $1 AND deleted_at IS NULL`,
-        [from_employee_id]
+         WHERE assigned_to = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+        [from_employee_id, tenantId]
       );
       const customers = customersResult.rows;
 
-      // 8. Cập nhật assigned_to trong customers
       await client.query(
         `UPDATE customers 
          SET assigned_to = $1, updated_at = $2
-         WHERE assigned_to = $3 AND deleted_at IS NULL`,
-        [to_employee_id, Date.now(), from_employee_id]
+         WHERE assigned_to = $3 AND tenant_id = $4 AND deleted_at IS NULL`,
+        [to_employee_id, Date.now(), from_employee_id, tenantId]
       );
 
-      // 9. Cập nhật tasks chưa hoàn thành
       const tasksUpdateResult = await client.query(
         `UPDATE tasks 
          SET assigned_to = $1
-         WHERE assigned_to = $2 
-         AND is_completed = false`,
-        [to_employee_id, from_employee_id]
+         WHERE assigned_to = $2 AND tenant_id = $3 AND is_completed = false`,
+        [to_employee_id, from_employee_id, tenantId]
       );
       const tasksCount = tasksUpdateResult.rowCount;
 
-      // 10. Tạo audit log interactions cho mỗi khách hàng
       const now = Date.now();
       const auditContent = `Hệ thống: Chuyển giao người phụ trách từ ${fromEmployee.full_name} sang ${toEmployee.full_name} do thay đổi nhân sự.`;
 
@@ -689,27 +782,27 @@ export const transferCustomers = async (req, res) => {
         await client.query(
           `INSERT INTO interactions (
             interaction_id, customer_id, interaction_type, content,
-            interaction_date, employee_id, status, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            interaction_date, employee_id, status, tenant_id, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
             interactionId,
             customer.customer_id,
             'system',
             auditContent,
             now,
-            adminId, // Admin thực hiện chuyển giao
+            adminId,
             'system',
+            tenantId,
             now
           ]
         );
       }
 
-      // 11. Tạo notification cho nhân viên tiếp nhận
       const notificationId = uuidv4();
       await client.query(
         `INSERT INTO public.notifications (
-          notification_id, employee_id, type, title, message, is_read, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          notification_id, employee_id, type, title, message, is_read, tenant_id, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           notificationId,
           to_employee_id,
@@ -717,6 +810,7 @@ export const transferCustomers = async (req, res) => {
           'Nhận bàn giao khách hàng',
           `Bạn vừa nhận bàn giao ${customerCount} khách hàng từ nhân viên ${fromEmployee.full_name}. Vui lòng kiểm tra danh sách.`,
           false,
+          tenantId,
           now
         ]
       );

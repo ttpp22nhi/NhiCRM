@@ -3,7 +3,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import { register, login, changePassword, getEmployees, getSalesEmployees, getEmployeeById, resetPassword, updateEmployee, transferCustomers, getTransferStats } from './controllers/authController.js';
-import { verifyToken, verifyAdmin } from './middleware/auth.js';
+import { verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, verifySuperAdmin } from './middleware/auth.js';
 import { createCustomer, getCustomers, updateCustomer, deleteCustomer, checkDuplicateCustomer, bulkTransferCustomers, getCustomerOwnershipHistory } from './controllers/customerController.js';
 import { createInteraction, getInteractionsByCustomer } from './controllers/interactionController.js';
 import { getDashboardStats } from './controllers/dashboardController.js';
@@ -11,6 +11,10 @@ import { getTasks, createTask, updateTask, deleteTask } from './controllers/task
 import { getNotifications, markAsRead, markAllAsRead } from './controllers/notificationController.js';
 import { createTransferRequest, getPendingTransferRequests, approveTransferRequest, getMyTransferRequests, checkCustomerPendingTransfer, getApprovalLogs } from './controllers/transferController.js';
 import { getDeals, createDeal, updateDeal } from './controllers/dealsController.js';
+import { getDepartments, getDepartmentsFlat, getDepartmentById, createDepartment, updateDepartment, deleteDepartment } from './controllers/departmentController.js';
+import { getRolePermissions, getPermissionMatrix, upsertRolePermission } from './controllers/permissionController.js';
+import { getOrganizationLevels, updateOrganizationLevel, createOrganizationLevel, deleteOrganizationLevel, moveOrganizationLevel } from './controllers/organizationLevelController.js';
+import { getTenants, getTenantById, createTenant, updateTenant, getMySubscription } from './controllers/tenantController.js';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger.js';
 
 // Tải biến môi trường
@@ -23,7 +27,7 @@ app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3001',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-Id'],
 }));
 
 // Middleware xử lý JSON
@@ -100,7 +104,7 @@ app.post('/api/auth/login', login);
  *       403:
  *         description: Không có quyền (chỉ Admin)
  */
-app.post('/api/auth/register', verifyToken, verifyAdmin, register);
+app.post('/api/auth/register', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, register);
 
 /**
  * @swagger
@@ -134,7 +138,7 @@ app.post('/api/auth/register', verifyToken, verifyAdmin, register);
  *       401:
  *         description: Chưa đăng nhập
  */
-app.post('/api/auth/change-password', verifyToken, changePassword);
+app.post('/api/auth/change-password', verifyToken, extractTenant, requireTenant, checkTenantSubscription, changePassword);
 
 /**
  * @swagger
@@ -165,7 +169,85 @@ app.post('/api/auth/change-password', verifyToken, changePassword);
  *       403:
  *         description: Không có quyền (chỉ Admin)
  */
-app.get('/api/employees', verifyToken, verifyAdmin, getEmployees);
+app.get('/api/employees', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getEmployees);
+
+/**
+ * @swagger
+ * /api/departments:
+ *   get:
+ *     summary: Lấy danh sách phòng ban/tổ (cây cha-con)
+ *     tags: [Departments]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Danh sách departments
+ *       401:
+ *         description: Chưa đăng nhập
+ *       403:
+ *         description: Chỉ Admin
+ */
+app.get('/api/departments', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getDepartments);
+
+/**
+ * @swagger
+ * /api/departments/flat:
+ *   get:
+ *     summary: Lấy danh sách phòng ban phẳng (cho dropdown)
+ *     tags: [Departments]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Danh sách departments
+ */
+app.get('/api/departments/flat', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getDepartmentsFlat);
+
+/**
+ * @swagger
+ * /api/departments/{id}:
+ *   get:
+ *     summary: Lấy chi tiết phòng ban
+ *     tags: [Departments]
+ */
+app.get('/api/departments/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getDepartmentById);
+
+/**
+ * @swagger
+ * /api/departments:
+ *   post:
+ *     summary: Tạo phòng/tổ mới
+ *     tags: [Departments]
+ */
+app.post('/api/departments', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, createDepartment);
+
+/**
+ * @swagger
+ * /api/departments/{id}:
+ *   put:
+ *     summary: Cập nhật phòng/tổ
+ *     tags: [Departments]
+ */
+app.put('/api/departments/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, updateDepartment);
+
+/**
+ * @swagger
+ * /api/departments/{id}:
+ *   delete:
+ *     summary: Xóa phòng/tổ (kiểm tra còn nhân viên không)
+ *     tags: [Departments]
+ */
+app.delete('/api/departments/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, deleteDepartment);
+
+app.get('/api/organization-levels', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getOrganizationLevels);
+app.post('/api/organization-levels', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, createOrganizationLevel);
+app.put('/api/organization-levels/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, updateOrganizationLevel);
+app.delete('/api/organization-levels/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, deleteOrganizationLevel);
+app.post('/api/organization-levels/:id/move', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, moveOrganizationLevel);
+
+app.get('/api/permissions', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getRolePermissions);
+app.get('/api/permissions/matrix', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getPermissionMatrix);
+app.post('/api/permissions', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, upsertRolePermission);
 
 /**
  * @swagger
@@ -181,7 +263,7 @@ app.get('/api/employees', verifyToken, verifyAdmin, getEmployees);
  *       401:
  *         description: Chưa đăng nhập
  */
-app.get('/api/employees/sales', verifyToken, getSalesEmployees);
+app.get('/api/employees/sales', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getSalesEmployees);
 
 /**
  * @swagger
@@ -215,7 +297,7 @@ app.get('/api/employees/sales', verifyToken, getSalesEmployees);
  *       404:
  *         description: Không tìm thấy nhân viên
  */
-app.get('/api/employees/:id', verifyToken, getEmployeeById);
+app.get('/api/employees/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getEmployeeById);
 
 /**
  * @swagger
@@ -260,7 +342,7 @@ app.get('/api/employees/:id', verifyToken, getEmployeeById);
  *       404:
  *         description: Không tìm thấy nhân viên
  */
-app.put('/api/employees/:id', verifyToken, verifyAdmin, updateEmployee);
+app.put('/api/employees/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, updateEmployee);
 
 /**
  * @swagger
@@ -310,7 +392,7 @@ app.put('/api/employees/:id', verifyToken, verifyAdmin, updateEmployee);
  *       404:
  *         description: Không tìm thấy nhân viên
  */
-app.post('/api/employees/:id/reset-password', verifyToken, verifyAdmin, resetPassword);
+app.post('/api/employees/:id/reset-password', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, resetPassword);
 
 /**
  * @swagger
@@ -348,7 +430,7 @@ app.post('/api/employees/:id/reset-password', verifyToken, verifyAdmin, resetPas
  *       404:
  *         description: Không tìm thấy nhân viên
  */
-app.post('/api/employees/transfer-customers', verifyToken, verifyAdmin, transferCustomers);
+app.post('/api/employees/transfer-customers', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, transferCustomers);
 
 /**
  * @swagger
@@ -377,7 +459,7 @@ app.post('/api/employees/transfer-customers', verifyToken, verifyAdmin, transfer
  *       404:
  *         description: Không tìm thấy nhân viên
  */
-app.get('/api/employees/transfer-stats', verifyToken, verifyAdmin, getTransferStats);
+app.get('/api/employees/transfer-stats', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getTransferStats);
 
 /**
  * @swagger
@@ -521,12 +603,12 @@ app.get('/api/employees/transfer-stats', verifyToken, verifyAdmin, getTransferSt
  *       401:
  *         description: Chưa đăng nhập
  */
-app.post('/api/customers', verifyToken, createCustomer);
-app.get('/api/customers', verifyToken, getCustomers);
-app.post('/api/customers/check-duplicate', verifyToken, checkDuplicateCustomer);
-app.put('/api/customers/:id', verifyToken, updateCustomer);
-app.delete('/api/customers/:id', verifyToken, deleteCustomer);
-app.get('/api/customers/:customerId/ownership-history', verifyToken, getCustomerOwnershipHistory);
+app.post('/api/customers', verifyToken, extractTenant, requireTenant, checkTenantSubscription, createCustomer);
+app.get('/api/customers', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getCustomers);
+app.post('/api/customers/check-duplicate', verifyToken, extractTenant, requireTenant, checkTenantSubscription, checkDuplicateCustomer);
+app.put('/api/customers/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, updateCustomer);
+app.delete('/api/customers/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, deleteCustomer);
+app.get('/api/customers/:customerId/ownership-history', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getCustomerOwnershipHistory);
 
 /**
  * @swagger
@@ -569,7 +651,7 @@ app.get('/api/customers/:customerId/ownership-history', verifyToken, getCustomer
  *       404:
  *         description: Không tìm thấy nhân viên
  */
-app.patch('/api/customers/bulk-transfer', verifyToken, bulkTransferCustomers);
+app.patch('/api/customers/bulk-transfer', verifyToken, extractTenant, requireTenant, checkTenantSubscription, bulkTransferCustomers);
 
 /**
  * @swagger
@@ -580,7 +662,7 @@ app.patch('/api/customers/bulk-transfer', verifyToken, bulkTransferCustomers);
  *     security:
  *       - bearerAuth: []
  */
-app.post('/api/interactions', verifyToken, createInteraction);
+app.post('/api/interactions', verifyToken, extractTenant, requireTenant, checkTenantSubscription, createInteraction);
 
 /**
  * @swagger
@@ -591,7 +673,7 @@ app.post('/api/interactions', verifyToken, createInteraction);
  *     security:
  *       - bearerAuth: []
  */
-app.get('/api/interactions/customer/:customerId', verifyToken, getInteractionsByCustomer);
+app.get('/api/interactions/customer/:customerId', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getInteractionsByCustomer);
 
 /**
  * @swagger
@@ -602,7 +684,10 @@ app.get('/api/interactions/customer/:customerId', verifyToken, getInteractionsBy
  *     security:
  *       - bearerAuth: []
  */
-app.get('/api/dashboard/stats', verifyToken, getDashboardStats);
+app.get('/api/dashboard/stats', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDashboardStats);
+
+/** Thông tin gói dịch vụ tenant (end_date, expired, days_remaining) cho UI banner/disable nút */
+app.get('/api/tenant/subscription', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getMySubscription);
 
 /**
  * @swagger
@@ -613,7 +698,7 @@ app.get('/api/dashboard/stats', verifyToken, getDashboardStats);
  *     security:
  *       - bearerAuth: []
  */
-app.get('/api/tasks', verifyToken, getTasks);
+app.get('/api/tasks', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getTasks);
 
 /**
  * @swagger
@@ -624,7 +709,7 @@ app.get('/api/tasks', verifyToken, getTasks);
  *     security:
  *       - bearerAuth: []
  */
-app.post('/api/tasks', verifyToken, createTask);
+app.post('/api/tasks', verifyToken, extractTenant, requireTenant, checkTenantSubscription, createTask);
 
 /**
  * @swagger
@@ -635,7 +720,7 @@ app.post('/api/tasks', verifyToken, createTask);
  *     security:
  *       - bearerAuth: []
  */
-app.patch('/api/tasks/:id', verifyToken, updateTask);
+app.patch('/api/tasks/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, updateTask);
 
 /**
  * @swagger
@@ -646,7 +731,7 @@ app.patch('/api/tasks/:id', verifyToken, updateTask);
  *     security:
  *       - bearerAuth: []
  */
-app.delete('/api/tasks/:id', verifyToken, deleteTask);
+app.delete('/api/tasks/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, deleteTask);
 
 /**
  * @swagger
@@ -657,7 +742,7 @@ app.delete('/api/tasks/:id', verifyToken, deleteTask);
  *     security:
  *       - bearerAuth: []
  */
-app.get('/api/deals', verifyToken, getDeals);
+app.get('/api/deals', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDeals);
 
 /**
  * @swagger
@@ -668,7 +753,7 @@ app.get('/api/deals', verifyToken, getDeals);
  *     security:
  *       - bearerAuth: []
  */
-app.post('/api/deals', verifyToken, createDeal);
+app.post('/api/deals', verifyToken, extractTenant, requireTenant, checkTenantSubscription, createDeal);
 
 /**
  * @swagger
@@ -679,7 +764,7 @@ app.post('/api/deals', verifyToken, createDeal);
  *     security:
  *       - bearerAuth: []
  */
-app.patch('/api/deals/:id', verifyToken, updateDeal);
+app.patch('/api/deals/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, updateDeal);
 
 /**
  * @swagger
@@ -690,7 +775,7 @@ app.patch('/api/deals/:id', verifyToken, updateDeal);
  *     security:
  *       - bearerAuth: []
  */
-app.get('/api/notifications', verifyToken, getNotifications);
+app.get('/api/notifications', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getNotifications);
 
 /**
  * @swagger
@@ -701,7 +786,7 @@ app.get('/api/notifications', verifyToken, getNotifications);
  *     security:
  *       - bearerAuth: []
  */
-app.patch('/api/notifications/:id/read', verifyToken, markAsRead);
+app.patch('/api/notifications/:id/read', verifyToken, extractTenant, requireTenant, checkTenantSubscription, markAsRead);
 
 /**
  * @swagger
@@ -712,7 +797,7 @@ app.patch('/api/notifications/:id/read', verifyToken, markAsRead);
  *     security:
  *       - bearerAuth: []
  */
-app.patch('/api/notifications/read-all', verifyToken, markAllAsRead);
+app.patch('/api/notifications/read-all', verifyToken, extractTenant, requireTenant, checkTenantSubscription, markAllAsRead);
 
 /**
  * Transfer Request Routes
@@ -753,7 +838,7 @@ app.patch('/api/notifications/read-all', verifyToken, markAllAsRead);
  *       403:
  *         description: Không có quyền
  */
-app.post('/api/transfer/request', verifyToken, createTransferRequest);
+app.post('/api/transfer/request', verifyToken, extractTenant, requireTenant, checkTenantSubscription, createTransferRequest);
 
 /**
  * @swagger
@@ -771,7 +856,7 @@ app.post('/api/transfer/request', verifyToken, createTransferRequest);
  *       403:
  *         description: Không có quyền
  */
-app.get('/api/transfer/pending', verifyToken, getPendingTransferRequests);
+app.get('/api/transfer/pending', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getPendingTransferRequests);
 
 /**
  * @swagger
@@ -809,7 +894,7 @@ app.get('/api/transfer/pending', verifyToken, getPendingTransferRequests);
  *       403:
  *         description: Không có quyền
  */
-app.patch('/api/transfer/approve/:id', verifyToken, approveTransferRequest);
+app.patch('/api/transfer/approve/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, approveTransferRequest);
 
 /**
  * @swagger
@@ -825,7 +910,7 @@ app.patch('/api/transfer/approve/:id', verifyToken, approveTransferRequest);
  *       401:
  *         description: Chưa đăng nhập
  */
-app.get('/api/transfer/my-requests', verifyToken, getMyTransferRequests);
+app.get('/api/transfer/my-requests', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getMyTransferRequests);
 
 /**
  * @swagger
@@ -847,7 +932,7 @@ app.get('/api/transfer/my-requests', verifyToken, getMyTransferRequests);
  *       401:
  *         description: Chưa đăng nhập
  */
-app.get('/api/transfer/check-pending/:customerId', verifyToken, checkCustomerPendingTransfer);
+app.get('/api/transfer/check-pending/:customerId', verifyToken, extractTenant, requireTenant, checkTenantSubscription, checkCustomerPendingTransfer);
 
 /**
  * @swagger
@@ -884,7 +969,7 @@ app.get('/api/transfer/check-pending/:customerId', verifyToken, checkCustomerPen
  *       403:
  *         description: Không có quyền
  */
-app.get('/api/transfer/approval-logs', verifyToken, getApprovalLogs);
+app.get('/api/transfer/approval-logs', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getApprovalLogs);
 
 /**
  * @swagger
@@ -907,6 +992,13 @@ app.get('/api/transfer/approval-logs', verifyToken, getApprovalLogs);
  *                   type: integer
  *                   format: int64
  */
+
+// ---------- System APIs (chỉ Super Admin, không cần tenant_id) ----------
+app.get('/api/system/tenants', verifyToken, verifySuperAdmin, getTenants);
+app.get('/api/system/tenants/:id', verifyToken, verifySuperAdmin, getTenantById);
+app.post('/api/system/tenants', verifyToken, verifySuperAdmin, createTenant);
+app.put('/api/system/tenants/:id', verifyToken, verifySuperAdmin, updateTenant);
+
 app.get('/health', (req, res) => {
   res.json({ status: 'UP', timestamp: Date.now() });
 });

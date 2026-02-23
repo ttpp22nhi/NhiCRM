@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid'
 import pool from '../database.js'
+import { getTenantId } from '../utils/tenantHelper.js'
 
 /**
  * @swagger
@@ -48,93 +49,53 @@ import pool from '../database.js'
  *         description: Lỗi hệ thống
  */
 export const createInteraction = async (req, res) => {
-  const { id: employeeId } = req.user // Lấy employee_id từ token
+  const { id: employeeId } = req.user
   const { customer_id, deal_id, interaction_type, content, status, interaction_date } = req.body
+  const tenantId = getTenantId(req)
 
   try {
-    // Validation
     if (!customer_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'customer_id là bắt buộc.'
-      })
+      return res.status(400).json({ success: false, message: 'customer_id là bắt buộc.' })
     }
-
     if (!interaction_type) {
-      return res.status(400).json({
-        success: false,
-        message: 'interaction_type là bắt buộc.'
-      })
+      return res.status(400).json({ success: false, message: 'interaction_type là bắt buộc.' })
     }
-
     if (!content || content.trim() === '') {
-      return res.status(400).json({
-        success: false,
-        message: 'content là bắt buộc và không được để trống.'
-      })
+      return res.status(400).json({ success: false, message: 'content là bắt buộc và không được để trống.' })
     }
 
-    // Kiểm tra customer có tồn tại không
     const customerCheck = await pool.query(
-      'SELECT customer_id FROM customers WHERE customer_id = $1 AND deleted_at IS NULL',
-      [customer_id]
+      'SELECT customer_id FROM customers WHERE customer_id = $1 AND tenant_id = $2 AND deleted_at IS NULL',
+      [customer_id, tenantId]
     )
-
     if (customerCheck.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Khách hàng không tồn tại hoặc đã bị xóa.'
-      })
+      return res.status(404).json({ success: false, message: 'Khách hàng không tồn tại hoặc đã bị xóa.' })
     }
 
-    // Kiểm tra deal_id nếu có
     if (deal_id) {
       const dealCheck = await pool.query(
-        'SELECT deal_id FROM deals WHERE deal_id = $1',
-        [deal_id]
+        'SELECT deal_id FROM deals WHERE deal_id = $1 AND tenant_id = $2',
+        [deal_id, tenantId]
       )
-
       if (dealCheck.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Deal không tồn tại.'
-        })
+        return res.status(404).json({ success: false, message: 'Deal không tồn tại.' })
       }
     }
 
-    // Tạo interaction_id
     const interaction_id = uuidv4()
-
-    // Sử dụng interaction_date từ request hoặc thời gian hiện tại
     const finalInteractionDate = interaction_date || Date.now()
     const created_at = Date.now()
 
-    // Insert vào database
     const query = `
       INSERT INTO interactions (
-        interaction_id,
-        customer_id,
-        deal_id,
-        interaction_type,
-        content,
-        interaction_date,
-        employee_id,
-        status,
-        created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        interaction_id, customer_id, deal_id, interaction_type, content,
+        interaction_date, employee_id, status, tenant_id, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `
-
     const values = [
-      interaction_id,
-      customer_id,
-      deal_id || null,
-      interaction_type,
-      content.trim(),
-      finalInteractionDate,
-      employeeId,
-      status || null,
-      created_at
+      interaction_id, customer_id, deal_id || null, interaction_type, content.trim(),
+      finalInteractionDate, employeeId, status || null, tenantId, created_at
     ]
 
     const result = await pool.query(query, values)
@@ -191,31 +152,21 @@ export const createInteraction = async (req, res) => {
 export const getInteractionsByCustomer = async (req, res) => {
   const { customerId } = req.params
   const { role, id: userId } = req.user
+  const tenantId = getTenantId(req)
 
   try {
-    // Kiểm tra customer có tồn tại không
     const customerCheck = await pool.query(
-      'SELECT customer_id, assigned_to FROM customers WHERE customer_id = $1 AND deleted_at IS NULL',
-      [customerId]
+      'SELECT customer_id, assigned_to FROM customers WHERE customer_id = $1 AND tenant_id = $2 AND deleted_at IS NULL',
+      [customerId, tenantId]
     )
-
     if (customerCheck.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Khách hàng không tồn tại hoặc đã bị xóa.'
-      })
+      return res.status(404).json({ success: false, message: 'Khách hàng không tồn tại hoặc đã bị xóa.' })
     }
-
-    // Kiểm tra quyền: Sales chỉ xem được tương tác của khách hàng được gán cho mình
     const customer = customerCheck.rows[0]
     if (role !== 'admin' && role !== 'manager' && customer.assigned_to !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Bạn không có quyền xem tương tác của khách hàng này.'
-      })
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền xem tương tác của khách hàng này.' })
     }
 
-    // Lấy danh sách tương tác với JOIN employees để lấy full_name
     const query = `
       SELECT 
         i.*,
@@ -225,11 +176,10 @@ export const getInteractionsByCustomer = async (req, res) => {
         e.role as employee_role
       FROM interactions i
       LEFT JOIN employees e ON i.employee_id = e.employee_id
-      WHERE i.customer_id = $1
+      WHERE i.customer_id = $1 AND i.tenant_id = $2
       ORDER BY i.interaction_date DESC, i.created_at DESC
     `
-
-    const result = await pool.query(query, [customerId])
+    const result = await pool.query(query, [customerId, tenantId])
 
     res.json({
       success: true,

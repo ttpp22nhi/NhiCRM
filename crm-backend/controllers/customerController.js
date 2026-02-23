@@ -1,6 +1,8 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import pool from '../database.js';
+import { getTenantId } from '../utils/tenantHelper.js';
+import { getAccessScope, buildCustomerFilter } from '../services/permissionService.js';
 
 /**
  * Kiểm tra trùng lặp khách hàng dựa trên số điện thoại hoặc mã số thuế
@@ -8,6 +10,7 @@ import pool from '../database.js';
 export const checkDuplicateCustomer = async (req, res) => {
   const { phone, tax_code } = req.body;
   const { id: userId } = req.user;
+  const tenantId = getTenantId(req);
 
   try {
     // Kiểm tra ít nhất một trong hai trường phải có
@@ -29,10 +32,10 @@ export const checkDuplicateCustomer = async (req, res) => {
         e.username as assigned_employee_username
       FROM customers c
       LEFT JOIN employees e ON c.assigned_to = e.employee_id
-      WHERE c.deleted_at IS NULL
+      WHERE c.deleted_at IS NULL AND c.tenant_id = $1
     `;
-    const params = [];
-    let paramIndex = 1;
+    const params = [tenantId];
+    let paramIndex = 2;
     const conditions = [];
 
     // Tìm theo số điện thoại
@@ -107,6 +110,7 @@ export const createCustomer = async (req, res) => {
   } = req.body;
 
   const { role, id } = req.user;
+  const tenantId = getTenantId(req);
 
   try {
     // 1. Kiểm tra ràng buộc cơ bản
@@ -128,57 +132,31 @@ export const createCustomer = async (req, res) => {
       // Admin/manager có thể chọn nhân viên, nếu không chọn thì gán cho chính mình
       finalAssignedTo = assigned_to || id;
       
-      // Nếu admin/manager chọn nhân viên, kiểm tra nhân viên có tồn tại không
+      // Nếu admin/manager chọn nhân viên, kiểm tra nhân viên thuộc cùng tenant và còn active
       if (assigned_to && assigned_to !== id) {
         const checkEmployee = await pool.query(
-          'SELECT employee_id FROM employees WHERE employee_id = $1 AND is_active = TRUE',
-          [assigned_to]
+          'SELECT employee_id FROM employees WHERE employee_id = $1 AND tenant_id = $2 AND is_active = TRUE',
+          [assigned_to, tenantId]
         );
-        
         if (checkEmployee.rows.length === 0) {
-          return res.status(400).json({ 
-            success: false, 
-            message: 'Nhân viên được chọn không tồn tại hoặc đã bị khóa.' 
-          });
+          return res.status(400).json({ success: false, message: 'Nhân viên được chọn không tồn tại hoặc không thuộc đơn vị của bạn.' });
         }
       }
     }
 
     const customer_id = uuidv4();
-    const now = Date.now(); // Unix Timestamp (BIGINT)
+    const now = Date.now();
 
-    // 2. Thực thi truy vấn SQL - Đã thêm cột assigned_to
     const query = `
       INSERT INTO customers (
-        customer_id, 
-        full_name, 
-        email, 
-        phone, 
-        address, 
-        customer_type, 
-        company_name, 
-        tax_code, 
-        source, 
-        assigned_to, 
-        created_at, 
-        updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        customer_id, full_name, email, phone, address, customer_type, company_name, tax_code, source,
+        assigned_to, tenant_id, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *;
     `;
-
     const values = [
-      customer_id,
-      full_name,
-      email || '',
-      phone,
-      address || '',
-      customer_type || 'individual',
-      company_name || '',
-      tax_code || '',
-      source || 'Direct',
-      finalAssignedTo, // Lưu ID nhân viên chăm sóc
-      now,
-      now
+      customer_id, full_name, email || '', phone, address || '', customer_type || 'individual',
+      company_name || '', tax_code || '', source || 'Direct', finalAssignedTo, tenantId, now, now
     ];
 
     const result = await pool.query(query, values);
@@ -211,28 +189,27 @@ export const createCustomer = async (req, res) => {
  * - limit: Số lượng bản ghi mỗi trang (mặc định là 10)
  */
 export const getCustomers = async (req, res) => {
-  const { role, id } = req.user;
+  const { id } = req.user;
   const { search, type, page, limit } = req.query;
-  
-  // Xử lý pagination parameters
+
   const currentPage = parseInt(page) || 1;
   const pageSize = parseInt(limit) || 10;
   const offset = (currentPage - 1) * pageSize;
-  
-  // Xử lý type có thể là string hoặc array
+
   let types = [];
   if (type) {
     types = Array.isArray(type) ? type : [type];
-    // Loại bỏ 'all' và các giá trị rỗng
     types = types.filter(t => t && t.trim() !== '' && t !== 'all');
   }
 
   try {
-    let query = '';
-    let values = [];
-    let paramIndex = 1;
+    const tenantId = getTenantId(req);
+    const access = await getAccessScope(id, 'customers', 'read', tenantId);
+    const { clause: accessClause, params: accessParams, paramIndex: paramIndexAfter } = buildCustomerFilter(access, 2);
 
-    // Base query với JOIN employees
+    let values = [tenantId, ...accessParams];
+    let paramIndex = paramIndexAfter;
+
     const baseSelect = `
       SELECT 
         c.*,
@@ -245,18 +222,10 @@ export const getCustomers = async (req, res) => {
       LEFT JOIN employees e ON c.assigned_to = e.employee_id
     `;
 
-    // Xây dựng WHERE conditions
     const conditions = [];
-
-    // Soft Delete: Chỉ lấy khách hàng chưa bị xóa
     conditions.push(`c.deleted_at IS NULL`);
-
-    // Phân quyền: Sales chỉ thấy khách hàng của mình
-    if (role !== 'admin') {
-      conditions.push(`c.assigned_to = $${paramIndex}`);
-      values.push(id);
-      paramIndex++;
-    }
+    conditions.push(`c.tenant_id = $1`);
+    conditions.push(`(${accessClause})`);
 
     // Tìm kiếm: Tìm trong full_name, email, phone, company_name
     if (search && search.trim() !== '') {
@@ -290,8 +259,7 @@ export const getCustomers = async (req, res) => {
     const totalPages = Math.ceil(totalItems / pageSize);
 
     // Xây dựng query lấy dữ liệu với pagination
-    // Luôn có điều kiện deleted_at IS NULL (đã thêm vào conditions)
-    query = `${baseSelect} WHERE ${conditions.join(' AND ')} ORDER BY c.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
+    const query = `${baseSelect} WHERE ${conditions.join(' AND ')} ORDER BY c.created_at DESC LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`;
     
     // Thêm limit và offset vào values
     values.push(pageSize, offset);
@@ -339,31 +307,20 @@ export const updateCustomer = async (req, res) => {
   const { role, id: userId } = req.user;
 
   try {
-    // 1. Kiểm tra khách hàng có tồn tại và chưa bị xóa không
+    const tenantId = getTenantId(req);
+
+    // 1. Kiểm tra khách hàng có tồn tại, thuộc tenant và chưa bị xóa
     const checkCustomer = await pool.query(
-      'SELECT assigned_to, deleted_at FROM customers WHERE customer_id = $1',
-      [id]
+      'SELECT assigned_to, deleted_at FROM customers WHERE customer_id = $1 AND tenant_id = $2',
+      [id, tenantId]
     );
-
     if (checkCustomer.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Khách hàng không tồn tại.'
-      });
+      return res.status(404).json({ success: false, message: 'Khách hàng không tồn tại.' });
     }
-
     const customer = checkCustomer.rows[0];
-
-    // Kiểm tra soft delete
     if (customer.deleted_at !== null) {
-      return res.status(404).json({
-        success: false,
-        message: 'Khách hàng đã bị xóa.'
-      });
+      return res.status(404).json({ success: false, message: 'Khách hàng đã bị xóa.' });
     }
-
-    // 2. Kiểm tra phân quyền
-    // Sales chỉ được sửa khách hàng của mình
     if (role === 'sales' && customer.assigned_to !== userId) {
       return res.status(403).json({
         success: false,
@@ -388,63 +345,32 @@ export const updateCustomer = async (req, res) => {
     } else {
       // Admin/manager có thể chọn nhân viên, nếu không chọn thì giữ nguyên
       if (assigned_to) {
-        // Kiểm tra nhân viên có tồn tại không
         const checkEmployee = await pool.query(
-          'SELECT employee_id FROM employees WHERE employee_id = $1 AND is_active = TRUE',
-          [assigned_to]
+          'SELECT employee_id FROM employees WHERE employee_id = $1 AND tenant_id = $2 AND is_active = TRUE',
+          [assigned_to, tenantId]
         );
-
         if (checkEmployee.rows.length === 0) {
-          return res.status(400).json({
-            success: false,
-            message: 'Nhân viên được chọn không tồn tại hoặc đã bị khóa.'
-          });
+          return res.status(400).json({ success: false, message: 'Nhân viên được chọn không tồn tại hoặc không thuộc đơn vị của bạn.' });
         }
-
         finalAssignedTo = assigned_to;
       }
     }
 
-    // 5. Cập nhật thông tin
     const now = Date.now();
     const updateQuery = `
       UPDATE customers 
-      SET 
-        full_name = $1,
-        email = $2,
-        phone = $3,
-        address = $4,
-        customer_type = $5,
-        company_name = $6,
-        tax_code = $7,
-        source = $8,
-        assigned_to = $9,
-        updated_at = $10
-      WHERE customer_id = $11 AND deleted_at IS NULL
+      SET full_name = $1, email = $2, phone = $3, address = $4, customer_type = $5, company_name = $6, tax_code = $7, source = $8, assigned_to = $9, updated_at = $10
+      WHERE customer_id = $11 AND tenant_id = $12 AND deleted_at IS NULL
       RETURNING *;
     `;
 
     const values = [
-      full_name,
-      email || '',
-      phone,
-      address || '',
-      customer_type || 'individual',
-      company_name || '',
-      tax_code || '',
-      source || 'Direct',
-      finalAssignedTo,
-      now,
-      id
+      full_name, email || '', phone, address || '', customer_type || 'individual',
+      company_name || '', tax_code || '', source || 'Direct', finalAssignedTo, now, id, tenantId
     ];
-
     const result = await pool.query(updateQuery, values);
-
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Không thể cập nhật khách hàng.'
-      });
+      return res.status(404).json({ success: false, message: 'Không thể cập nhật khách hàng.' });
     }
 
     res.json({
@@ -469,35 +395,22 @@ export const updateCustomer = async (req, res) => {
  * - Sales: Chỉ được xóa khách hàng được gán cho mình (assigned_to)
  */
 export const deleteCustomer = async (req, res) => {
-  const { id } = req.params; // customer_id
+  const { id } = req.params;
   const { role, id: userId } = req.user;
+  const tenantId = getTenantId(req);
 
   try {
-    // 1. Kiểm tra khách hàng có tồn tại và chưa bị xóa không
     const checkCustomer = await pool.query(
-      'SELECT assigned_to, deleted_at FROM customers WHERE customer_id = $1',
-      [id]
+      'SELECT assigned_to, deleted_at FROM customers WHERE customer_id = $1 AND tenant_id = $2',
+      [id, tenantId]
     );
-
     if (checkCustomer.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Khách hàng không tồn tại.'
-      });
+      return res.status(404).json({ success: false, message: 'Khách hàng không tồn tại.' });
     }
-
     const customer = checkCustomer.rows[0];
-
-    // Kiểm tra đã bị xóa chưa
     if (customer.deleted_at !== null) {
-      return res.status(400).json({
-        success: false,
-        message: 'Khách hàng đã bị xóa trước đó.'
-      });
+      return res.status(400).json({ success: false, message: 'Khách hàng đã bị xóa trước đó.' });
     }
-
-    // 2. Kiểm tra phân quyền
-    // Sales chỉ được xóa khách hàng của mình
     if (role === 'sales' && customer.assigned_to !== userId) {
       return res.status(403).json({
         success: false,
@@ -510,17 +423,13 @@ export const deleteCustomer = async (req, res) => {
     const deleteQuery = `
       UPDATE customers 
       SET deleted_at = $1, updated_at = $1
-      WHERE customer_id = $2 AND deleted_at IS NULL
+      WHERE customer_id = $2 AND tenant_id = $3 AND deleted_at IS NULL
       RETURNING *;
     `;
 
-    const result = await pool.query(deleteQuery, [now, id]);
-
+    const result = await pool.query(deleteQuery, [now, id, tenantId]);
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Không thể xóa khách hàng.'
-      });
+      return res.status(404).json({ success: false, message: 'Không thể xóa khách hàng.' });
     }
 
     res.json({
@@ -546,16 +455,15 @@ export const deleteCustomer = async (req, res) => {
 export const bulkTransferCustomers = async (req, res) => {
   const { customer_ids, new_assigned_to_id, transfer_reason, include_completed_tasks } = req.body;
   const { role, id: userId } = req.user;
+  const tenantId = getTenantId(req);
 
   try {
-    // 1. Kiểm tra dữ liệu đầu vào
     if (!customer_ids || !Array.isArray(customer_ids) || customer_ids.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'Danh sách customer_ids là bắt buộc và phải là mảng không rỗng.'
       });
     }
-
     if (!new_assigned_to_id) {
       return res.status(400).json({
         success: false,
@@ -563,10 +471,9 @@ export const bulkTransferCustomers = async (req, res) => {
       });
     }
 
-    // 2. Kiểm tra nhân viên tiếp nhận có tồn tại không
     const employeeCheck = await pool.query(
-      'SELECT employee_id, full_name FROM employees WHERE employee_id = $1 AND is_active = TRUE',
-      [new_assigned_to_id]
+      'SELECT employee_id, full_name FROM employees WHERE employee_id = $1 AND tenant_id = $2 AND is_active = TRUE',
+      [new_assigned_to_id, tenantId]
     );
 
     if (employeeCheck.rows.length === 0) {
@@ -578,14 +485,13 @@ export const bulkTransferCustomers = async (req, res) => {
 
     const newEmployee = employeeCheck.rows[0];
 
-    // 3. Kiểm tra các khách hàng có tồn tại và quyền truy cập
     const placeholders = customer_ids.map((_, index) => `$${index + 1}`).join(', ');
     const customersCheckQuery = `
       SELECT customer_id, full_name, assigned_to, deleted_at
       FROM customers
-      WHERE customer_id IN (${placeholders})
+      WHERE customer_id IN (${placeholders}) AND tenant_id = $${customer_ids.length + 1}
     `;
-    const customersCheck = await pool.query(customersCheckQuery, customer_ids);
+    const customersCheck = await pool.query(customersCheckQuery, [...customer_ids, tenantId]);
 
     if (customersCheck.rows.length !== customer_ids.length) {
       return res.status(400).json({
@@ -624,16 +530,15 @@ export const bulkTransferCustomers = async (req, res) => {
       const now = Date.now();
       const oldEmployeeNames = {};
 
-      // 5. Lấy thông tin nhân viên cũ cho audit log
       const uniqueOldEmployeeIds = [...new Set(validCustomers.map(c => c.assigned_to).filter(Boolean))];
       if (uniqueOldEmployeeIds.length > 0) {
         const oldEmployeePlaceholders = uniqueOldEmployeeIds.map((_, index) => `$${index + 1}`).join(', ');
         const oldEmployeesQuery = `
           SELECT employee_id, full_name
           FROM employees
-          WHERE employee_id IN (${oldEmployeePlaceholders})
+          WHERE employee_id IN (${oldEmployeePlaceholders}) AND tenant_id = $${uniqueOldEmployeeIds.length + 1}
         `;
-        const oldEmployeesResult = await client.query(oldEmployeesQuery, uniqueOldEmployeeIds);
+        const oldEmployeesResult = await client.query(oldEmployeesQuery, [...uniqueOldEmployeeIds, tenantId]);
         oldEmployeesResult.rows.forEach(emp => {
           oldEmployeeNames[emp.employee_id] = emp.full_name;
         });
@@ -649,9 +554,9 @@ export const bulkTransferCustomers = async (req, res) => {
          FROM deals d
          INNER JOIN customers c ON d.customer_id = c.customer_id
          WHERE c.customer_id IN (${customerPlaceholders})
-         AND c.deleted_at IS NULL
+         AND c.tenant_id = $${customer_ids.length + 1} AND c.deleted_at IS NULL
          AND d.stage NOT IN ('closed_won', 'closed_lost', 'Thành công', 'Thất bại')`,
-        [...customer_ids]
+        [...customer_ids, tenantId]
       );
       const dealsCount = parseInt(dealsCountResult.rows[0].count) || 0;
 
@@ -660,36 +565,33 @@ export const bulkTransferCustomers = async (req, res) => {
       // Nếu include_completed_tasks = false hoặc undefined: chỉ cập nhật tasks chưa hoàn thành
       let tasksUpdateQuery;
       if (include_completed_tasks === true) {
-        // Cập nhật tất cả tasks (bao gồm cả đã hoàn thành)
         tasksUpdateQuery = `
           UPDATE tasks 
           SET assigned_to = $1
-          WHERE customer_id IN (${customerPlaceholders})
+          WHERE customer_id IN (${customerPlaceholders}) AND tenant_id = $${customer_ids.length + 2}
           RETURNING task_id
         `;
       } else {
-        // Chỉ cập nhật tasks chưa hoàn thành (mặc định)
         tasksUpdateQuery = `
           UPDATE tasks 
           SET assigned_to = $1
-          WHERE customer_id IN (${customerPlaceholders})
+          WHERE customer_id IN (${customerPlaceholders}) AND tenant_id = $${customer_ids.length + 2}
           AND is_completed = false
           RETURNING task_id
         `;
       }
-      
       const tasksUpdateResult = await client.query(
         tasksUpdateQuery,
-        [new_assigned_to_id, ...customer_ids]
+        [new_assigned_to_id, ...customer_ids, tenantId]
       );
       const tasksCount = tasksUpdateResult.rowCount || 0;
 
-      // 8. Cập nhật assigned_to trong customers
+      const customerPlaceholdersUpdate = customer_ids.map((_, index) => `$${index + 4}`).join(', ');
       await client.query(
         `UPDATE customers 
          SET assigned_to = $1, updated_at = $2
-         WHERE customer_id IN (${customerPlaceholders}) AND deleted_at IS NULL`,
-        [new_assigned_to_id, now, ...customer_ids]
+         WHERE customer_id IN (${customerPlaceholdersUpdate}) AND tenant_id = $3 AND deleted_at IS NULL`,
+        [new_assigned_to_id, now, tenantId, ...customer_ids]
       );
 
       // 9. Tạo audit log interactions cho mỗi khách hàng
@@ -704,16 +606,17 @@ export const bulkTransferCustomers = async (req, res) => {
         await client.query(
           `INSERT INTO interactions (
             interaction_id, customer_id, interaction_type, content,
-            interaction_date, employee_id, status, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            interaction_date, employee_id, status, tenant_id, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
             interactionId,
             customer.customer_id,
             'system',
             content.trim(),
             now,
-            userId, // Người thực hiện chuyển giao
+            userId,
             'system',
+            tenantId,
             now
           ]
         );
@@ -729,8 +632,8 @@ export const bulkTransferCustomers = async (req, res) => {
       
       await client.query(
         `INSERT INTO public.notifications (
-          notification_id, employee_id, type, title, message, is_read, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          notification_id, employee_id, type, title, message, is_read, tenant_id, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           notificationId,
           new_assigned_to_id,
@@ -738,6 +641,7 @@ export const bulkTransferCustomers = async (req, res) => {
           'Nhận bàn giao khách hàng hàng loạt',
           notificationMessage,
           false,
+          tenantId,
           now
         ]
       );
@@ -782,12 +686,12 @@ export const bulkTransferCustomers = async (req, res) => {
 export const getCustomerOwnershipHistory = async (req, res) => {
   const { customerId } = req.params;
   const { role, id: userId } = req.user;
+  const tenantId = getTenantId(req);
 
   try {
-    // Kiểm tra customer có tồn tại không
     const customerCheck = await pool.query(
-      'SELECT customer_id, assigned_to FROM customers WHERE customer_id = $1 AND deleted_at IS NULL',
-      [customerId]
+      'SELECT customer_id, assigned_to FROM customers WHERE customer_id = $1 AND tenant_id = $2 AND deleted_at IS NULL',
+      [customerId, tenantId]
     );
 
     if (customerCheck.rows.length === 0) {
@@ -818,13 +722,12 @@ export const getCustomerOwnershipHistory = async (req, res) => {
         e.employee_id
       FROM interactions i
       LEFT JOIN employees e ON i.employee_id = e.employee_id
-      WHERE i.customer_id = $1
+      WHERE i.customer_id = $1 AND i.tenant_id = $2
         AND i.interaction_type = 'system'
         AND i.content LIKE '%BÀN GIAO HỆ THỐNG%'
       ORDER BY i.created_at DESC
     `;
-
-    const ownershipResult = await pool.query(ownershipHistoryQuery, [customerId]);
+    const ownershipResult = await pool.query(ownershipHistoryQuery, [customerId, tenantId]);
 
     // 2. Lấy ghi chú bàn giao gần nhất từ transfer_approval_logs
     const latestTransferNoteQuery = `
@@ -841,13 +744,12 @@ export const getCustomerOwnershipHistory = async (req, res) => {
       LEFT JOIN employees sender ON tal.sender_id = sender.employee_id
       LEFT JOIN employees receiver ON tal.receiver_id = receiver.employee_id
       LEFT JOIN transfer_requests tr ON tal.transfer_request_id = tr.transfer_request_id
-      WHERE $1 = ANY(tr.customer_ids)
+      WHERE $1 = ANY(tr.customer_ids) AND tr.tenant_id = $2
         AND tal.action = 'approve'
       ORDER BY tal.created_at DESC
       LIMIT 1
     `;
-
-    const transferNoteResult = await pool.query(latestTransferNoteQuery, [customerId]);
+    const transferNoteResult = await pool.query(latestTransferNoteQuery, [customerId, tenantId]);
 
     // 3. Parse ownership history để trích xuất thông tin người phụ trách
     const ownershipHistory = ownershipResult.rows.map((row, index) => {

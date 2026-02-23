@@ -6,17 +6,18 @@ import { Navbar } from '@/components/Navbar'
 import { EmployeeList } from '@/components/EmployeeList'
 import { EmployeeForm } from '@/components/EmployeeForm'
 import { useAuth } from '@/contexts/AuthContext'
+import { useSubscription } from '@/contexts/SubscriptionContext'
 import { useRouter } from 'next/navigation'
 import { Plus, X, Shield } from 'lucide-react'
 
 export default function EmployeesPage() {
   const { user } = useAuth()
+  const { expired } = useSubscription()
   const router = useRouter()
   const [showForm, setShowForm] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
 
-  // Chỉ admin mới được truy cập
-  if (user && user.role !== 'admin') {
+  if (user && user.role !== 'admin' && user.role !== 'super_admin') {
     router.push('/dashboard')
     return null
   }
@@ -40,8 +41,14 @@ export default function EmployeesPage() {
               <p className="text-xs sm:text-sm text-gray-600 mt-1">Tạo và quản lý tài khoản nhân viên (Chỉ dành cho Admin)</p>
             </div>
             <button
-              onClick={() => setShowForm(true)}
-              className="flex items-center space-x-1 sm:space-x-2 bg-primary-600 text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg hover:bg-primary-700 transition font-medium text-sm sm:text-base"
+              onClick={() => !expired && setShowForm(true)}
+              disabled={expired}
+              title={expired ? 'Gói dịch vụ đã hết hạn. Vui lòng gia hạn để thêm nhân viên.' : undefined}
+              className={`flex items-center space-x-1 sm:space-x-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg transition font-medium text-sm sm:text-base ${
+                expired
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  : 'bg-primary-600 text-white hover:bg-primary-700'
+              }`}
             >
               <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
               <span className="hidden sm:inline">Thêm nhân viên</span>

@@ -8,30 +8,50 @@ import Image from 'next/image'
 import { LogIn, User, Lock, AlertCircle, Eye, EyeOff } from 'lucide-react'
 import toast from 'react-hot-toast'
 
+const REMEMBER_KEY = 'login_remember_me'
+const REMEMBER_USERNAME_KEY = 'login_remember_username'
+const REMEMBER_DOMAIN_KEY = 'login_remember_domain'
+const REMEMBER_PASSWORD_KEY = 'login_remember_password'
+
+function getStored(key: string): string {
+  if (typeof window === 'undefined') return ''
+  return localStorage.getItem(key) || ''
+}
+
 export default function LoginPage() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [domain, setDomain] = useState('')
+  const [rememberMe, setRememberMe] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const { login } = useAuth()
   const router = useRouter()
   const formRef = useRef<HTMLFormElement>(null)
-  
-  // Khôi phục giá trị từ sessionStorage nếu có (để tránh mất dữ liệu khi refresh)
+
+  // Khôi phục thông tin đã lưu (localStorage) hoặc session (sessionStorage) khi load trang
   useEffect(() => {
-    const savedUsername = sessionStorage.getItem('login_username')
-    if (savedUsername) {
-      setUsername(savedUsername)
+    const savedRemember = getStored(REMEMBER_KEY) === '1'
+    setRememberMe(savedRemember)
+    if (savedRemember) {
+      const savedUsername = getStored(REMEMBER_USERNAME_KEY)
+      const savedDomain = getStored(REMEMBER_DOMAIN_KEY)
+      const savedPassword = getStored(REMEMBER_PASSWORD_KEY)
+      if (savedUsername) setUsername(savedUsername)
+      if (savedDomain) setDomain(savedDomain)
+      if (savedPassword) setPassword(savedPassword)
+    } else {
+      const sessionUser = typeof window !== 'undefined' ? sessionStorage.getItem('login_username') : null
+      if (sessionUser) setUsername(sessionUser)
     }
   }, [])
-  
-  // Lưu username vào sessionStorage khi thay đổi
+
+  // Đồng bộ username vào sessionStorage khi đang không dùng "ghi nhớ" (để tránh mất dữ liệu khi refresh)
   useEffect(() => {
-    if (username) {
-      sessionStorage.setItem('login_username', username)
-    }
-  }, [username])
+    if (typeof window === 'undefined' || rememberMe) return
+    if (username) sessionStorage.setItem('login_username', username)
+  }, [username, rememberMe])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -40,60 +60,39 @@ export default function LoginPage() {
     // Lưu giá trị hiện tại vào biến để đảm bảo không bị mất
     const currentUsername = username
     const currentPassword = password
+    const currentDomain = domain.trim() || undefined
     
     setError('')
     setLoading(true)
 
     try {
-      await login(currentUsername, currentPassword)
-      // Xóa sessionStorage khi đăng nhập thành công
+      await login(currentUsername, currentPassword, currentDomain)
       sessionStorage.removeItem('login_username')
+      if (rememberMe) {
+        localStorage.setItem(REMEMBER_KEY, '1')
+        localStorage.setItem(REMEMBER_USERNAME_KEY, currentUsername)
+        localStorage.setItem(REMEMBER_DOMAIN_KEY, domain.trim())
+        localStorage.setItem(REMEMBER_PASSWORD_KEY, currentPassword)
+      } else {
+        localStorage.setItem(REMEMBER_KEY, '0')
+        localStorage.removeItem(REMEMBER_USERNAME_KEY)
+        localStorage.removeItem(REMEMBER_DOMAIN_KEY)
+        localStorage.removeItem(REMEMBER_PASSWORD_KEY)
+      }
       toast.success('Đăng nhập thành công!')
-      router.push('/dashboard')
+      // Super Admin không có tenant_id → vào trang Hệ thống (quản lý tenants)
+      const storedUser = localStorage.getItem('user')
+      const parsed = storedUser ? JSON.parse(storedUser) : null
+      if (parsed?.role === 'super_admin' && (parsed?.tenant_id == null || parsed?.tenant_id === '')) {
+        router.push('/system/tenants')
+      } else {
+        router.push('/dashboard')
+      }
     } catch (err: any) {
       const errorMessage = err.message || 'Đăng nhập thất bại'
-      
-      // Đảm bảo giữ nguyên giá trị form
       setUsername(currentUsername)
       setPassword(currentPassword)
-      
-      // Set error state
       setError(errorMessage)
-      
-      // Dismiss toast cũ nếu có (tránh duplicate)
-      toast.dismiss('login-error')
-      
-      // Hiển thị toast ngay lập tức - không cần delay
-      // Toast với duration rất dài (20000ms = 20 giây) để đảm bảo user có đủ thời gian đọc
-      // Hiển thị ở top-center với style nổi bật
-      toast.error(
-        `⚠️ Đăng nhập thất bại\n${errorMessage}`,
-        {
-          id: 'login-error', // ID cố định để tránh duplicate
-          duration: 5000, // 20 giây - rất dài để user có đủ thời gian đọc
-          position: 'top-center',
-          style: {
-            background: '#fee2e2',
-            color: '#991b1b',
-            border: '3px solid #dc2626',
-            padding: '20px 24px',
-            fontSize: '18px',
-            fontWeight: '700',
-            borderRadius: '12px',
-            boxShadow: '0 10px 40px rgba(220, 38, 38, 0.5)',
-            minWidth: '450px',
-            maxWidth: '600px',
-            zIndex: 99999,
-            whiteSpace: 'pre-line', // Cho phép xuống dòng
-            lineHeight: '1.6',
-          },
-          icon: '⚠️',
-          ariaProps: {
-            role: 'alert',
-            'aria-live': 'assertive',
-          },
-        }
-      )
       
       // KHÔNG reset form - giữ nguyên TẤT CẢ thông tin (username và password)
       // Chỉ focus vào password field để user có thể sửa lại nếu cần
@@ -141,6 +140,23 @@ export default function LoginPage() {
           )}
 
           <div>
+            <label htmlFor="domain" className="block text-sm font-medium text-gray-700 mb-2">
+              Domain công ty <span className="text-gray-400 font-normal">(tùy chọn)</span>
+            </label>
+            <div className="relative">
+              <input
+                id="domain"
+                type="text"
+                value={domain}
+                onChange={(e) => setDomain(e.target.value)}
+                className="w-full pl-4 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
+                placeholder="VD: cong-ty-abc (dành cho Admin công ty con)"
+              />
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Nếu bạn là Admin công ty con, nhập domain công ty (xem tại Hệ thống → Quản lý công ty).</p>
+          </div>
+
+          <div>
             <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-2">
               Tên đăng nhập
             </label>
@@ -186,6 +202,19 @@ export default function LoginPage() {
                 )}
               </button>
             </div>
+          </div>
+
+          <div className="flex items-center">
+            <input
+              id="remember"
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(e) => setRememberMe(e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+            />
+            <label htmlFor="remember" className="ml-2 text-sm text-gray-700">
+              Ghi nhớ thông tin đăng nhập (domain, tên đăng nhập, mật khẩu) — lưu trên thiết bị này
+            </label>
           </div>
 
           <button

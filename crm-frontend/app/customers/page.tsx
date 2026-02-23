@@ -6,10 +6,12 @@ import { Navbar } from '@/components/Navbar'
 import { CustomerList } from '@/components/CustomerList'
 import { CustomerForm } from '@/components/CustomerForm'
 import { useAuth } from '@/contexts/AuthContext'
+import { useSubscription } from '@/contexts/SubscriptionContext'
 import { Plus, X, ArrowRightLeft } from 'lucide-react'
 
 export default function CustomersPage() {
   const { user } = useAuth()
+  const { expired } = useSubscription()
   const [showForm, setShowForm] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   
@@ -35,23 +37,28 @@ export default function CustomersPage() {
               {canTransfer && (
                 <button
                   onClick={() => {
+                    if (expired) return
                     const handleBulkTransfer = (window as any).__customerListBulkTransfer
-                    if (handleBulkTransfer) {
-                      handleBulkTransfer()
-                    } else {
-                      // Fallback: show error if component not ready
-                      console.error('CustomerList component not ready')
-                    }
+                    if (handleBulkTransfer) handleBulkTransfer()
+                    else console.error('CustomerList component not ready')
                   }}
-                  className="flex items-center space-x-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition font-medium"
+                  disabled={expired}
+                  title={expired ? 'Gói dịch vụ đã hết hạn. Vui lòng gia hạn.' : undefined}
+                  className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition font-medium ${
+                    expired ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-purple-600 text-white hover:bg-purple-700'
+                  }`}
                 >
                   <ArrowRightLeft className="w-5 h-5" />
                   <span>Chuyển giao người phụ trách</span>
                 </button>
               )}
               <button
-                onClick={() => setShowForm(true)}
-                className="flex items-center space-x-2 bg-primary-600 text-white px-4 py-2 rounded-lg hover:bg-primary-700 transition font-medium"
+                onClick={() => !expired && setShowForm(true)}
+                disabled={expired}
+                title={expired ? 'Gói dịch vụ đã hết hạn. Vui lòng gia hạn để thêm khách hàng.' : undefined}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition font-medium ${
+                  expired ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-primary-600 text-white hover:bg-primary-700'
+                }`}
               >
                 <Plus className="w-5 h-5" />
                 <span>Thêm khách hàng</span>

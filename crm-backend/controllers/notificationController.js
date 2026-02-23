@@ -1,19 +1,21 @@
 import pool from '../database.js'
+import { getTenantId } from '../utils/tenantHelper.js'
 
 /**
- * Lấy danh sách thông báo của người dùng hiện tại
+ * Lấy danh sách thông báo của người dùng hiện tại — theo tenant
  */
 export const getNotifications = async (req, res) => {
   const { id: userId } = req.user
   const { unread_only = 'false' } = req.query
+  const tenantId = getTenantId(req)
 
   try {
     let query = `
       SELECT *
       FROM public.notifications
-      WHERE employee_id = $1
+      WHERE employee_id = $1 AND (tenant_id IS NULL OR tenant_id = $2)
     `
-    const params = [userId]
+    const params = [userId, tenantId]
 
     if (unread_only === 'true') {
       query += ' AND is_read = false'
@@ -43,11 +45,11 @@ export const getNotifications = async (req, res) => {
 export const markAsRead = async (req, res) => {
   const { id } = req.params
   const { id: userId } = req.user
+  const tenantId = getTenantId(req)
 
   try {
-    // Kiểm tra thông báo có thuộc về user không
-    const checkQuery = 'SELECT * FROM public.notifications WHERE notification_id = $1 AND employee_id = $2'
-    const checkResult = await pool.query(checkQuery, [id, userId])
+    const checkQuery = 'SELECT * FROM public.notifications WHERE notification_id = $1 AND employee_id = $2 AND (tenant_id IS NULL OR tenant_id = $3)'
+    const checkResult = await pool.query(checkQuery, [id, userId, tenantId])
 
     if (checkResult.rows.length === 0) {
       return res.status(404).json({
@@ -81,11 +83,12 @@ export const markAsRead = async (req, res) => {
  */
 export const markAllAsRead = async (req, res) => {
   const { id: userId } = req.user
+  const tenantId = getTenantId(req)
 
   try {
     await pool.query(
-      'UPDATE public.notifications SET is_read = true WHERE employee_id = $1 AND is_read = false',
-      [userId]
+      'UPDATE public.notifications SET is_read = true WHERE employee_id = $1 AND (tenant_id IS NULL OR tenant_id = $2) AND is_read = false',
+      [userId, tenantId]
     )
 
     res.json({

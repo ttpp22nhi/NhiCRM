@@ -1,13 +1,14 @@
 import pool from '../database.js'
 import { v4 as uuidv4 } from 'uuid'
+import { getTenantId } from '../utils/tenantHelper.js'
 
 /**
- * Lấy danh sách tasks
- * Phân quyền: Sales chỉ thấy task của mình, Admin/Manager thấy tất cả
+ * Lấy danh sách tasks — theo tenant
  */
 export const getTasks = async (req, res) => {
   const { role, id: userId } = req.user
-  const { assigned_to } = req.query // Filter theo nhân viên (chỉ Admin/Manager)
+  const { assigned_to } = req.query
+  const tenantId = getTenantId(req)
 
   try {
     let query = `
@@ -19,19 +20,17 @@ export const getTasks = async (req, res) => {
         e.full_name as assigned_employee_name,
         e.username as assigned_employee_username
       FROM tasks t
-      LEFT JOIN customers c ON t.customer_id = c.customer_id AND c.deleted_at IS NULL
+      LEFT JOIN customers c ON t.customer_id = c.customer_id AND c.deleted_at IS NULL AND c.tenant_id = t.tenant_id
       LEFT JOIN employees e ON t.assigned_to = e.employee_id
-      WHERE 1=1
+      WHERE t.tenant_id = $1
     `
-    const params = []
+    const params = [tenantId]
 
-    // Phân quyền: Sales chỉ thấy task của mình
     if (role === 'sales') {
-      query += ' AND t.assigned_to = $1'
+      query += ' AND t.assigned_to = $2'
       params.push(userId)
     } else if (assigned_to) {
-      // Admin/Manager có thể lọc theo nhân viên
-      query += ' AND t.assigned_to = $1'
+      query += ' AND t.assigned_to = $2'
       params.push(assigned_to)
     }
 
@@ -59,51 +58,37 @@ export const getTasks = async (req, res) => {
 export const createTask = async (req, res) => {
   const { role, id: userId } = req.user
   const { customer_id, title, due_date, priority, assigned_to } = req.body
+  const tenantId = getTenantId(req)
 
   try {
-    // Validation
     if (!title) {
-      return res.status(400).json({
-        success: false,
-        message: 'Tiêu đề task là bắt buộc.'
-      })
+      return res.status(400).json({ success: false, message: 'Tiêu đề task là bắt buộc.' })
     }
 
-    // Kiểm tra customer nếu có
     if (customer_id) {
       const customerCheck = await pool.query(
-        'SELECT customer_id FROM customers WHERE customer_id = $1 AND deleted_at IS NULL',
-        [customer_id]
+        'SELECT customer_id FROM customers WHERE customer_id = $1 AND tenant_id = $2 AND deleted_at IS NULL',
+        [customer_id, tenantId]
       )
       if (customerCheck.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Khách hàng không tồn tại hoặc đã bị xóa.'
-        })
+        return res.status(404).json({ success: false, message: 'Khách hàng không tồn tại hoặc đã bị xóa.' })
       }
     }
 
-    // Xác định assigned_to
     let finalAssignedTo = assigned_to
     if (role === 'sales') {
-      // Sales chỉ có thể tạo task cho chính mình
       finalAssignedTo = userId
     } else if (!finalAssignedTo) {
-      // Admin/Manager nếu không chỉ định thì gán cho chính mình
       finalAssignedTo = userId
     }
 
-    // Kiểm tra assigned_to có tồn tại không
     if (finalAssignedTo) {
       const employeeCheck = await pool.query(
-        'SELECT employee_id FROM employees WHERE employee_id = $1 AND is_active = true',
-        [finalAssignedTo]
+        'SELECT employee_id FROM employees WHERE employee_id = $1 AND tenant_id = $2 AND is_active = true',
+        [finalAssignedTo, tenantId]
       )
       if (employeeCheck.rows.length === 0) {
-        return res.status(404).json({
-          success: false,
-          message: 'Nhân viên được gán không tồn tại hoặc đã bị khóa.'
-        })
+        return res.status(404).json({ success: false, message: 'Nhân viên được gán không thuộc đơn vị của bạn.' })
       }
     }
 
@@ -113,32 +98,23 @@ export const createTask = async (req, res) => {
 
     const insertQuery = `
       INSERT INTO tasks (
-        task_id, customer_id, title, due_date, priority, is_completed, created_at, assigned_to
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        task_id, customer_id, title, due_date, priority, is_completed, created_at, assigned_to, tenant_id
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *
     `
-
     const values = [
-      task_id,
-      customer_id || null,
-      title,
-      finalDueDate,
-      priority || 'medium',
-      false,
-      now,
-      finalAssignedTo
+      task_id, customer_id || null, title, finalDueDate, priority || 'medium', false, now, finalAssignedTo, tenantId
     ]
 
     const result = await pool.query(insertQuery, values)
 
-    // Tạo thông báo cho nhân viên được gán task (nếu không phải chính người tạo)
     if (finalAssignedTo && finalAssignedTo !== userId) {
       try {
         const notificationId = uuidv4()
         await pool.query(
           `INSERT INTO public.notifications (
-            notification_id, employee_id, type, title, message, is_read, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            notification_id, employee_id, type, title, message, is_read, tenant_id, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
             notificationId,
             finalAssignedTo,
@@ -146,6 +122,7 @@ export const createTask = async (req, res) => {
             'Task mới được giao',
             `Bạn có task mới: "${title}"`,
             false,
+            tenantId,
             now
           ]
         )
@@ -184,8 +161,8 @@ export const updateTask = async (req, res) => {
   const { id } = req.params
   const { role, id: userId } = req.user || {}
   const { is_completed, completion_content, title, due_date, priority } = req.body || {}
+  const tenantId = getTenantId(req)
 
-  // Kiểm tra user có tồn tại không
   if (!req.user || !userId) {
     console.error('Lỗi: req.user không tồn tại hoặc không có userId')
     return res.status(401).json({
@@ -196,9 +173,8 @@ export const updateTask = async (req, res) => {
   }
 
   try {
-    // Lấy thông tin task hiện tại
-    const taskQuery = 'SELECT * FROM public.tasks WHERE task_id = $1'
-    const taskResult = await pool.query(taskQuery, [id])
+    const taskQuery = 'SELECT * FROM public.tasks WHERE task_id = $1 AND tenant_id = $2'
+    const taskResult = await pool.query(taskQuery, [id, tenantId])
 
     if (taskResult.rows.length === 0) {
       return res.status(404).json({
@@ -232,8 +208,8 @@ export const updateTask = async (req, res) => {
 
       // Kiểm tra customer có tồn tại và chưa bị xóa không
       const customerCheck = await pool.query(
-        'SELECT customer_id FROM public.customers WHERE customer_id = $1 AND deleted_at IS NULL',
-        [task.customer_id]
+        'SELECT customer_id FROM public.customers WHERE customer_id = $1 AND tenant_id = $2 AND deleted_at IS NULL',
+        [task.customer_id, tenantId]
       )
       
       if (customerCheck.rows.length === 0) {
@@ -251,21 +227,14 @@ export const updateTask = async (req, res) => {
 
         const interactionQuery = `
           INSERT INTO public.interactions (
-            interaction_id, customer_id, interaction_type, content, 
-            interaction_date, employee_id, status, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            interaction_id, customer_id, interaction_type, content,
+            interaction_date, employee_id, status, tenant_id, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
           RETURNING *
         `
-
         await pool.query(interactionQuery, [
-          interactionId,
-          task.customer_id,
-          'other', // Loại tương tác mặc định cho task completion
-          `[Hoàn thành Task] ${completion_content}`,
-          now,
-          userId,
-          'success',
-          now
+          interactionId, task.customer_id, 'other', `[Hoàn thành Task] ${completion_content}`,
+          now, userId, 'success', tenantId, now
         ])
       } catch (interactionError) {
         console.error('Lỗi khi tạo interaction:', interactionError)
@@ -320,11 +289,11 @@ export const updateTask = async (req, res) => {
       })
     }
 
-    updateValues.push(id)
+    updateValues.push(id, tenantId)
     const updateQuery = `
       UPDATE public.tasks 
       SET ${updateFields.join(', ')}
-      WHERE task_id = $${paramIndex}
+      WHERE task_id = $${paramIndex} AND tenant_id = $${paramIndex + 1}
       RETURNING *
     `
 
@@ -390,31 +359,19 @@ export const updateTask = async (req, res) => {
 export const deleteTask = async (req, res) => {
   const { id } = req.params
   const { role, id: userId } = req.user
+  const tenantId = getTenantId(req)
 
   try {
-    // Lấy thông tin task
-    const taskQuery = 'SELECT * FROM tasks WHERE task_id = $1'
-    const taskResult = await pool.query(taskQuery, [id])
-
+    const taskQuery = 'SELECT * FROM tasks WHERE task_id = $1 AND tenant_id = $2'
+    const taskResult = await pool.query(taskQuery, [id, tenantId])
     if (taskResult.rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'Task không tồn tại.'
-      })
+      return res.status(404).json({ success: false, message: 'Task không tồn tại.' })
     }
-
     const task = taskResult.rows[0]
-
-    // Kiểm tra quyền
     if (role === 'sales' && task.assigned_to !== userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Bạn không có quyền xóa task này.'
-      })
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa task này.' })
     }
-
-    // Xóa task
-    await pool.query('DELETE FROM tasks WHERE task_id = $1', [id])
+    await pool.query('DELETE FROM tasks WHERE task_id = $1 AND tenant_id = $2', [id, tenantId])
 
     res.json({
       success: true,

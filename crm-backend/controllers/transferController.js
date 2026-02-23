@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import pool from '../database.js';
+import { getTenantId } from '../utils/tenantHelper.js';
 
 /**
  * Tạo yêu cầu chuyển giao khách hàng (Sales)
@@ -8,16 +9,15 @@ import pool from '../database.js';
 export const createTransferRequest = async (req, res) => {
   const { customer_ids, receiver_id, note } = req.body;
   const { id: userId, role } = req.user;
+  const tenantId = getTenantId(req);
 
   try {
-    // 1. Validation
     if (!customer_ids || !Array.isArray(customer_ids) || customer_ids.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'Vui lòng chọn ít nhất một khách hàng để chuyển giao.'
       });
     }
-
     if (!receiver_id || receiver_id.trim() === '') {
       return res.status(400).json({
         success: false,
@@ -25,12 +25,11 @@ export const createTransferRequest = async (req, res) => {
       });
     }
 
-    // 2. Kiểm tra receiver_id có tồn tại và là Sales
     const receiverResult = await pool.query(
       `SELECT employee_id, full_name, role, is_active 
        FROM public.employees 
-       WHERE employee_id = $1`,
-      [receiver_id]
+       WHERE employee_id = $1 AND tenant_id = $2`,
+      [receiver_id, tenantId]
     );
 
     if (receiverResult.rows.length === 0) {
@@ -55,15 +54,14 @@ export const createTransferRequest = async (req, res) => {
       });
     }
 
-    // 3. Kiểm tra tất cả customer_ids thuộc về người gửi (nếu là Sales)
     if (role === 'sales') {
       const customerPlaceholders = customer_ids.map((_, index) => `$${index + 1}`).join(', ');
       const customerCheckResult = await pool.query(
         `SELECT customer_id, full_name, assigned_to 
          FROM public.customers 
          WHERE customer_id IN (${customerPlaceholders}) 
-         AND deleted_at IS NULL`,
-        customer_ids
+         AND tenant_id = $${customer_ids.length + 1} AND deleted_at IS NULL`,
+        [...customer_ids, tenantId]
       );
 
       if (customerCheckResult.rows.length !== customer_ids.length) {
@@ -86,14 +84,13 @@ export const createTransferRequest = async (req, res) => {
       }
     }
 
-    // 4. Kiểm tra xem đã có yêu cầu pending cho các khách hàng này chưa
     const existingRequestResult = await pool.query(
       `SELECT transfer_request_id, customer_ids, status 
        FROM public.transfer_requests 
-       WHERE status = 'pending' 
-       AND sender_id = $1 
-       AND customer_ids && $2::text[]`,
-      [userId, customer_ids]
+       WHERE status = 'pending' AND tenant_id = $1
+       AND sender_id = $2 
+       AND customer_ids && $3::text[]`,
+      [tenantId, userId, customer_ids]
     );
 
     if (existingRequestResult.rows.length > 0) {
@@ -110,8 +107,8 @@ export const createTransferRequest = async (req, res) => {
     await pool.query(
       `INSERT INTO public.transfer_requests (
         transfer_request_id, customer_ids, sender_id, receiver_id, 
-        status, note, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        status, note, tenant_id, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         transferRequestId,
         customer_ids,
@@ -119,16 +116,16 @@ export const createTransferRequest = async (req, res) => {
         receiver_id,
         'pending',
         note || null,
+        tenantId,
         now,
         now
       ]
     );
 
-    // 6. Gửi thông báo cho Manager
-    // Lấy danh sách Manager
     const managersResult = await pool.query(
       `SELECT employee_id FROM public.employees 
-       WHERE role IN ('admin', 'manager') AND is_active = true`
+       WHERE role IN ('admin', 'manager') AND is_active = true AND tenant_id = $1`,
+      [tenantId]
     );
 
     const senderResult = await pool.query(
@@ -141,8 +138,8 @@ export const createTransferRequest = async (req, res) => {
       const notificationId = uuidv4();
       await pool.query(
         `INSERT INTO public.notifications (
-          notification_id, employee_id, type, title, message, is_read, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          notification_id, employee_id, type, title, message, is_read, tenant_id, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           notificationId,
           manager.employee_id,
@@ -150,6 +147,7 @@ export const createTransferRequest = async (req, res) => {
           'Yêu cầu chuyển giao khách hàng',
           `${senderName} muốn chuyển giao ${customer_ids.length} khách hàng cho ${receiver.full_name}. Vui lòng xem xét phê duyệt.`,
           false,
+          tenantId,
           now
         ]
       );
@@ -183,9 +181,9 @@ export const createTransferRequest = async (req, res) => {
  */
 export const getPendingTransferRequests = async (req, res) => {
   const { role } = req.user;
+  const tenantId = getTenantId(req);
 
   try {
-    // Chỉ Manager và Admin mới có quyền xem
     if (role !== 'manager' && role !== 'admin') {
       return res.status(403).json({
         success: false,
@@ -215,11 +213,11 @@ export const getPendingTransferRequests = async (req, res) => {
       LEFT JOIN public.employees sender ON tr.sender_id = sender.employee_id
       LEFT JOIN public.employees receiver ON tr.receiver_id = receiver.employee_id
       LEFT JOIN public.employees approver ON tr.approved_by = approver.employee_id
-      WHERE tr.status = 'pending'
-      ORDER BY tr.created_at DESC`
+      WHERE tr.status = 'pending' AND tr.tenant_id = $1
+      ORDER BY tr.created_at DESC`,
+      [tenantId]
     );
 
-    // Lấy thông tin chi tiết khách hàng cho mỗi yêu cầu
     const requestsWithCustomers = await Promise.all(
       result.rows.map(async (request) => {
         const customerPlaceholders = request.customer_ids.map((_, index) => `$${index + 1}`).join(', ');
@@ -227,8 +225,8 @@ export const getPendingTransferRequests = async (req, res) => {
           `SELECT customer_id, full_name, phone, company_name 
            FROM public.customers 
            WHERE customer_id IN (${customerPlaceholders}) 
-           AND deleted_at IS NULL`,
-          request.customer_ids
+           AND tenant_id = $${request.customer_ids.length + 1} AND deleted_at IS NULL`,
+          [...request.customer_ids, tenantId]
         );
 
         return {
@@ -286,7 +284,8 @@ export const approveTransferRequest = async (req, res) => {
       });
     }
 
-    // 2. Lấy thông tin yêu cầu
+    const tenantId = getTenantId(req);
+
     const requestResult = await pool.query(
       `SELECT 
         tr.*,
@@ -295,8 +294,8 @@ export const approveTransferRequest = async (req, res) => {
       FROM public.transfer_requests tr
       LEFT JOIN public.employees sender ON tr.sender_id = sender.employee_id
       LEFT JOIN public.employees receiver ON tr.receiver_id = receiver.employee_id
-      WHERE tr.transfer_request_id = $1`,
-      [id]
+      WHERE tr.transfer_request_id = $1 AND tr.tenant_id = $2`,
+      [id, tenantId]
     );
 
     if (requestResult.rows.length === 0) {
@@ -315,7 +314,6 @@ export const approveTransferRequest = async (req, res) => {
       });
     }
 
-    // 3. Nếu từ chối, chỉ cập nhật trạng thái
     if (action === 'reject') {
       const now = Date.now();
       await pool.query(
@@ -325,8 +323,8 @@ export const approveTransferRequest = async (req, res) => {
              approved_at = $2, 
              updated_at = $2,
              approval_note = $4
-         WHERE transfer_request_id = $3`,
-        [userId, now, id, approval_note.trim()]
+         WHERE transfer_request_id = $3 AND tenant_id = $5`,
+        [userId, now, id, approval_note.trim(), tenantId]
       );
 
       // Ghi log phê duyệt
@@ -349,12 +347,11 @@ export const approveTransferRequest = async (req, res) => {
         ]
       );
 
-      // Gửi thông báo cho người gửi
       const notificationId = uuidv4();
       await pool.query(
         `INSERT INTO public.notifications (
-          notification_id, employee_id, type, title, message, is_read, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          notification_id, employee_id, type, title, message, is_read, tenant_id, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           notificationId,
           request.sender_id,
@@ -362,6 +359,7 @@ export const approveTransferRequest = async (req, res) => {
           'Yêu cầu chuyển giao bị từ chối',
           `Yêu cầu chuyển giao ${request.customer_ids.length} khách hàng cho ${request.receiver_name} đã bị từ chối. Lý do: ${approval_note.trim()}`,
           false,
+          tenantId,
           now
         ]
       );
@@ -380,12 +378,11 @@ export const approveTransferRequest = async (req, res) => {
 
       const { customer_ids, sender_id, receiver_id } = request;
 
-      // 4.1. Kiểm tra receiver vẫn còn active
       const receiverCheck = await client.query(
         `SELECT employee_id, full_name, is_active 
          FROM public.employees 
-         WHERE employee_id = $1`,
-        [receiver_id]
+         WHERE employee_id = $1 AND tenant_id = $2`,
+        [receiver_id, tenantId]
       );
 
       if (receiverCheck.rows.length === 0 || !receiverCheck.rows[0].is_active) {
@@ -398,14 +395,13 @@ export const approveTransferRequest = async (req, res) => {
 
       const newEmployee = receiverCheck.rows[0];
 
-      // 4.2. Kiểm tra tất cả customers vẫn tồn tại và chưa bị xóa
       const customerPlaceholders1 = customer_ids.map((_, index) => `$${index + 1}`).join(', ');
       const customersResult = await client.query(
         `SELECT customer_id, full_name, assigned_to 
          FROM public.customers 
          WHERE customer_id IN (${customerPlaceholders1}) 
-         AND deleted_at IS NULL`,
-        customer_ids
+         AND tenant_id = $${customer_ids.length + 1} AND deleted_at IS NULL`,
+        [...customer_ids, tenantId]
       );
 
       if (customersResult.rows.length !== customer_ids.length) {
@@ -425,43 +421,37 @@ export const approveTransferRequest = async (req, res) => {
       );
       const oldEmployeeName = senderCheck.rows[0]?.full_name || 'Nhân viên cũ';
 
-      // 4.4. Đếm deals đang mở
       const customerPlaceholders2 = customer_ids.map((_, index) => `$${index + 1}`).join(', ');
       const dealsCountResult = await client.query(
         `SELECT COUNT(DISTINCT d.deal_id) as count
          FROM public.deals d
          INNER JOIN public.customers c ON d.customer_id = c.customer_id
          WHERE c.customer_id IN (${customerPlaceholders2})
-         AND c.deleted_at IS NULL
+         AND c.tenant_id = $${customer_ids.length + 1} AND c.deleted_at IS NULL
          AND d.stage NOT IN ('closed_won', 'closed_lost', 'Thành công', 'Thất bại')`,
-        customer_ids
+        [...customer_ids, tenantId]
       );
       const dealsCount = parseInt(dealsCountResult.rows[0].count) || 0;
 
-      // 4.5. Cập nhật tasks chưa hoàn thành
-      // $1 = receiver_id, $2, $3, ... = customer_ids
-      const customerPlaceholders3 = customer_ids.map((_, index) => `$${index + 2}`).join(', ');
+      const customerPlaceholders3 = customer_ids.map((_, index) => `$${index + 3}`).join(', ');
       const tasksUpdateResult = await client.query(
         `UPDATE public.tasks 
          SET assigned_to = $1 
          WHERE customer_id IN (${customerPlaceholders3}) 
-         AND is_completed = false 
+         AND tenant_id = $2 AND is_completed = false 
          RETURNING task_id`,
-        [receiver_id, ...customer_ids]
+        [receiver_id, tenantId, ...customer_ids]
       );
       const tasksCount = tasksUpdateResult.rowCount || 0;
 
-      // 4.6. Cập nhật assigned_to trong customers
-      // $1 = receiver_id, $2 = now, $3, $4, ... = customer_ids
-      const customerPlaceholders4 = customer_ids.map((_, index) => `$${index + 3}`).join(', ');
+      const customerPlaceholders4 = customer_ids.map((_, index) => `$${index + 4}`).join(', ');
       await client.query(
         `UPDATE public.customers
          SET assigned_to = $1, updated_at = $2
-         WHERE customer_id IN (${customerPlaceholders4}) AND deleted_at IS NULL`,
-        [receiver_id, now, ...customer_ids]
+         WHERE customer_id IN (${customerPlaceholders4}) AND tenant_id = $3 AND deleted_at IS NULL`,
+        [receiver_id, now, tenantId, ...customer_ids]
       );
 
-      // 4.7. Tạo audit log interactions
       for (const customer of validCustomers) {
         const interactionId = uuidv4();
         const content = `BÀN GIAO HỆ THỐNG: Khách hàng và các công việc đang dang dở được chuyển từ ${oldEmployeeName} sang ${newEmployee.full_name} (Yêu cầu đã được phê duyệt).${request.note ? ` Lý do: ${request.note}` : ''}`;
@@ -469,13 +459,12 @@ export const approveTransferRequest = async (req, res) => {
         await client.query(
           `INSERT INTO public.interactions (
             interaction_id, customer_id, interaction_type, content,
-            interaction_date, employee_id, status, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [interactionId, customer.customer_id, 'system', content.trim(), now, userId, 'system', now]
+            interaction_date, employee_id, status, tenant_id, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [interactionId, customer.customer_id, 'system', content.trim(), now, userId, 'system', tenantId, now]
         );
       }
 
-      // 4.8. Cập nhật trạng thái yêu cầu
       await client.query(
         `UPDATE public.transfer_requests 
          SET status = 'approved', 
@@ -483,8 +472,8 @@ export const approveTransferRequest = async (req, res) => {
              approved_at = $2, 
              updated_at = $2,
              approval_note = $4
-         WHERE transfer_request_id = $3`,
-        [userId, now, id, approval_note.trim()]
+         WHERE transfer_request_id = $3 AND tenant_id = $5`,
+        [userId, now, id, approval_note.trim(), tenantId]
       );
 
       // 4.8.1. Ghi log phê duyệt
@@ -507,12 +496,11 @@ export const approveTransferRequest = async (req, res) => {
         ]
       );
 
-      // 4.9. Gửi thông báo cho người gửi và người nhận
       const notificationIdSender = uuidv4();
       await client.query(
         `INSERT INTO public.notifications (
-          notification_id, employee_id, type, title, message, is_read, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          notification_id, employee_id, type, title, message, is_read, tenant_id, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           notificationIdSender,
           sender_id,
@@ -520,6 +508,7 @@ export const approveTransferRequest = async (req, res) => {
           'Yêu cầu chuyển giao đã được phê duyệt',
           `Yêu cầu chuyển giao ${validCustomers.length} khách hàng cho ${newEmployee.full_name} đã được phê duyệt. Nội dung: ${approval_note.trim()}`,
           false,
+          tenantId,
           now
         ]
       );
@@ -528,8 +517,8 @@ export const approveTransferRequest = async (req, res) => {
       const taskDescription = `${tasksCount} task chưa hoàn thành`;
       await client.query(
         `INSERT INTO public.notifications (
-          notification_id, employee_id, type, title, message, is_read, created_at
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          notification_id, employee_id, type, title, message, is_read, tenant_id, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [
           notificationIdReceiver,
           receiver_id,
@@ -537,6 +526,7 @@ export const approveTransferRequest = async (req, res) => {
           'Nhận bàn giao khách hàng',
           `Bạn vừa nhận bàn giao ${validCustomers.length} khách hàng từ ${oldEmployeeName} với ${dealsCount} deal đang mở và ${taskDescription}. Vui lòng kiểm tra danh sách.`,
           false,
+          tenantId,
           now
         ]
       );
@@ -578,6 +568,7 @@ export const approveTransferRequest = async (req, res) => {
  */
 export const getMyTransferRequests = async (req, res) => {
   const { id: userId } = req.user;
+  const tenantId = getTenantId(req);
 
   try {
     const result = await pool.query(
@@ -598,12 +589,11 @@ export const getMyTransferRequests = async (req, res) => {
       FROM public.transfer_requests tr
       LEFT JOIN public.employees receiver ON tr.receiver_id = receiver.employee_id
       LEFT JOIN public.employees approver ON tr.approved_by = approver.employee_id
-      WHERE tr.sender_id = $1
+      WHERE tr.sender_id = $1 AND tr.tenant_id = $2
       ORDER BY tr.created_at DESC`,
-      [userId]
+      [userId, tenantId]
     );
 
-    // Lấy thông tin chi tiết khách hàng
     const requestsWithCustomers = await Promise.all(
       result.rows.map(async (request) => {
         const customerPlaceholders = request.customer_ids.map((_, index) => `$${index + 1}`).join(', ');
@@ -611,8 +601,8 @@ export const getMyTransferRequests = async (req, res) => {
           `SELECT customer_id, full_name, phone, company_name 
            FROM public.customers 
            WHERE customer_id IN (${customerPlaceholders}) 
-           AND deleted_at IS NULL`,
-          request.customer_ids
+           AND tenant_id = $${request.customer_ids.length + 1} AND deleted_at IS NULL`,
+          [...request.customer_ids, tenantId]
         );
 
         return {
@@ -643,10 +633,10 @@ export const getMyTransferRequests = async (req, res) => {
  */
 export const getApprovalLogs = async (req, res) => {
   const { role } = req.user;
+  const tenantId = getTenantId(req);
   let { page = 1, limit = 20, transfer_request_id, approver_id } = req.query;
 
   try {
-    // Chỉ Manager và Admin mới có quyền xem
     if (role !== 'manager' && role !== 'admin') {
       return res.status(403).json({
         success: false,
@@ -654,35 +644,28 @@ export const getApprovalLogs = async (req, res) => {
       });
     }
 
-    // Validate và giới hạn limit tối đa 50
     page = Math.max(1, parseInt(page) || 1);
-    limit = Math.min(50, Math.max(1, parseInt(limit) || 20)); // Tối đa 50, tối thiểu 1
-
+    limit = Math.min(50, Math.max(1, parseInt(limit) || 20));
     const offset = (page - 1) * limit;
-    let whereConditions = [];
-    let queryParams = [];
-    let paramIndex = 1;
+    let whereConditions = ['tr.tenant_id = $1'];
+    let queryParams = [tenantId];
+    let paramIndex = 2;
 
-    // Lọc theo transfer_request_id nếu có
     if (transfer_request_id) {
       whereConditions.push(`tal.transfer_request_id = $${paramIndex++}`);
       queryParams.push(transfer_request_id);
     }
-
-    // Lọc theo approver_id nếu có
     if (approver_id) {
       whereConditions.push(`tal.approver_id = $${paramIndex++}`);
       queryParams.push(approver_id);
     }
 
-    const whereClause = whereConditions.length > 0 
-      ? `WHERE ${whereConditions.join(' AND ')}`
-      : '';
+    const whereClause = `WHERE ${whereConditions.join(' AND ')}`;
 
-    // Query tổng số records
     const countQuery = `
       SELECT COUNT(*) as total
       FROM public.transfer_approval_logs tal
+      LEFT JOIN public.transfer_requests tr ON tal.transfer_request_id = tr.transfer_request_id
       ${whereClause}
     `;
     const countResult = await pool.query(countQuery, queryParams);
@@ -747,17 +730,18 @@ export const getApprovalLogs = async (req, res) => {
 export const checkCustomerPendingTransfer = async (req, res) => {
   const { customerId } = req.params;
   const { id: userId } = req.user;
+  const tenantId = getTenantId(req);
 
   try {
     const result = await pool.query(
       `SELECT transfer_request_id, status, receiver_id, created_at
        FROM public.transfer_requests
        WHERE $1 = ANY(customer_ids)
-       AND sender_id = $2
+       AND sender_id = $2 AND tenant_id = $3
        AND status = 'pending'
        ORDER BY created_at DESC
        LIMIT 1`,
-      [customerId, userId]
+      [customerId, userId, tenantId]
     );
 
     if (result.rows.length > 0) {

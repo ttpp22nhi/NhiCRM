@@ -3,21 +3,33 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 import { apiClient } from '@/lib/api'
 
+type RoleType = 'super_admin' | 'admin' | 'director' | 'manager' | 'leader' | 'sales'
+
 interface User {
   id: string
   username: string
   full_name: string
   email?: string
-  role: 'admin' | 'sales' | 'manager'
+  role: RoleType
+  tenant_id?: string | null
+}
+
+interface RegisterOptions {
+  role?: string
+  department_id?: string
+  title?: string
+  rank?: string
 }
 
 interface AuthContextType {
   user: User | null
   token: string | null
   loading: boolean
-  login: (username: string, password: string) => Promise<void>
-  register: (username: string, password: string, full_name: string, email: string, role?: string) => Promise<void>
+  login: (username: string, password: string, domain?: string) => Promise<void>
+  register: (username: string, password: string, full_name: string, email: string, options?: RegisterOptions) => Promise<void>
   logout: () => void
+  /** Chỉ Super Admin: chọn tenant để "vào công ty" (tenantId) hoặc thoát (null). */
+  switchTenant: (tenantId: string | null) => void
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -40,11 +52,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(false)
   }, [])
 
-  const login = async (username: string, password: string) => {
+  const login = async (username: string, password: string, domain?: string) => {
     try {
       const response = await apiClient.post('/api/auth/login', {
         username,
         password,
+        ...(domain && domain.trim() ? { domain: domain.trim() } : {}),
       })
 
       if (response.data.success) {
@@ -55,6 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           full_name: employee.full_name,
           email: employee.email,
           role: employee.role,
+          tenant_id: employee.tenant_id ?? null,
         }
 
         setToken(newToken)
@@ -96,7 +110,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     password: string,
     full_name: string,
     email: string,
-    role: string = 'sales'
+    options?: RegisterOptions
   ) => {
     try {
       const response = await apiClient.post('/api/auth/register', {
@@ -104,7 +118,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         password,
         full_name,
         email,
-        role,
+        role: options?.role || 'sales',
+        department_id: options?.department_id || undefined,
+        title: options?.title || undefined,
+        rank: options?.rank || undefined
       })
 
       if (!response.data.success) {
@@ -124,8 +141,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     delete apiClient.defaults.headers.common['Authorization']
   }
 
+  const switchTenant = (tenantId: string | null) => {
+    if (!user || user.role !== 'super_admin') return
+    const next = { ...user, tenant_id: tenantId ?? undefined }
+    setUser(next)
+    localStorage.setItem('user', JSON.stringify(next))
+  }
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, login, register, logout, switchTenant }}>
       {children}
     </AuthContext.Provider>
   )
