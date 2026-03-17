@@ -6,15 +6,20 @@ import { getAccessScope } from '../services/permissionService.js'
 import * as departmentService from '../services/departmentService.js'
 
 /**
- * Lấy danh sách departments (cây) theo tenant và scope phân quyền
+ * Lấy danh sách departments (cây) theo tenant và scope phân quyền.
+ * Admin/Super Admin luôn xem toàn bộ cây (global) để quản lý tổ chức đầy đủ.
  */
 export const getDepartments = async (req, res) => {
   const tenantId = getTenantId(req)
   const userId = req.user?.id
   try {
-    const access = userId
-      ? await getAccessScope(userId, 'departments', 'read', tenantId)
-      : null
+    const isAdminOrSuperAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin'
+    const access =
+      isAdminOrSuperAdmin
+        ? null
+        : userId
+          ? await getAccessScope(userId, 'departments', 'read', tenantId)
+          : null
     const rows = await departmentService.getDepartments(tenantId, access)
     res.json({ success: true, data: rows })
   } catch (error) {
@@ -28,15 +33,20 @@ export const getDepartments = async (req, res) => {
 }
 
 /**
- * Lấy danh sách departments dạng phẳng (dropdown), theo scope
+ * Lấy danh sách departments dạng phẳng (dropdown), theo scope.
+ * Admin/Super Admin luôn xem toàn bộ (global) để có thể chọn Phòng/Tổ khi thêm/sửa nhân viên.
  */
 export const getDepartmentsFlat = async (req, res) => {
   const tenantId = getTenantId(req)
   const userId = req.user?.id
   try {
-    const access = userId
-      ? await getAccessScope(userId, 'departments', 'read', tenantId)
-      : null
+    const isAdminOrSuperAdmin = req.user?.role === 'admin' || req.user?.role === 'super_admin'
+    const access =
+      isAdminOrSuperAdmin
+        ? null
+        : userId
+          ? await getAccessScope(userId, 'departments', 'read', tenantId)
+          : null
     const rows = await departmentService.getDepartmentsFlat(tenantId, access)
     res.json({ success: true, data: rows })
   } catch (error) {
@@ -75,7 +85,28 @@ export const getDepartmentById = async (req, res) => {
 }
 
 /**
- * Tạo department mới (cùng tenant, parent phải cùng tenant)
+ * Lấy level_order từ tên cấp (organization_levels) theo tenant
+ */
+async function getLevelOrderByLevelName(tenantId, levelName) {
+  if (!levelName || !levelName.trim()) return null
+  const r = await pool.query(
+    'SELECT level_order FROM organization_levels WHERE tenant_id = $1 AND TRIM(level_name) = $2',
+    [tenantId, levelName.trim()]
+  )
+  return r.rows.length > 0 ? r.rows[0].level_order : null
+}
+
+/**
+ * Tính depth từ path (path = "tenantId/id1/id2" -> depth = số id = path.split('/').length - 1)
+ */
+function depthFromPath(path) {
+  if (!path) return 0
+  return Math.max(0, path.split('/').length - 1)
+}
+
+/**
+ * Tạo department mới (cùng tenant, parent phải cùng tenant).
+ * Ràng buộc: Nếu chọn Loại cấp bậc = Cấp K thì đơn vị cha phải ở cấp K-1 (cha phải cao hơn, không bằng hoặc thấp hơn).
  */
 export const createDepartment = async (req, res) => {
   const { name, parent_id, type } = req.body
@@ -88,7 +119,54 @@ export const createDepartment = async (req, res) => {
       })
     }
     const finalType = (type || 'Phòng').trim()
-    if (parent_id) {
+    const levelOrder = await getLevelOrderByLevelName(tenantId, finalType)
+    if (levelOrder != null) {
+      if (levelOrder === 1) {
+        if (parent_id) {
+          return res.status(400).json({
+            success: false,
+            message: 'Cấp bậc Cấp 1 (gốc) phải là đơn vị cấp cao, không được chọn đơn vị cha.'
+          })
+        }
+        const existingRoot = await pool.query(
+          'SELECT id FROM departments WHERE tenant_id = $1 AND parent_id IS NULL LIMIT 1',
+          [tenantId]
+        )
+        if (existingRoot.rows.length > 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Chỉ được có một đơn vị gốc (Cấp 1 - VD: Công ty). Đã tồn tại đơn vị gốc, không thể tạo thêm.'
+          })
+        }
+      } else {
+        if (!parent_id) {
+          return res.status(400).json({
+            success: false,
+            message: `Cấp bậc Cấp ${levelOrder} phải có đơn vị cha thuộc cấp ${levelOrder - 1}.`
+          })
+        }
+        const parentCheck = await pool.query(
+          'SELECT id, path, type FROM departments WHERE id = $1 AND tenant_id = $2',
+          [parent_id, tenantId]
+        )
+        if (parentCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Đơn vị cha không tồn tại hoặc không thuộc tenant của bạn.'
+          })
+        }
+        const parentType = parentCheck.rows[0].type
+        const parentLevelOrder = parentType ? await getLevelOrderByLevelName(tenantId, parentType) : null
+        const requiredParentLevelOrder = levelOrder - 1
+        if (parentLevelOrder == null || parentLevelOrder !== requiredParentLevelOrder) {
+          return res.status(400).json({
+            success: false,
+            message: `Đơn vị cha phải là loại Cấp ${requiredParentLevelOrder} (không thể bằng hoặc thấp hơn Cấp ${levelOrder}).`
+          })
+        }
+      }
+    }
+    if (parent_id && !levelOrder) {
       const parentCheck = await pool.query(
         'SELECT id, path FROM departments WHERE id = $1 AND tenant_id = $2',
         [parent_id, tenantId]
@@ -172,10 +250,58 @@ export const updateDepartment = async (req, res) => {
         message: 'Đơn vị không thể là cha của chính nó.'
       })
     }
-    if (parent_id) {
+    const effectiveType = (type !== undefined ? type : current.type) || 'Phòng'
+    const effectiveParentId = parent_id !== undefined ? parent_id : current.parent_id
+    const levelOrder = await getLevelOrderByLevelName(tenantId, effectiveType.trim())
+    if (levelOrder != null) {
+      if (levelOrder === 1) {
+        if (effectiveParentId) {
+          return res.status(400).json({
+            success: false,
+            message: 'Cấp bậc Cấp 1 (gốc) phải là đơn vị cấp cao, không được chọn đơn vị cha.'
+          })
+        }
+        const otherRoot = await pool.query(
+          'SELECT id FROM departments WHERE tenant_id = $1 AND parent_id IS NULL AND id != $2 LIMIT 1',
+          [tenantId, id]
+        )
+        if (otherRoot.rows.length > 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Chỉ được có một đơn vị gốc (Cấp 1). Đã tồn tại đơn vị gốc khác, không thể đổi thành gốc.'
+          })
+        }
+      } else {
+        if (!effectiveParentId) {
+          return res.status(400).json({
+            success: false,
+            message: `Cấp bậc Cấp ${levelOrder} phải có đơn vị cha thuộc cấp ${levelOrder - 1}.`
+          })
+        }
+        const parentCheck = await pool.query(
+          'SELECT id, path, type FROM departments WHERE id = $1 AND tenant_id = $2',
+          [effectiveParentId, tenantId]
+        )
+        if (parentCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Đơn vị cha không tồn tại hoặc không thuộc tenant của bạn.'
+          })
+        }
+        const parentType = parentCheck.rows[0].type
+        const parentLevelOrder = parentType ? await getLevelOrderByLevelName(tenantId, parentType) : null
+        const requiredParentLevelOrder = levelOrder - 1
+        if (parentLevelOrder == null || parentLevelOrder !== requiredParentLevelOrder) {
+          return res.status(400).json({
+            success: false,
+            message: `Đơn vị cha phải là loại Cấp ${requiredParentLevelOrder} (không thể bằng hoặc thấp hơn Cấp ${levelOrder}).`
+          })
+        }
+      }
+    } else if (effectiveParentId) {
       const parentCheck = await pool.query(
         'SELECT id FROM departments WHERE id = $1 AND tenant_id = $2',
-        [parent_id, tenantId]
+        [effectiveParentId, tenantId]
       )
       if (parentCheck.rows.length === 0) {
         return res.status(400).json({

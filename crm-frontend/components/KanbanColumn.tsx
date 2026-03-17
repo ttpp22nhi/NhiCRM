@@ -9,6 +9,10 @@ interface KanbanColumnProps {
   stage: Stage
   deals: Deal[]
   onEdit: (deal: Deal) => void
+  onViewDetail?: (deal: Deal) => void
+  onCancel?: (deal: Deal, asLost: boolean) => void
+  onDelete?: (deal: Deal) => void
+  canDelete?: (deal: Deal) => boolean
 }
 
 const formatCurrency = (amount: number) => {
@@ -18,7 +22,7 @@ const formatCurrency = (amount: number) => {
   }).format(amount)
 }
 
-export function KanbanColumn({ stage, deals, onEdit }: KanbanColumnProps) {
+export function KanbanColumn({ stage, deals, onEdit, onViewDetail, onCancel, onDelete, canDelete }: KanbanColumnProps) {
   const totalAmount = deals.reduce((sum, deal) => sum + (deal.amount || 0), 0)
   const { setNodeRef, isOver } = useDroppable({ id: stage.id })
 
@@ -47,7 +51,15 @@ export function KanbanColumn({ stage, deals, onEdit }: KanbanColumnProps) {
       <SortableContext id={stage.id} items={deals.map((d) => d.deal_id)} strategy={verticalListSortingStrategy}>
         <div className="space-y-2 min-h-[200px]">
           {deals.map((deal) => (
-            <DealCard key={deal.deal_id} deal={deal} onEdit={onEdit} />
+            <DealCard
+              key={deal.deal_id}
+              deal={deal}
+              onEdit={onEdit}
+              onViewDetail={onViewDetail}
+              onCancel={onCancel}
+              onDelete={onDelete}
+              canDelete={canDelete ? canDelete(deal) : false}
+            />
           ))}
         </div>
       </SortableContext>

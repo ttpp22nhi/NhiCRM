@@ -28,6 +28,10 @@ export const getRolePermissions = async (req, res) => {
       query += ` AND resource = $${idx++}`
       params.push(resource)
     }
+    // Admin (tenant) không được xem phân quyền của vai trò super_admin
+    if (req.user?.role !== 'super_admin') {
+      query += ` AND role_name != 'super_admin'`
+    }
     query += ' ORDER BY role_name, resource, action'
     const result = await pool.query(query, params)
     res.json({ success: true, data: result.rows })
@@ -47,13 +51,17 @@ export const getRolePermissions = async (req, res) => {
 export const getPermissionMatrix = async (req, res) => {
   const tenantId = getTenantId(req)
   try {
-    const result = await pool.query(
-      `SELECT role_name, resource, action, scope
-       FROM role_permissions
-       WHERE tenant_id = $1
-       ORDER BY role_name, resource, action`,
-      [tenantId]
-    )
+    let query = `
+      SELECT role_name, resource, action, scope
+      FROM role_permissions
+      WHERE tenant_id = $1
+    `
+    const params = [tenantId]
+    if (req.user?.role !== 'super_admin') {
+      query += ` AND role_name != 'super_admin'`
+    }
+    query += ' ORDER BY role_name, resource, action'
+    const result = await pool.query(query, params)
     const byRole = {}
     for (const row of result.rows) {
       if (!byRole[row.role_name]) byRole[row.role_name] = []
@@ -81,6 +89,13 @@ export const upsertRolePermission = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'role_name, resource, action, scope là bắt buộc.'
+      })
+    }
+    // Chỉ super_admin được phân quyền cho vai trò super_admin
+    if (role_name === 'super_admin' && req.user?.role !== 'super_admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Chỉ Super Admin mới được cấu hình phân quyền cho vai trò Super Admin.'
       })
     }
     if (!VALID_SCOPES.includes(scope)) {

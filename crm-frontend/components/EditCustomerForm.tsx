@@ -54,11 +54,9 @@ export function EditCustomerForm({ customer, onSuccess, onCancel }: EditCustomer
   const [showEmployeeDropdown, setShowEmployeeDropdown] = useState(false)
   const employeeDropdownRef = useRef<HTMLDivElement>(null)
 
-  // Chỉ load danh sách nhân viên nếu user là admin hoặc manager
+  // Load danh sách nhân viên được phép gán theo phân cấp
   useEffect(() => {
-    if (user && (user.role === 'admin' || user.role === 'manager')) {
-      fetchEmployees()
-    }
+    if (user && user.role !== 'sales') fetchEmployees()
   }, [user])
 
   // Đóng dropdown khi click outside
@@ -78,7 +76,7 @@ export function EditCustomerForm({ customer, onSuccess, onCancel }: EditCustomer
   const fetchEmployees = async () => {
     try {
       setLoadingEmployees(true)
-      const response = await apiClient.get('/api/employees')
+      const response = await apiClient.get('/api/employees/assignable')
       if (response.data.success) {
         setEmployees(response.data.data || [])
       }
@@ -306,8 +304,8 @@ export function EditCustomerForm({ customer, onSuccess, onCancel }: EditCustomer
         </select>
       </div>
 
-      {/* Chỉ hiển thị dropdown nhân viên cho admin/manager */}
-      {user && (user.role === 'admin' || user.role === 'manager') && (
+      {/* Dropdown Assigned To: director/manager/leader (sales không đổi được) */}
+      {user && user.role !== 'sales' && (
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Nhân viên chăm sóc

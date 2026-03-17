@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
 import { CompleteTaskModal } from '@/components/CompleteTaskModal'
+import { CreateTaskModal } from '@/components/CreateTaskModal'
+import { TaskDetailModal } from '@/components/TaskDetailModal'
 import { useAuth } from '@/contexts/AuthContext'
 import { apiClient } from '@/lib/api'
 import {
@@ -18,17 +20,25 @@ import {
   User,
   Phone,
   Trash2,
-  UserCircle
+  UserCircle,
+  Pencil,
+  Eye,
+  ExternalLink
 } from 'lucide-react'
 import Calendar from 'react-calendar'
 import 'react-calendar/dist/Calendar.css'
 import { motion, AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
 import { useAlert } from '@/components/AlertModal'
+import Link from 'next/link'
 
 interface Task {
   task_id: string
   title: string
+  display_code?: string
+  parent_display_code?: string
+  related_type?: string
+  related_id?: string
   customer_id?: string
   customer_full_name?: string
   customer_phone?: string
@@ -53,13 +63,14 @@ export default function TasksPage() {
   const [assignedToFilter, setAssignedToFilter] = useState<string>('')
   const [employees, setEmployees] = useState<any[]>([])
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
+  const [showCreateTaskModal, setShowCreateTaskModal] = useState(false)
+  const [editingTask, setEditingTask] = useState<Task | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [viewingTask, setViewingTask] = useState<Task | null>(null)
 
   useEffect(() => {
     fetchTasks()
-    if (user?.role === 'admin' || user?.role === 'manager') {
-      fetchEmployees()
-    }
+    if (user) fetchEmployees()
   }, [user, assignedToFilter, refreshKey])
 
   useEffect(() => {
@@ -117,9 +128,9 @@ export default function TasksPage() {
 
   const fetchEmployees = async () => {
     try {
-      const response = await apiClient.get('/api/employees')
+      const response = await apiClient.get('/api/employees/assignable')
       if (response.data.success) {
-        setEmployees(response.data.data)
+        setEmployees(response.data.data || [])
       }
     } catch (error) {
       console.error('Lỗi khi lấy danh sách nhân viên:', error)
@@ -248,7 +259,11 @@ export default function TasksPage() {
               <h1 className="text-3xl font-bold text-gray-900">Quản lý công việc</h1>
               <p className="text-gray-600 mt-2">Danh sách công việc và nhiệm vụ</p>
             </div>
-            <button className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition">
+            <button
+              type="button"
+              onClick={() => setShowCreateTaskModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
+            >
               <Plus className="w-5 h-5" />
               <span>Thêm công việc</span>
             </button>
@@ -329,6 +344,9 @@ export default function TasksPage() {
                     >
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex-1">
+                          {task.display_code && (
+                            <span className="text-xs font-medium text-gray-500 block mb-1">{task.display_code}</span>
+                          )}
                           <h3
                             className={`font-semibold text-gray-900 mb-2 ${
                               task.is_completed ? 'line-through' : ''
@@ -352,6 +370,18 @@ export default function TasksPage() {
                             <div className="flex items-center gap-2 text-sm text-primary-600 mt-2 pt-2 border-t border-gray-200">
                               <UserCircle className="w-4 h-4" />
                               <span className="font-medium">Người chăm sóc: {task.assigned_employee_name}</span>
+                            </div>
+                          )}
+                          {(task.related_type === 'DEAL' && (task.parent_display_code || task.related_id)) && (
+                            <div className="mt-2 pt-2 border-t border-gray-200 text-sm text-gray-600">
+                              Công việc này thuộc Cơ hội:{' '}
+                              <Link
+                                href={`/deals?openDealId=${task.related_id}`}
+                                className="inline-flex items-center gap-1 text-[#0074BD] font-medium hover:underline"
+                              >
+                                [{task.parent_display_code || task.related_id}]
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </Link>
                             </div>
                           )}
                         </div>
@@ -390,8 +420,26 @@ export default function TasksPage() {
                           </span>
                         )}
                         <button
+                          type="button"
+                          onClick={() => setViewingTask(task)}
+                          className="p-2 text-gray-500 hover:text-[#0074BD] hover:bg-gray-100 rounded-lg transition"
+                          title="Xem chi tiết"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingTask(task)}
+                          className="p-2 text-gray-500 hover:text-[#0074BD] hover:bg-gray-100 rounded-lg transition"
+                          title="Sửa"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => handleDeleteTask(task.task_id)}
                           className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+                          title="Xóa"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -450,6 +498,9 @@ export default function TasksPage() {
                               key={task.task_id}
                               className="p-3 bg-gray-50 rounded-lg border border-gray-200"
                             >
+                              {task.display_code && (
+                                <p className="text-xs text-gray-500 mb-0.5">{task.display_code}</p>
+                              )}
                               <p className="font-medium text-sm text-gray-900">{task.title}</p>
                               {task.assigned_employee_name && (
                                 <p className="text-xs text-primary-600 mt-1 flex items-center gap-1">
@@ -483,6 +534,42 @@ export default function TasksPage() {
             </div>
           )}
         </div>
+
+        {/* Create Task Modal */}
+        {showCreateTaskModal && !editingTask && (
+          <CreateTaskModal
+            onClose={() => setShowCreateTaskModal(false)}
+            onSuccess={() => setRefreshKey((prev) => prev + 1)}
+            employees={employees}
+            userRole={user?.role}
+          />
+        )}
+
+        {/* Edit Task Modal */}
+        {editingTask && (
+          <CreateTaskModal
+            task={editingTask}
+            onClose={() => setEditingTask(null)}
+            onSuccess={() => {
+              setEditingTask(null)
+              setRefreshKey((prev) => prev + 1)
+            }}
+            employees={employees}
+            userRole={user?.role}
+          />
+        )}
+
+        {/* Task Detail Modal (xem chi tiết + link Cơ hội) */}
+        {viewingTask && (
+          <TaskDetailModal
+            task={viewingTask}
+            onClose={() => setViewingTask(null)}
+            onOpenDeal={(dealId) => {
+              setViewingTask(null)
+              window.location.href = `/deals?openDealId=${dealId}`
+            }}
+          />
+        )}
 
         {/* Complete Task Modal */}
         {completingTaskId && (

@@ -74,7 +74,7 @@ export const createInteraction = async (req, res) => {
 
     if (deal_id) {
       const dealCheck = await pool.query(
-        'SELECT deal_id FROM deals WHERE deal_id = $1 AND tenant_id = $2',
+        'SELECT deal_id FROM deals WHERE deal_id = $1 AND tenant_id = $2 AND (COALESCE(is_deleted, false) = false)',
         [deal_id, tenantId]
       )
       if (dealCheck.rows.length === 0) {

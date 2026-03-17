@@ -1,6 +1,6 @@
-
 import pg from 'pg';
 import dotenv from 'dotenv';
+import { getSchema, getSchemaForSql } from './config/schema.js';
 
 dotenv.config();
 
@@ -8,7 +8,8 @@ const { Pool } = pg;
 
 /**
  * Cấu hình kết nối Database
- * Sử dụng Pool để tối ưu hóa hiệu suất và quản lý kết nối đồng thời
+ * Sử dụng Pool để tối ưu hóa hiệu suất và quản lý kết nối đồng thời.
+ * search_path được set theo DB_SCHEMA (mặc định: public) để scale theo schema.
  */
 const pool = new Pool({
   user: process.env.DB_USER,
@@ -16,12 +17,17 @@ const pool = new Pool({
   database: process.env.DB_NAME,
   password: process.env.DB_PASSWORD,
   port: parseInt(process.env.DB_PORT || '5432', 10),
-  // Cấu hình bổ sung nếu cần (ví dụ: SSL cho production)
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
-pool.on('connect', () => {
-  console.log('✅ Đã kết nối thành công tới cơ sở dữ liệu PostgreSQL');
+pool.on('connect', (client) => {
+  const schema = getSchemaForSql();
+  client.query(`SET search_path TO ${schema}`).catch((err) => {
+    console.error('❌ Set search_path:', err.message);
+  });
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('✅ Đã kết nối PostgreSQL, search_path =', getSchema());
+  }
 });
 
 pool.on('error', (err) => {

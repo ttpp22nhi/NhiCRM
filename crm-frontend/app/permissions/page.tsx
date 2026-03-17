@@ -37,7 +37,7 @@ const SCOPES = [
   { id: 'global', label: 'Toàn công ty' }
 ]
 
-const ROLES = ['super_admin', 'admin', 'director', 'manager', 'leader', 'sales']
+const ALL_ROLES = ['super_admin', 'admin', 'director', 'manager', 'leader', 'sales']
 
 export default function PermissionsPage() {
   const { user } = useAuth()
@@ -51,6 +51,9 @@ export default function PermissionsPage() {
     router.push('/dashboard')
     return null
   }
+
+  // Chỉ super_admin được xem và phân quyền cho vai trò super_admin; admin chỉ thấy các vai trò còn lại
+  const ROLES = user?.role === 'super_admin' ? ALL_ROLES : ALL_ROLES.filter((r) => r !== 'super_admin')
 
   useEffect(() => {
     fetchPermissions()

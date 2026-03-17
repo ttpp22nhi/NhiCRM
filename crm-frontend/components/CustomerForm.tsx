@@ -11,6 +11,7 @@ interface Employee {
   employee_id: string
   full_name: string
   username: string
+  email?: string
   role: string
 }
 
@@ -54,11 +55,9 @@ export function CustomerForm({ onSuccess, onCancel }: CustomerFormProps) {
   const debouncedPhone = useDebounce(formData.phone, 500)
   const debouncedTaxCode = useDebounce(formData.tax_code, 500)
 
-  // Chỉ load danh sách nhân viên nếu user là admin hoặc manager
+  // Load danh sách nhân viên được phép gán theo phân cấp (director/manager/leader = dropdown; sales = chỉ mình)
   useEffect(() => {
-    if (user && (user.role === 'admin' || user.role === 'manager')) {
-      fetchEmployees()
-    }
+    if (user) fetchEmployees()
   }, [user])
 
   // Đóng dropdown khi click outside
@@ -130,12 +129,13 @@ export function CustomerForm({ onSuccess, onCancel }: CustomerFormProps) {
   }, [debouncedPhone, debouncedTaxCode])
 
   const fetchEmployees = async () => {
+    if (!user) return
     try {
       setLoadingEmployees(true)
-      const response = await apiClient.get('/api/employees')
+      const response = await apiClient.get('/api/employees/assignable')
       if (response.data.success) {
-        setEmployees(response.data.data || [])
-        // Nếu chưa chọn, mặc định là chính mình
+        const list = response.data.data || []
+        setEmployees(list)
         if (!formData.assigned_to && user) {
           setFormData(prev => ({ ...prev, assigned_to: user.id }))
         }
@@ -447,8 +447,8 @@ export function CustomerForm({ onSuccess, onCancel }: CustomerFormProps) {
           </>
         )}
 
-        {/* Chỉ hiển thị trường chọn nhân viên cho admin/manager */}
-        {(user?.role === 'admin' || user?.role === 'manager') && (
+        {/* Dropdown Assigned To: director/admin = toàn bộ; manager/leader = theo cấp; sales = chỉ mình (ẩn dropdown, gán tự động) */}
+        {user?.role !== 'sales' && (
           <div className="md:col-span-2" ref={employeeDropdownRef}>
             <label htmlFor="assigned_to" className="block text-sm font-medium text-gray-700 mb-2">
               Nhân viên chăm sóc

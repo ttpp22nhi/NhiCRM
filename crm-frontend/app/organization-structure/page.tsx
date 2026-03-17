@@ -55,6 +55,11 @@ export default function OrganizationStructurePage() {
       toast.error('Tên cấp bậc không được để trống')
       return
     }
+    const nameLower = editValue.trim().toLowerCase()
+    if (levels.some((l) => l.id !== id && (l.level_name || '').trim().toLowerCase() === nameLower)) {
+      toast.error('Tên cấp bậc đã tồn tại')
+      return
+    }
     setSaving(true)
     try {
       await apiClient.put(`/api/organization-levels/${id}`, { level_name: editValue.trim() })
@@ -77,6 +82,11 @@ export default function OrganizationStructurePage() {
     e.preventDefault()
     if (!newLevelName.trim()) {
       toast.error('Tên cấp bậc không được để trống')
+      return
+    }
+    const nameLower = newLevelName.trim().toLowerCase()
+    if (levels.some((l) => (l.level_name || '').trim().toLowerCase() === nameLower)) {
+      toast.error('Tên cấp bậc đã tồn tại')
       return
     }
     setSaving(true)
@@ -154,7 +164,7 @@ export default function OrganizationStructurePage() {
               <div>
                 <h2 className="font-semibold text-gray-900">Các cấp bậc (từ gốc xuống)</h2>
                 <p className="text-xs text-gray-500 mt-1">
-                  Cấp 1 = đơn vị gốc, Cấp 2 = con trực tiếp của gốc, ...
+                  Cấp 1 = gốc (chỉ sửa tên; không đổi thứ tự hay xóa). Cấp 2 = con trực tiếp của gốc, ...
                 </p>
               </div>
               <button
@@ -171,70 +181,78 @@ export default function OrganizationStructurePage() {
               </div>
             ) : (
               <ul className="divide-y divide-gray-200">
-                {levels.map((item, idx) => (
-                  <li key={item.id} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50 group">
-                    <div className="flex items-center gap-4">
-                      <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-primary-100 text-primary-700 font-semibold text-sm flex-shrink-0">
-                        {item.level_order}
-                      </span>
-                      {editingId === item.id ? (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            value={editValue}
-                            onChange={(e) => setEditValue(e.target.value)}
-                            className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500"
-                            placeholder="VD: Phòng, Tổ"
-                            autoFocus
-                          />
-                          <button
-                            onClick={() => handleSave(item.id)}
-                            disabled={saving}
-                            className="p-2 text-green-600 hover:bg-green-50 rounded"
-                          >
-                            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="font-medium text-gray-900">{item.level_name}</span>
-                      )}
-                    </div>
-                    {editingId !== item.id && (
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleMove(item.id, 'up')}
-                          disabled={idx === 0}
-                          className="p-2 text-gray-500 hover:text-primary-600 hover:bg-gray-100 rounded disabled:opacity-40 disabled:cursor-not-allowed"
-                          title="Lên trên"
-                        >
-                          <ChevronUp className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleMove(item.id, 'down')}
-                          disabled={idx === levels.length - 1}
-                          className="p-2 text-gray-500 hover:text-primary-600 hover:bg-gray-100 rounded disabled:opacity-40 disabled:cursor-not-allowed"
-                          title="Xuống dưới"
-                        >
-                          <ChevronDown className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => startEdit(item)}
-                          className="p-2 text-gray-500 hover:text-primary-600 hover:bg-gray-100 rounded"
-                          title="Sửa tên"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(item)}
-                          className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded"
-                          title="Xóa"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                {levels.map((item, idx) => {
+                  const isRoot = idx === 0
+                  return (
+                    <li key={item.id} className={`flex items-center justify-between px-4 py-3 hover:bg-gray-50 group ${isRoot ? 'bg-gray-50/50' : ''}`}>
+                      <div className="flex items-center gap-4">
+                        <span className="inline-flex items-center justify-center w-8 h-8 rounded-full bg-primary-100 text-primary-700 font-semibold text-sm flex-shrink-0">
+                          {item.level_order}
+                        </span>
+                        {isRoot && (
+                          <span className="text-xs font-medium text-gray-500 bg-gray-200 px-2 py-0.5 rounded">Gốc</span>
+                        )}
+                        {editingId === item.id ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500"
+                              placeholder="VD: Công ty, Phòng"
+                              autoFocus
+                            />
+                            <button
+                              onClick={() => handleSave(item.id)}
+                              disabled={saving}
+                              className="p-2 text-green-600 hover:bg-green-50 rounded"
+                            >
+                              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="font-medium text-gray-900">{item.level_name}</span>
+                        )}
                       </div>
-                    )}
-                  </li>
-                ))}
+                      {editingId !== item.id && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => handleMove(item.id, 'up')}
+                            disabled={isRoot || idx === 0}
+                            className="p-2 text-gray-500 hover:text-primary-600 hover:bg-gray-100 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+                            title={isRoot ? 'Cấp gốc không đổi thứ tự' : 'Lên trên'}
+                          >
+                            <ChevronUp className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleMove(item.id, 'down')}
+                            disabled={isRoot || idx === levels.length - 1}
+                            className="p-2 text-gray-500 hover:text-primary-600 hover:bg-gray-100 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+                            title={isRoot ? 'Cấp gốc không đổi thứ tự' : 'Xuống dưới'}
+                          >
+                            <ChevronDown className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => startEdit(item)}
+                            className="p-2 text-gray-500 hover:text-primary-600 hover:bg-gray-100 rounded"
+                            title="Sửa tên"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          {!isRoot && (
+                            <button
+                              onClick={() => handleDelete(item)}
+                              className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded"
+                              title="Xóa"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>

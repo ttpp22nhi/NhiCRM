@@ -2,20 +2,35 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import { register, login, changePassword, getEmployees, getSalesEmployees, getEmployeeById, resetPassword, updateEmployee, transferCustomers, getTransferStats } from './controllers/authController.js';
+import { register, login, changePassword, getEmployees, getSalesEmployees, getAssignableEmployeesList, getEmployeeById, resetPassword, updateEmployee, transferCustomers, getTransferStats } from './controllers/authController.js';
 import { verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, verifySuperAdmin } from './middleware/auth.js';
 import { createCustomer, getCustomers, updateCustomer, deleteCustomer, checkDuplicateCustomer, bulkTransferCustomers, getCustomerOwnershipHistory } from './controllers/customerController.js';
 import { createInteraction, getInteractionsByCustomer } from './controllers/interactionController.js';
-import { getDashboardStats } from './controllers/dashboardController.js';
-import { getTasks, createTask, updateTask, deleteTask } from './controllers/taskController.js';
+import {
+  getDashboardStats,
+  getDashboardAnalytics,
+  getEmployeeKpiReport,
+  getSalesForecastReport,
+  getEmployeePerformanceReport,
+  getLossAnalysisReport,
+  getTaskActivityLogReport,
+  getDashboardEmployeeBreakdown,
+  getDashboardDepartmentBreakdown,
+  getDashboardEmployeeDetail
+} from './controllers/dashboardController.js';
+import { getTasks, getTaskById, getTaskByDisplayCode, createTask, updateTask, deleteTask } from './controllers/taskController.js';
 import { getNotifications, markAsRead, markAllAsRead } from './controllers/notificationController.js';
 import { createTransferRequest, getPendingTransferRequests, approveTransferRequest, getMyTransferRequests, checkCustomerPendingTransfer, getApprovalLogs } from './controllers/transferController.js';
-import { getDeals, createDeal, updateDeal } from './controllers/dealsController.js';
+import { getDeals, createDeal, updateDeal, deleteDeal, approveDeal, getDealsTrash, restoreDeal } from './controllers/dealsController.js';
+import { getPipelineStages } from './controllers/pipelineStagesController.js';
+import { getDealActivities, addDealNote, getDealAttachments, uploadDealAttachment, downloadDealAttachment, getPreviewUrl, streamPreview, loadAttachmentForReplace, replaceDealAttachment, deleteDealAttachment } from './controllers/dealActivitiesController.js';
+import { uploadDealFile, uploadDealFileReplace } from './middleware/uploadDealFile.js';
 import { getDepartments, getDepartmentsFlat, getDepartmentById, createDepartment, updateDepartment, deleteDepartment } from './controllers/departmentController.js';
 import { getRolePermissions, getPermissionMatrix, upsertRolePermission } from './controllers/permissionController.js';
 import { getOrganizationLevels, updateOrganizationLevel, createOrganizationLevel, deleteOrganizationLevel, moveOrganizationLevel } from './controllers/organizationLevelController.js';
 import { getTenants, getTenantById, createTenant, updateTenant, getMySubscription } from './controllers/tenantController.js';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger.js';
+import './listeners/dealStageChangedListener.js'; // Đăng ký listener event-driven (deal stage → auto task)
 
 // Tải biến môi trường
 dotenv.config();
@@ -45,6 +60,22 @@ app.use('/api-docs', swaggerServe, swaggerSetup(swaggerSpec, {
   customCss: '.swagger-ui .topbar { display: none }',
   customSiteTitle: 'CRM MobiFone API Documentation'
 }));
+
+/**
+ * Swagger JSON
+ * @swagger
+ * /swagger.json:
+ *   get:
+ *     summary: Swagger OpenAPI JSON
+ *     tags: [Documentation]
+ *     responses:
+ *       200:
+ *         description: OpenAPI specification in JSON
+ */
+app.get('/swagger.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.status(200).send(swaggerSpec);
+});
 
 /**
  * PUBLIC ROUTES
@@ -171,6 +202,8 @@ app.post('/api/auth/change-password', verifyToken, extractTenant, requireTenant,
  */
 app.get('/api/employees', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getEmployees);
 
+app.get('/api/employees/assignable', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getAssignableEmployeesList);
+
 /**
  * @swagger
  * /api/departments:
@@ -201,7 +234,7 @@ app.get('/api/departments', verifyToken, extractTenant, requireTenant, checkTena
  *       200:
  *         description: Danh sách departments
  */
-app.get('/api/departments/flat', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getDepartmentsFlat);
+app.get('/api/departments/flat', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDepartmentsFlat);
 
 /**
  * @swagger
@@ -685,6 +718,15 @@ app.get('/api/interactions/customer/:customerId', verifyToken, extractTenant, re
  *       - bearerAuth: []
  */
 app.get('/api/dashboard/stats', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDashboardStats);
+app.get('/api/dashboard/analytics', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDashboardAnalytics);
+app.get('/api/dashboard/employee-kpi-report', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getEmployeeKpiReport);
+app.get('/api/dashboard/breakdown/employees', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDashboardEmployeeBreakdown);
+app.get('/api/dashboard/breakdown/departments', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDashboardDepartmentBreakdown);
+app.get('/api/dashboard/employee-detail', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDashboardEmployeeDetail);
+app.get('/api/reports/sales-forecast', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getSalesForecastReport);
+app.get('/api/reports/employee-performance', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getEmployeePerformanceReport);
+app.get('/api/reports/loss-analysis', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getLossAnalysisReport);
+app.get('/api/reports/task-activity-log', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getTaskActivityLogReport);
 
 /** Thông tin gói dịch vụ tenant (end_date, expired, days_remaining) cho UI banner/disable nút */
 app.get('/api/tenant/subscription', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getMySubscription);
@@ -699,6 +741,8 @@ app.get('/api/tenant/subscription', verifyToken, extractTenant, requireTenant, c
  *       - bearerAuth: []
  */
 app.get('/api/tasks', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getTasks);
+app.get('/api/tasks/by-display-code', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getTaskByDisplayCode);
+app.get('/api/tasks/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getTaskById);
 
 /**
  * @swagger
@@ -743,6 +787,8 @@ app.delete('/api/tasks/:id', verifyToken, extractTenant, requireTenant, checkTen
  *       - bearerAuth: []
  */
 app.get('/api/deals', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDeals);
+app.get('/api/pipeline-stages', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getPipelineStages);
+app.get('/api/deals/trash', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getDealsTrash);
 
 /**
  * @swagger
@@ -765,6 +811,18 @@ app.post('/api/deals', verifyToken, extractTenant, requireTenant, checkTenantSub
  *       - bearerAuth: []
  */
 app.patch('/api/deals/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, updateDeal);
+app.post('/api/deals/:id/approve', verifyToken, extractTenant, requireTenant, checkTenantSubscription, approveDeal);
+app.delete('/api/deals/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, deleteDeal);
+app.post('/api/deals/:id/restore', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, restoreDeal);
+app.get('/api/deals/:id/activities', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDealActivities);
+app.post('/api/deals/:id/activities', verifyToken, extractTenant, requireTenant, checkTenantSubscription, addDealNote);
+app.get('/api/deals/:id/attachments', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDealAttachments);
+app.post('/api/deals/:id/upload', verifyToken, extractTenant, requireTenant, checkTenantSubscription, uploadDealFile, uploadDealAttachment);
+app.get('/api/deals/download/:fileId', verifyToken, extractTenant, requireTenant, checkTenantSubscription, downloadDealAttachment);
+app.get('/api/deals/attachments/:fileId/preview-url', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getPreviewUrl);
+app.get('/api/deals/attachments/:fileId/preview', streamPreview);
+app.patch('/api/deals/attachments/:fileId', verifyToken, extractTenant, requireTenant, checkTenantSubscription, loadAttachmentForReplace, uploadDealFileReplace, replaceDealAttachment);
+app.delete('/api/deals/attachments/:fileId', verifyToken, extractTenant, requireTenant, checkTenantSubscription, deleteDealAttachment);
 
 /**
  * @swagger

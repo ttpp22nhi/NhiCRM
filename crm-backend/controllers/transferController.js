@@ -428,6 +428,7 @@ export const approveTransferRequest = async (req, res) => {
          INNER JOIN public.customers c ON d.customer_id = c.customer_id
          WHERE c.customer_id IN (${customerPlaceholders2})
          AND c.tenant_id = $${customer_ids.length + 1} AND c.deleted_at IS NULL
+         AND (COALESCE(d.is_deleted, false) = false)
          AND d.stage NOT IN ('closed_won', 'closed_lost', 'Thành công', 'Thất bại')`,
         [...customer_ids, tenantId]
       );

@@ -50,6 +50,30 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
 
   const isAdmin = user?.role === 'admin' || user?.role === 'super_admin'
 
+  const getRoleLabel = (role: string) => {
+    switch (role) {
+      case 'super_admin': return 'Super Admin'
+      case 'admin': return 'Quản trị viên'
+      case 'director': return 'Giám đốc'
+      case 'manager': return 'Quản lý'
+      case 'leader': return 'Tổ trưởng'
+      case 'sales': return 'Nhân viên bán hàng'
+      default: return role
+    }
+  }
+
+  const getRoleBadgeClass = (role: string) => {
+    switch (role) {
+      case 'super_admin': return 'bg-red-100 text-red-800'
+      case 'admin': return 'bg-purple-100 text-purple-800'
+      case 'director':
+      case 'manager': return 'bg-indigo-100 text-indigo-800'
+      case 'leader': return 'bg-cyan-100 text-cyan-800'
+      case 'sales':
+      default: return 'bg-blue-100 text-blue-800'
+    }
+  }
+
   useEffect(() => {
     fetchEmployees()
   }, [refreshKey])
@@ -263,32 +287,14 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
                   </div>
                 </td>
                 <td className="px-3 py-3">
-                  <span className={`px-2 py-1 inline-flex text-xs leading-4 font-semibold rounded-full ${
-                    employee.role === 'admin' 
-                      ? 'bg-purple-100 text-purple-800' 
-                      : employee.role === 'manager'
-                      ? 'bg-indigo-100 text-indigo-800'
-                      : 'bg-blue-100 text-blue-800'
-                  }`}>
-                    {employee.role === 'admin' ? (
-                      <>
-                        <Shield className="w-3 h-3 mr-1 flex-shrink-0" />
-                        <span className="hidden sm:inline">Quản trị viên</span>
-                        <span className="sm:hidden">Admin</span>
-                      </>
-                    ) : employee.role === 'manager' ? (
-                      <>
-                        <Shield className="w-3 h-3 mr-1 flex-shrink-0" />
-                        <span className="hidden sm:inline">Quản lý</span>
-                        <span className="sm:hidden">QL</span>
-                      </>
-                    ) : (
-                      <>
-                        <UserCheck className="w-3 h-3 mr-1 flex-shrink-0" />
-                        <span className="hidden sm:inline">Nhân viên bán hàng</span>
-                        <span className="sm:hidden">Sales</span>
-                      </>
+                  <span className={`px-2 py-1 inline-flex text-xs leading-4 font-semibold rounded-full ${getRoleBadgeClass(employee.role)}`}>
+                    {(employee.role === 'admin' || employee.role === 'super_admin') && (
+                      <Shield className="w-3 h-3 mr-1 flex-shrink-0" />
                     )}
+                    <span className="hidden sm:inline">{getRoleLabel(employee.role)}</span>
+                    <span className="sm:hidden">
+                      {employee.role === 'admin' || employee.role === 'super_admin' ? 'Admin' : employee.role === 'manager' ? 'QL' : employee.role === 'director' ? 'GĐ' : employee.role === 'leader' ? 'TT' : 'Sales'}
+                    </span>
                   </span>
                 </td>
                 <td className="px-3 py-3">

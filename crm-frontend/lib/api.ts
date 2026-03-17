@@ -9,13 +9,18 @@ export const apiClient = axios.create({
   },
 })
 
-// Request: Super Admin đã chọn tenant thì gửi X-Tenant-Id để backend dùng
+// Request: luôn gắn token từ localStorage (tránh race khi reload: request gửi trước khi AuthContext restore xong)
+// và Super Admin đã chọn tenant thì gửi X-Tenant-Id
 apiClient.interceptors.request.use((config) => {
   if (typeof window !== 'undefined') {
     try {
-      const stored = localStorage.getItem('user')
-      if (stored) {
-        const u = JSON.parse(stored)
+      const storedToken = localStorage.getItem('token')
+      if (storedToken) {
+        config.headers.Authorization = `Bearer ${storedToken}`
+      }
+      const storedUser = localStorage.getItem('user')
+      if (storedUser) {
+        const u = JSON.parse(storedUser)
         if (u?.role === 'super_admin' && u?.tenant_id) {
           config.headers['X-Tenant-Id'] = u.tenant_id
         }

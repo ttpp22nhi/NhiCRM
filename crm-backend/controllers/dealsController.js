@@ -2,67 +2,69 @@ import pool from '../database.js'
 import { v4 as uuidv4 } from 'uuid'
 import { getTenantId } from '../utils/tenantHelper.js'
 import { getAccessScope, buildDealFilter } from '../services/permissionService.js'
+import * as dealService from '../services/dealService.js'
+import centralEmitter, { EVENT_DEAL_STAGE_CHANGED } from '../events/eventEmitter.js'
+import { syncDealTasksWithDeal } from '../services/dealMetadataService.js'
+import { generateDisplayCode } from '../services/displayCodeService.js'
+import * as pipelineStagesService from '../services/pipelineStagesService.js'
+import { getAssignableEmployeeIds } from '../services/assignableEmployeesService.js'
 
 /**
- * Lấy danh sách deals
- * Phân quyền động: getAccessScope(userId, 'deals', 'read')
+ * Lấy danh sách Leader/Manager có quyền phê duyệt deal của nhân viên (cùng phòng hoặc cấp trên theo path)
+ */
+async function getApproversForEmployee(tenantId, employeeId) {
+  const emp = await pool.query(
+    'SELECT department_id FROM employees WHERE employee_id = $1 AND tenant_id = $2 AND is_active = TRUE',
+    [employeeId, tenantId]
+  )
+  if (!emp.rows.length || !emp.rows[0].department_id) return []
+  const deptId = emp.rows[0].department_id
+  const leaders = await pool.query(
+    `SELECT employee_id FROM employees
+     WHERE tenant_id = $1 AND department_id = $2 AND is_active = TRUE AND role IN ('leader', 'manager')`,
+    [tenantId, deptId]
+  )
+  return (leaders.rows || []).map((r) => r.employee_id)
+}
+
+/**
+ * Lấy danh sách deals – Full Visibility (DealService.getDeals)
+ * Tenant isolation + role-based scope: admin/director = toàn tenant; manager = theo department path; staff = assigned_to = user
+ * Search & filter: stage, status, confidence_level, deal_category, dates vẫn hoạt động.
  */
 export const getDeals = async (req, res) => {
-  const { id: userId } = req.user
-  const { customer_id, assigned_to, stage, status } = req.query
+  const { id: userId, role } = req.user
+  const {
+    customer_id,
+    assigned_to,
+    stage,
+    status,
+    from_date,
+    to_date,
+    created_from,
+    created_to,
+    deal_category,
+    confidence_level
+  } = req.query
 
   try {
     const tenantId = getTenantId(req)
-    const access = await getAccessScope(userId, 'deals', 'read', tenantId)
-    const { clause: accessClause, params: accessParams, paramIndex: paramIndexAfter } = buildDealFilter(access, 2)
-
-    let params = [tenantId, ...accessParams]
-    let paramIndex = paramIndexAfter
-
-    let query = `
-      SELECT 
-        d.*,
-        c.full_name as customer_full_name,
-        c.phone as customer_phone,
-        c.customer_id,
-        e.full_name as assigned_employee_name,
-        e.username as assigned_employee_username
-      FROM deals d
-      LEFT JOIN customers c ON d.customer_id = c.customer_id AND c.deleted_at IS NULL AND c.tenant_id = d.tenant_id
-      LEFT JOIN employees e ON d.assigned_to = e.employee_id
-      WHERE d.tenant_id = $1 AND (${accessClause})
-    `
-
-    if (assigned_to) {
-      query += ` AND d.assigned_to = $${paramIndex++}`
-      params.push(assigned_to)
+    const filters = {
+      customer_id: customer_id || undefined,
+      assigned_to: assigned_to || undefined,
+      stage: stage || undefined,
+      status: status || undefined,
+      from_date: from_date || undefined,
+      to_date: to_date || undefined,
+      created_from: created_from || undefined,
+      created_to: created_to || undefined,
+      deal_category: deal_category || undefined,
+      confidence_level: confidence_level || undefined
     }
-
-    // Filter theo customer_id
-    if (customer_id) {
-      query += ` AND d.customer_id = $${paramIndex++}`
-      params.push(customer_id)
-    }
-
-    // Filter theo stage
-    if (stage) {
-      query += ` AND d.stage = $${paramIndex++}`
-      params.push(stage)
-    }
-
-    // Filter theo status
-    if (status) {
-      query += ` AND d.status = $${paramIndex++}`
-      params.push(status)
-    }
-
-    query += ' ORDER BY d.expected_closing_date ASC NULLS LAST, d.created_at DESC'
-
-    const result = await pool.query(query, params)
-
+    const rows = await dealService.getDeals(tenantId, userId, role || 'sales', filters)
     res.json({
       success: true,
-      data: result.rows
+      data: rows
     })
   } catch (error) {
     console.error('Lỗi getDeals:', error)
@@ -77,14 +79,30 @@ export const getDeals = async (req, res) => {
 /**
  * Tạo deal mới
  */
+const DEAL_CATEGORIES = ['MASS', 'PROJECT']
+
+const CONFIDENCE_LEVELS = ['high', 'medium', 'low']
+
+/** Deal giá trị > 500 triệu do Sales tạo → trạng thái pending_approval, cần Leader/Manager phê duyệt */
+const APPROVAL_THRESHOLD_AMOUNT = 500_000_000
+
 export const createDeal = async (req, res) => {
   const { role, id: userId } = req.user
-  const { customer_id, title, amount, stage, expected_closing_date, assigned_to } = req.body
+  const { customer_id, title, amount, stage, expected_closing_date, assigned_to, product_name, quantity, invoice_info, notes, deal_category: bodyCategory, confidence_level: bodyConfidence, confidence_note: bodyConfidenceNote } = req.body
   const tenantId = getTenantId(req)
+  const dealCategory = DEAL_CATEGORIES.includes(bodyCategory) ? bodyCategory : 'MASS'
+  const confidenceLevel = CONFIDENCE_LEVELS.includes(bodyConfidence) ? bodyConfidence : 'medium'
+  const confidenceNote = bodyConfidenceNote != null && String(bodyConfidenceNote).trim() ? String(bodyConfidenceNote).trim() : null
 
   try {
     if (!title) {
       return res.status(400).json({ success: false, message: 'Tiêu đề deal là bắt buộc.' })
+    }
+    if (confidenceLevel === 'low' && !confidenceNote) {
+      return res.status(400).json({
+        success: false,
+        message: 'Khi mức độ tự tin là "Khả năng thất bại cao" (Đỏ), bắt buộc nhập ghi chú lý do.'
+      })
     }
 
     if (customer_id) {
@@ -112,15 +130,20 @@ export const createDeal = async (req, res) => {
       if (employeeCheck.rows.length === 0) {
         return res.status(404).json({ success: false, message: 'Nhân viên được gán không tồn tại hoặc không thuộc đơn vị của bạn.' })
       }
+      const allowedIds = await getAssignableEmployeeIds(tenantId, userId, role)
+      if (!allowedIds.includes(finalAssignedTo)) {
+        return res.status(403).json({ success: false, message: 'Bạn không được phép gán deal cho nhân viên này (vượt quyền phân cấp).' })
+      }
     }
 
-    // Validate stage
-    const validStages = ['tiep_can', 'tu_van', 'bao_gia', 'thuong_thao', 'thanh_cong']
-    const finalStage = stage || 'tiep_can'
-    if (!validStages.includes(finalStage)) {
+    // Validate stage theo pipeline của deal_category
+    const stagesForCategory = await pipelineStagesService.getStagesByCategory(tenantId, dealCategory)
+    const validStageIds = stagesForCategory.map((s) => s.id)
+    const finalStage = stage || validStageIds[0] || 'tiep_can'
+    if (!validStageIds.includes(finalStage)) {
       return res.status(400).json({
         success: false,
-        message: 'Giai đoạn deal không hợp lệ.'
+        message: 'Giai đoạn deal không hợp lệ cho loại hình này.'
       })
     }
 
@@ -147,18 +170,58 @@ export const createDeal = async (req, res) => {
 
     const dealId = uuidv4()
     const now = Date.now()
+    const qty = quantity != null && quantity !== '' ? parseFloat(quantity) : null
+    const productName = product_name && String(product_name).trim() ? String(product_name).trim() : null
+    const invoiceInfo = invoice_info && String(invoice_info).trim() ? String(invoice_info).trim() : null
+    const notesVal = notes && String(notes).trim() ? String(notes).trim() : null
+
+    const displayCode = await generateDisplayCode('DEAL', tenantId)
+
+    // Sales tạo deal > 500 triệu → chờ phê duyệt (Leader/Manager mới vào Pipeline)
+    let initialStatus = 'active'
+    if (role === 'sales' && finalAmount > APPROVAL_THRESHOLD_AMOUNT) {
+      initialStatus = 'pending_approval'
+    }
 
     const insertQuery = `
       INSERT INTO deals (
         deal_id, customer_id, title, amount, stage, status,
-        expected_closing_date, assigned_to, tenant_id, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        expected_closing_date, assigned_to, tenant_id, created_at, updated_at,
+        product_name, quantity, invoice_info, notes, display_code, deal_category,
+        confidence_level, confidence_note
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
       RETURNING *
     `
-    const result = await pool.query(insertQuery, [
-      dealId, customer_id || null, title.trim(), finalAmount, finalStage, 'active',
-      finalExpectedClosingDate, finalAssignedTo, tenantId, now, now
+    await pool.query(insertQuery, [
+      dealId, customer_id || null, title.trim(), finalAmount, finalStage, initialStatus,
+      finalExpectedClosingDate, finalAssignedTo, tenantId, now, now,
+      productName, qty, invoiceInfo, notesVal, displayCode, dealCategory,
+      confidenceLevel, confidenceNote
     ])
+
+    if (initialStatus === 'pending_approval') {
+      try {
+        const approvers = await getApproversForEmployee(tenantId, finalAssignedTo)
+        const amountFmt = new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(finalAmount)
+        for (const approverId of approvers) {
+          await pool.query(
+            `INSERT INTO notifications (notification_id, employee_id, type, title, message, is_read, tenant_id, created_at)
+             VALUES ($1, $2, $3, $4, $5, false, $6, $7)`,
+            [
+              uuidv4(),
+              approverId,
+              'deal_pending_approval',
+              'Deal cần phê duyệt',
+              `Deal "${title.trim()}" (${amountFmt}) do nhân viên tạo đang chờ phê duyệt để vào Pipeline.`,
+              tenantId,
+              now
+            ]
+          )
+        }
+      } catch (notifErr) {
+        console.error('Lỗi gửi thông báo phê duyệt deal:', notifErr)
+      }
+    }
 
     // Lấy thông tin đầy đủ với JOIN
     const fullQuery = `
@@ -175,11 +238,14 @@ export const createDeal = async (req, res) => {
     `
 
     const fullResult = await pool.query(fullQuery, [dealId])
+    const createdDeal = fullResult.rows[0]
 
     res.status(201).json({
       success: true,
-      message: 'Tạo deal thành công!',
-      data: fullResult.rows[0]
+      message: initialStatus === 'pending_approval'
+        ? 'Deal đã tạo và đang chờ Leader/Manager phê duyệt để vào Pipeline.'
+        : 'Tạo deal thành công!',
+      data: createdDeal
     })
   } catch (error) {
     console.error('Lỗi createDeal:', error)
@@ -197,13 +263,13 @@ export const createDeal = async (req, res) => {
 export const updateDeal = async (req, res) => {
   const { role, id: userId } = req.user
   const { id } = req.params
-  const { title, amount, stage, status, expected_closing_date, assigned_to, customer_id } = req.body
+  const { title, amount, stage, status, expected_closing_date, assigned_to, customer_id, product_name, quantity, invoice_info, notes, loss_reason, stage_change_note, deal_category: bodyCategory, confidence_level: bodyConfidence, confidence_note: bodyConfidenceNote } = req.body
 
   const tenantId = getTenantId(req)
 
   try {
     const dealCheck = await pool.query(
-      'SELECT * FROM deals WHERE deal_id = $1 AND tenant_id = $2',
+      'SELECT * FROM deals WHERE deal_id = $1 AND tenant_id = $2 AND (COALESCE(is_deleted, false) = false)',
       [id, tenantId]
     )
     if (dealCheck.rows.length === 0) {
@@ -248,15 +314,21 @@ export const updateDeal = async (req, res) => {
       if (employeeCheck.rows.length === 0) {
         return res.status(404).json({ success: false, message: 'Nhân viên được gán không thuộc đơn vị của bạn.' })
       }
+      const allowedIds = await getAssignableEmployeeIds(tenantId, userId, role)
+      if (!allowedIds.includes(assigned_to)) {
+        return res.status(403).json({ success: false, message: 'Bạn không được phép gán deal cho nhân viên này (vượt quyền phân cấp).' })
+      }
     }
 
-    // Validate stage nếu có
+    // Validate stage nếu có (theo pipeline của deal_category)
+    const currentCategory = deal.deal_category || 'MASS'
     if (stage) {
-      const validStages = ['tiep_can', 'tu_van', 'bao_gia', 'thuong_thao', 'thanh_cong']
-      if (!validStages.includes(stage)) {
+      const stagesForCategory = await pipelineStagesService.getStagesByCategory(tenantId, currentCategory)
+      const validStageIds = stagesForCategory.map((s) => s.id)
+      if (!validStageIds.includes(stage)) {
         return res.status(400).json({
           success: false,
-          message: 'Giai đoạn deal không hợp lệ.'
+          message: 'Giai đoạn deal không hợp lệ cho loại hình này.'
         })
       }
     }
@@ -288,13 +360,42 @@ export const updateDeal = async (req, res) => {
       }
     }
 
+    // Confidence: nếu chọn low thì bắt buộc confidence_note
+    const confidenceLevel = bodyConfidence !== undefined && CONFIDENCE_LEVELS.includes(bodyConfidence) ? bodyConfidence : undefined
+    const confidenceNoteVal = bodyConfidenceNote !== undefined ? (bodyConfidenceNote != null && String(bodyConfidenceNote).trim() ? String(bodyConfidenceNote).trim() : null) : undefined
+    if (confidenceLevel === 'low' && (confidenceNoteVal === undefined ? !(deal.confidence_note && String(deal.confidence_note).trim()) : !confidenceNoteVal)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Khi mức độ tự tin là "Khả năng thất bại cao" (Đỏ), bắt buộc nhập ghi chú lý do.'
+      })
+    }
+
+    // Khi chuyển sang cancelled hoặc lost bắt buộc phải có loss_reason
+    const { loss_reason: lossReason } = req.body
+    if (status === 'cancelled' || status === 'lost') {
+      const reason = (lossReason != null && String(lossReason).trim()) ? String(lossReason).trim() : ''
+      if (!reason) {
+        return res.status(400).json({
+          success: false,
+          message: 'Vui lòng nhập lý do hủy/thất bại khi chuyển trạng thái sang Hủy hoặc Thất bại.'
+        })
+      }
+    }
+
     // Validate status nếu có
     if (status) {
-      const validStatuses = ['active', 'closed', 'cancelled']
+      const validStatuses = ['active', 'won', 'lost', 'cancelled', 'closed', 'pending_approval']
       if (!validStatuses.includes(status)) {
         return res.status(400).json({
           success: false,
           message: 'Trạng thái deal không hợp lệ.'
+        })
+      }
+      // Chuyển pending_approval → active chỉ qua endpoint POST /api/deals/:id/approve
+      if (deal.status === 'pending_approval' && status === 'active') {
+        return res.status(400).json({
+          success: false,
+          message: 'Vui lòng dùng nút "Phê duyệt" để đưa deal vào Pipeline.'
         })
       }
     }
@@ -317,11 +418,20 @@ export const updateDeal = async (req, res) => {
     if (stage !== undefined) {
       updateFields.push(`stage = $${paramIndex++}`)
       updateValues.push(stage)
+      if (stage === 'thanh_cong') {
+        updateFields.push(`status = $${paramIndex++}`)
+        updateValues.push('won')
+      }
     }
 
     if (status !== undefined) {
       updateFields.push(`status = $${paramIndex++}`)
       updateValues.push(status)
+    }
+    if (status === 'cancelled' || status === 'lost') {
+      const reason = (loss_reason != null && String(loss_reason).trim()) ? String(loss_reason).trim() : null
+      updateFields.push(`loss_reason = $${paramIndex++}`)
+      updateValues.push(reason)
     }
 
     if (expected_closing_date !== undefined) {
@@ -337,6 +447,36 @@ export const updateDeal = async (req, res) => {
     if (customer_id !== undefined) {
       updateFields.push(`customer_id = $${paramIndex++}`)
       updateValues.push(customer_id || null)
+    }
+
+    if (product_name !== undefined) {
+      updateFields.push(`product_name = $${paramIndex++}`)
+      updateValues.push(product_name && String(product_name).trim() ? String(product_name).trim() : null)
+    }
+    if (quantity !== undefined) {
+      updateFields.push(`quantity = $${paramIndex++}`)
+      updateValues.push(quantity != null && quantity !== '' ? parseFloat(quantity) : null)
+    }
+    if (invoice_info !== undefined) {
+      updateFields.push(`invoice_info = $${paramIndex++}`)
+      updateValues.push(invoice_info && String(invoice_info).trim() ? String(invoice_info).trim() : null)
+    }
+    if (notes !== undefined) {
+      updateFields.push(`notes = $${paramIndex++}`)
+      updateValues.push(notes && String(notes).trim() ? String(notes).trim() : null)
+    }
+
+    if (bodyCategory !== undefined && DEAL_CATEGORIES.includes(bodyCategory)) {
+      updateFields.push(`deal_category = $${paramIndex++}`)
+      updateValues.push(bodyCategory)
+    }
+    if (confidenceLevel !== undefined) {
+      updateFields.push(`confidence_level = $${paramIndex++}`)
+      updateValues.push(confidenceLevel)
+    }
+    if (confidenceNoteVal !== undefined) {
+      updateFields.push(`confidence_note = $${paramIndex++}`)
+      updateValues.push(confidenceNoteVal)
     }
 
     if (updateFields.length === 0) {
@@ -358,6 +498,30 @@ export const updateDeal = async (req, res) => {
       RETURNING *
     `
     const result = await pool.query(updateQuery, updateValues)
+    const updatedDealRow = (result.rows || [])[0]
+
+    // Khi chuyển giai đoạn: ghi log deal_activities (type system) — gộp "từ → sang" + nội dung
+    if (stage !== undefined && stage !== deal.stage) {
+      const effectiveCategory =
+        (bodyCategory !== undefined && DEAL_CATEGORIES.includes(bodyCategory))
+          ? bodyCategory
+          : (updatedDealRow?.deal_category || deal.deal_category || 'MASS')
+      const allStages = await pipelineStagesService.getStagesByCategory(tenantId, effectiveCategory)
+      const stageLabelMap = Object.fromEntries(allStages.map((s) => [s.id, s.label]))
+      const fromLabel = stageLabelMap[deal.stage] || deal.stage || '—'
+      const toLabel = stageLabelMap[stage] || stage
+      const noteText = (stage_change_note && String(stage_change_note).trim()) ? String(stage_change_note).trim() : ''
+      const content = noteText
+        ? `Chuyển từ ${fromLabel} sang ${toLabel}\n${noteText}`
+        : `Chuyển từ ${fromLabel} sang ${toLabel}`
+      const activityId = uuidv4()
+      const now = Date.now()
+      await pool.query(
+        `INSERT INTO deal_activities (id, deal_id, stage, content, type, created_by, tenant_id, created_at)
+         VALUES ($1, $2, $3, $4, 'system', $5, $6, $7)`,
+        [activityId, id, stage, content, userId, tenantId, now]
+      )
+    }
 
     // Lấy thông tin đầy đủ với JOIN
     const fullQuery = `
@@ -374,11 +538,31 @@ export const updateDeal = async (req, res) => {
     `
 
     const fullResult = await pool.query(fullQuery, [id])
+    const updatedDeal = fullResult.rows[0]
+
+    // Đồng bộ assigned_to, customer_id sang các task liên quan (related_type=DEAL, related_id=deal_id)
+    syncDealTasksWithDeal(id, tenantId, {
+      assigned_to: updatedDeal?.assigned_to ?? null,
+      customer_id: updatedDeal?.customer_id ?? null
+    }).catch((e) => console.error('syncDealTasksWithDeal:', e))
+
+    // Tự động hóa: MASS chuyển Báo giá → task Sales; PROJECT chuyển Khảo sát → task Kỹ thuật/Giải pháp
+    const category = updatedDeal?.deal_category || deal.deal_category || 'MASS'
+    const shouldEmitMASS = stage !== undefined && stage === 'bao_gia' && stage !== deal.stage && category === 'MASS' && updatedDeal
+    const shouldEmitPROJECT = stage !== undefined && stage === 'khao_sat' && stage !== deal.stage && category === 'PROJECT' && updatedDeal
+    if (shouldEmitMASS || shouldEmitPROJECT) {
+      centralEmitter.emit(EVENT_DEAL_STAGE_CHANGED, {
+        deal: updatedDeal,
+        tenantId,
+        userId,
+        newStage: stage
+      })
+    }
 
     res.json({
       success: true,
       message: 'Cập nhật deal thành công!',
-      data: fullResult.rows[0]
+      data: updatedDeal
     })
   } catch (error) {
     console.error('Lỗi updateDeal:', error)
@@ -387,5 +571,191 @@ export const updateDeal = async (req, res) => {
       message: 'Lỗi hệ thống khi cập nhật deal.',
       error: error.message
     })
+  }
+}
+
+/**
+ * Phê duyệt deal (pending_approval → active). Chỉ Leader/Manager của nhân viên phụ trách deal hoặc Admin/Director.
+ */
+export const approveDeal = async (req, res) => {
+  const { role, id: userId } = req.user
+  const { id } = req.params
+  const tenantId = getTenantId(req)
+
+  try {
+    const dealRow = await pool.query(
+      'SELECT deal_id, status, assigned_to FROM deals WHERE deal_id = $1 AND tenant_id = $2 AND (COALESCE(is_deleted, false) = false)',
+      [id, tenantId]
+    )
+    if (dealRow.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Deal không tồn tại.' })
+    }
+    const deal = dealRow.rows[0]
+    if (deal.status !== 'pending_approval') {
+      return res.status(400).json({
+        success: false,
+        message: 'Chỉ deal đang chờ phê duyệt mới có thể phê duyệt.'
+      })
+    }
+
+    const canApprove = role === 'admin' || role === 'super_admin' || role === 'director'
+    if (!canApprove) {
+      const approvers = await getApproversForEmployee(tenantId, deal.assigned_to)
+      if (!approvers.includes(userId)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Chỉ Leader/Manager của nhân viên phụ trách deal mới được phê duyệt.'
+        })
+      }
+    }
+
+    const now = Date.now()
+    await pool.query(
+      'UPDATE deals SET status = $1, updated_at = $2 WHERE deal_id = $3 AND tenant_id = $4',
+      ['active', now, id, tenantId]
+    )
+
+    const fullDeal = await pool.query(
+      'SELECT * FROM deals WHERE deal_id = $1 AND tenant_id = $2',
+      [id, tenantId]
+    )
+    const updatedDeal = fullDeal.rows[0]
+    try {
+      await pool.query(
+        `INSERT INTO deal_activities (id, deal_id, stage, content, type, created_by, tenant_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          uuidv4(),
+          id,
+          updatedDeal?.stage || 'tiep_can',
+          'Deal đã được phê duyệt và đưa vào Pipeline.',
+          'system',
+          userId,
+          tenantId,
+          now
+        ]
+      )
+    } catch (actErr) {
+      console.error('Lỗi ghi deal_activities khi phê duyệt:', actErr)
+    }
+
+    const fullQuery = `
+      SELECT d.*, c.full_name as customer_full_name, c.phone as customer_phone,
+        e.full_name as assigned_employee_name, e.username as assigned_employee_username
+      FROM deals d
+      LEFT JOIN customers c ON d.customer_id = c.customer_id AND c.deleted_at IS NULL AND c.tenant_id = d.tenant_id
+      LEFT JOIN employees e ON d.assigned_to = e.employee_id
+      WHERE d.deal_id = $1
+    `
+    const result = await pool.query(fullQuery, [id])
+
+    res.json({
+      success: true,
+      message: 'Đã phê duyệt deal. Deal đã vào Pipeline.',
+      data: result.rows[0]
+    })
+  } catch (error) {
+    console.error('Lỗi approveDeal:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi hệ thống khi phê duyệt deal.',
+      error: error.message
+    })
+  }
+}
+
+/**
+ * Xóa mềm deal (chỉ Tenant Admin hoặc người được gán deal)
+ * Sales thông thường không được xóa, chỉ được chuyển trạng thái sang Cancelled.
+ */
+export const deleteDeal = async (req, res) => {
+  const { role, id: userId } = req.user
+  const { id } = req.params
+  const tenantId = getTenantId(req)
+
+  try {
+    const dealCheck = await pool.query(
+      'SELECT deal_id, assigned_to, is_deleted FROM deals WHERE deal_id = $1 AND tenant_id = $2',
+      [id, tenantId]
+    )
+    if (dealCheck.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Deal không tồn tại.' })
+    }
+    const deal = dealCheck.rows[0]
+    if (deal.is_deleted) {
+      return res.status(400).json({ success: false, message: 'Deal đã bị xóa trước đó.' })
+    }
+
+    const isAdmin = role === 'admin' || role === 'super_admin'
+    const isOwner = deal.assigned_to === userId
+    if (!isAdmin && !isOwner) {
+      return res.status(403).json({
+        success: false,
+        message: 'Chỉ Admin hoặc người phụ trách deal mới được xóa deal. Nhân viên Sales chỉ có thể Hủy deal.'
+      })
+    }
+
+    const now = Date.now()
+    await pool.query(
+      'UPDATE deals SET is_deleted = true, deleted_at = $1, updated_at = $1 WHERE deal_id = $2 AND tenant_id = $3',
+      [now, id, tenantId]
+    )
+
+    res.json({
+      success: true,
+      message: 'Đã xóa deal (có thể khôi phục trong Thùng rác).'
+    })
+  } catch (error) {
+    console.error('Lỗi deleteDeal:', error)
+    res.status(500).json({
+      success: false,
+      message: 'Lỗi hệ thống khi xóa deal.',
+      error: error.message
+    })
+  }
+}
+
+/**
+ * Danh sách deal đã xóa mềm (chỉ Admin) - dùng cho Thùng rác
+ */
+export const getDealsTrash = async (req, res) => {
+  const tenantId = getTenantId(req)
+  try {
+    const result = await pool.query(
+      `SELECT d.*,
+        c.full_name as customer_full_name, c.phone as customer_phone,
+        e.full_name as assigned_employee_name
+       FROM deals d
+       LEFT JOIN customers c ON d.customer_id = c.customer_id AND c.tenant_id = d.tenant_id
+       LEFT JOIN employees e ON d.assigned_to = e.employee_id
+       WHERE d.tenant_id = $1 AND (d.is_deleted = true)
+       ORDER BY d.deleted_at DESC`,
+      [tenantId]
+    )
+    res.json({ success: true, data: result.rows })
+  } catch (error) {
+    console.error('Lỗi getDealsTrash:', error)
+    res.status(500).json({ success: false, message: 'Lỗi khi lấy danh sách deal đã xóa.', error: error.message })
+  }
+}
+
+/**
+ * Khôi phục deal đã xóa mềm (chỉ Admin)
+ */
+export const restoreDeal = async (req, res) => {
+  const { id } = req.params
+  const tenantId = getTenantId(req)
+  try {
+    const r = await pool.query(
+      'UPDATE deals SET is_deleted = false, deleted_at = NULL, updated_at = $1 WHERE deal_id = $2 AND tenant_id = $3 AND is_deleted = true RETURNING deal_id',
+      [Date.now(), id, tenantId]
+    )
+    if (r.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Deal không tồn tại trong thùng rác hoặc đã được khôi phục.' })
+    }
+    res.json({ success: true, message: 'Đã khôi phục deal.' })
+  } catch (error) {
+    console.error('Lỗi restoreDeal:', error)
+    res.status(500).json({ success: false, message: 'Lỗi khi khôi phục deal.', error: error.message })
   }
 }

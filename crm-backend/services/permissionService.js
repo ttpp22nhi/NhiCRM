@@ -192,5 +192,5 @@ export function buildDealFilter(access, paramIndex = 1) {
       paramIndex: paramIndex + access.employeeIds.length
     }
   }
-  return { clause: 'd.assigned_to = $1', params: [access.employeeIds?.[0]], paramIndex: paramIndex + 1 }
+  return { clause: `d.assigned_to = $${paramIndex}`, params: [access.employeeIds?.[0]], paramIndex: paramIndex + 1 }
 }

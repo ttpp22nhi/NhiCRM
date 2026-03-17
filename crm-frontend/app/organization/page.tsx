@@ -83,6 +83,12 @@ export default function OrganizationPage() {
     return level?.level_name || 'Phòng'
   }
 
+  /** Cấp bậc (level_order) tương ứng với loại đã chọn: đơn vị cha phải ở cấp levelOrder - 1 */
+  const getLevelOrderForType = (typeName: string): number | null => {
+    const level = orgLevels.find((l) => l.level_name === typeName)
+    return level?.level_order ?? null
+  }
+
   useEffect(() => {
     const handleClick = () => setContextMenu(null)
     document.addEventListener('click', handleClick)
@@ -132,12 +138,40 @@ export default function OrganizationPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    const levelOrder = getLevelOrderForType(formData.type)
+    const parentId = parentForAdd ? parentForAdd.id : (formData.parent_id || null) || null
+    const selectedParent = parentId ? departments.find((d) => d.id === parentId) : null
+    // Ràng buộc: Loại cấp bậc K → đơn vị cha phải có loại Cấp K-1 (cha phải cao hơn, không bằng hoặc thấp hơn)
+    if (levelOrder != null) {
+      if (levelOrder === 1) {
+        if (parentId) {
+          toast.error('Cấp 1 (gốc) phải là đơn vị cấp cao, không chọn đơn vị cha.')
+          return
+        }
+      } else {
+        const requiredParentLevelOrder = levelOrder - 1
+        if (!selectedParent) {
+          toast.error(`Cấp ${levelOrder} phải có đơn vị cha thuộc Cấp ${requiredParentLevelOrder}.`)
+          return
+        }
+        const parentLevelOrder = getLevelOrderForType(selectedParent.type)
+        if (parentLevelOrder == null || parentLevelOrder !== requiredParentLevelOrder) {
+          const expectedTypeName = orgLevels.find((l) => l.level_order === requiredParentLevelOrder)?.level_name
+          toast.error(
+            expectedTypeName
+              ? `Đơn vị cha phải là loại Cấp ${requiredParentLevelOrder} (${expectedTypeName}), không thể bằng hoặc thấp hơn Cấp ${levelOrder}.`
+              : `Đơn vị cha phải ở Cấp ${requiredParentLevelOrder}, không thể bằng hoặc thấp hơn Cấp ${levelOrder}.`
+          )
+          return
+        }
+      }
+    }
+    const effectiveParentId = levelOrder === 1 ? null : parentId
     setSubmitting(true)
-    const parentId = parentForAdd ? parentForAdd.id : (formData.parent_id || null)
     try {
       const payload = {
         name: formData.name.trim(),
-        parent_id: parentId,
+        parent_id: effectiveParentId,
         type: formData.type.trim() || 'Phòng'
       }
       if (editing) {
@@ -270,13 +304,15 @@ export default function OrganizationPage() {
               >
                 Cây cấu trúc công ty
               </Link>
-              <button
-                onClick={openAddRoot}
-                className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
-              >
-                <Plus className="w-5 h-5" />
-                Thêm đơn vị (cấp cao)
-              </button>
+              {rootItems.length === 0 && (
+                <button
+                  onClick={openAddRoot}
+                  className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition"
+                >
+                  <Plus className="w-5 h-5" />
+                  Thêm đơn vị gốc (Cấp 1 - VD: Công ty)
+                </button>
+              )}
             </div>
           </div>
 
@@ -289,7 +325,7 @@ export default function OrganizationPage() {
             <div className="bg-white rounded-lg shadow border border-gray-200 p-4">
               {rootItems.length === 0 ? (
                 <p className="text-gray-500 py-8 text-center">
-                  Chưa có đơn vị nào. Nhấn &quot;Thêm đơn vị (cấp cao)&quot; hoặc chuột phải để thêm.
+                  Chưa có đơn vị nào. Nhấn &quot;Thêm đơn vị gốc (Cấp 1 - VD: Công ty)&quot; để tạo đơn vị gốc duy nhất, sau đó thêm cấp con bằng chuột phải hoặc nút +.
                 </p>
               ) : (
                 rootItems.map((d) => renderNode(d, 0))
@@ -369,7 +405,18 @@ export default function OrganizationPage() {
                   </label>
                   <select
                     value={formData.type}
-                    onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                    onChange={(e) => {
+                      const newType = e.target.value
+                      const order = getLevelOrderForType(newType)
+                      let newParentId = formData.parent_id
+                      if (order === 1) {
+                        newParentId = ''
+                      } else if (order != null && formData.parent_id) {
+                        const p = departments.find((d) => d.id === formData.parent_id)
+                        if (p && getDepth(p) !== order - 1) newParentId = ''
+                      }
+                      setFormData({ ...formData, type: newType, parent_id: newParentId })
+                    }}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
                   >
                     {orgLevels.length > 0 ? (
@@ -394,7 +441,12 @@ export default function OrganizationPage() {
                 </div>
                 {!parentForAdd && !editing && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Đơn vị cha (tùy chọn)</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Đơn vị cha {(() => {
+                        const order = getLevelOrderForType(formData.type)
+                        return order != null && order > 1 ? `(phải ở Cấp ${order - 1})` : '(tùy chọn)'
+                      })()}
+                    </label>
                     <select
                       value={formData.parent_id}
                       onChange={(e) => {
@@ -410,12 +462,26 @@ export default function OrganizationPage() {
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500"
                     >
                       <option value="">-- Không (cấp cao) --</option>
-                      {departments.map((d) => (
-                        <option key={d.id} value={d.id} disabled={editing?.id === d.id}>
-                          {d.type}: {d.name}
-                        </option>
-                      ))}
+                      {(() => {
+                        const order = getLevelOrderForType(formData.type)
+                        const requiredParentLevelOrder = order != null && order > 1 ? order - 1 : null
+                        return departments.map((d) => {
+                          const dLevelOrder = getLevelOrderForType(d.type)
+                          const valid =
+                            requiredParentLevelOrder == null ||
+                            (dLevelOrder != null && dLevelOrder === requiredParentLevelOrder)
+                          return (
+                            <option key={d.id} value={d.id} disabled={editing?.id === d.id || !valid}>
+                              {d.type}: {d.name}
+                              {dLevelOrder != null && !valid ? ` (Cấp ${dLevelOrder})` : ''}
+                            </option>
+                          )
+                        })
+                      })()}
                     </select>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Đơn vị cha phải ở cấp cao hơn (số cấp nhỏ hơn) so với loại cấp bậc đã chọn.
+                    </p>
                   </div>
                 )}
                 {parentForAdd && (

@@ -21,6 +21,7 @@ export interface Deal {
   amount: number
   stage: string
   status: string
+  loss_reason?: string | null
   customer_id?: string
   customer_full_name?: string
   customer_phone?: string
@@ -28,8 +29,18 @@ export interface Deal {
   assigned_employee_name?: string
   assigned_employee_username?: string
   expected_closing_date?: number
-  created_at: number
+  created_at?: number
+  time_create?: number
   updated_at?: number
+  product_name?: string | null
+  quantity?: number | null
+  invoice_info?: string | null
+  notes?: string | null
+  metadata?: { task_total?: number; task_completed?: number }
+  display_code?: string | null
+  deal_category?: 'MASS' | 'PROJECT' | string | null
+  confidence_level?: 'high' | 'medium' | 'low' | string | null
+  confidence_note?: string | null
 }
 
 export interface Stage {
@@ -38,7 +49,7 @@ export interface Stage {
   color: string
 }
 
-const STAGES: Stage[] = [
+const DEFAULT_STAGES: Stage[] = [
   { id: 'tiep_can', label: 'Tiếp cận', color: 'bg-blue-100 border-blue-300' },
   { id: 'tu_van', label: 'Tư vấn', color: 'bg-yellow-100 border-yellow-300' },
   { id: 'bao_gia', label: 'Báo giá', color: 'bg-orange-100 border-orange-300' },
@@ -48,12 +59,23 @@ const STAGES: Stage[] = [
 
 interface KanbanBoardProps {
   deals: Deal[]
-  onStageChange: (dealId: string, newStage: string, previousStage: string) => void
+  stages?: Stage[]
+  onStageChange: (dealId: string, newStage: string, previousStage: string, note?: string) => void
   onEdit: (deal: Deal) => void
+  onViewDetail?: (deal: Deal) => void
+  onCancel?: (deal: Deal, asLost: boolean) => void
+  onDelete?: (deal: Deal) => void
+  canDelete?: (deal: Deal) => boolean
 }
 
-export function KanbanBoard({ deals, onStageChange, onEdit }: KanbanBoardProps) {
+type PendingStageChange = { dealId: string; newStage: string; previousStage: string; dealTitle: string }
+
+export function KanbanBoard({ deals, stages: stagesProp, onStageChange, onEdit, onViewDetail, onCancel, onDelete, canDelete }: KanbanBoardProps) {
+  const stages = stagesProp && stagesProp.length > 0 ? stagesProp : DEFAULT_STAGES
   const [activeDeal, setActiveDeal] = useState<Deal | null>(null)
+  const [pendingStageChange, setPendingStageChange] = useState<PendingStageChange | null>(null)
+  const [stageChangeNote, setStageChangeNote] = useState('')
+  const [stageChangeSubmitting, setStageChangeSubmitting] = useState(false)
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -81,13 +103,42 @@ export function KanbanBoard({ deals, onStageChange, onEdit }: KanbanBoardProps) 
     if (!currentDeal) return
 
     const overId = over.id as string
-    // Thả lên cột (droppable stage id) hoặc lên một card (deal_id -> lấy stage của deal đó)
-    const isStageId = STAGES.some((s) => s.id === overId)
+    const isStageId = stages.some((s) => s.id === overId)
     const newStage = isStageId ? overId : deals.find((d) => d.deal_id === overId)?.stage
 
     if (!newStage || newStage === currentDeal.stage) return
 
-    onStageChange(dealId, newStage, currentDeal.stage)
+    setPendingStageChange({
+      dealId,
+      newStage,
+      previousStage: currentDeal.stage,
+      dealTitle: currentDeal.title || 'Deal'
+    })
+    setStageChangeNote('')
+  }
+
+  const handleConfirmStageChange = async () => {
+    if (!pendingStageChange) return
+    setStageChangeSubmitting(true)
+    try {
+      await Promise.resolve(
+        onStageChange(
+          pendingStageChange.dealId,
+          pendingStageChange.newStage,
+          pendingStageChange.previousStage,
+          stageChangeNote.trim() || undefined
+        )
+      )
+      setPendingStageChange(null)
+      setStageChangeNote('')
+    } finally {
+      setStageChangeSubmitting(false)
+    }
+  }
+
+  const handleCancelStageChange = () => {
+    setPendingStageChange(null)
+    setStageChangeNote('')
   }
 
   const getDealsByStage = (stageId: string) => {
@@ -109,12 +160,16 @@ export function KanbanBoard({ deals, onStageChange, onEdit }: KanbanBoardProps) 
       onDragEnd={handleDragEnd}
     >
       <div className="flex gap-4 overflow-x-auto pb-4">
-        {STAGES.map((stage) => (
+        {stages.map((stage) => (
           <KanbanColumn
             key={stage.id}
             stage={stage}
             deals={getDealsByStage(stage.id)}
             onEdit={onEdit}
+            onViewDetail={onViewDetail}
+            onCancel={onCancel}
+            onDelete={onDelete}
+            canDelete={canDelete}
           />
         ))}
       </div>
@@ -136,6 +191,52 @@ export function KanbanBoard({ deals, onStageChange, onEdit }: KanbanBoardProps) 
           </div>
         ) : null}
       </DragOverlay>
+
+      {/* Modal nhập lý do chuyển giai đoạn */}
+      {pendingStageChange && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5">
+            <h3 className="text-lg font-semibold text-gray-900 mb-1">Chuyển giai đoạn deal</h3>
+            <p className="text-sm text-gray-600 mb-3">
+              <span className="font-medium">{pendingStageChange.dealTitle}</span>
+              <br />
+              <span className="text-gray-500">
+                {stages.find((s) => s.id === pendingStageChange.previousStage)?.label || pendingStageChange.previousStage}
+                {' → '}
+                {stages.find((s) => s.id === pendingStageChange.newStage)?.label || pendingStageChange.newStage}
+              </span>
+            </p>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Nội dung hiển thị trong workflow (lý do chuyển)
+            </label>
+            <textarea
+              value={stageChangeNote}
+              onChange={(e) => setStageChangeNote(e.target.value)}
+              placeholder="VD: Đã gửi báo giá, Khách đồng ý thương thảo..."
+              rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0074BD] focus:border-transparent text-sm resize-none"
+              autoFocus
+            />
+            <div className="flex gap-2 mt-4 justify-end">
+              <button
+                type="button"
+                onClick={handleCancelStageChange}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 text-sm"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmStageChange}
+                disabled={stageChangeSubmitting}
+                className="px-4 py-2 bg-[#0074BD] text-white rounded-lg hover:bg-[#005a94] text-sm disabled:opacity-50"
+              >
+                {stageChangeSubmitting ? 'Đang lưu...' : 'Xác nhận'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </DndContext>
   )
 }

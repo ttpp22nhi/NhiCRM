@@ -3,4 +3,10 @@ DB_HOST=localhost
 DB_NAME=crm_core_system
 DB_PASSWORD=Mật_Khẩu_Của_Bạn
 DB_PORT=5432
+# Schema PostgreSQL (mặc định: public). Đổi để scale (vd. crm_staging, crm_tenant_1).
+DB_SCHEMA=public
 JWT_SECRET=mot_cai_ma_bi_mat_bat_ky
+
+# Redis cache (optional). If not set, caching is disabled and APIs run normally.
+# Example: redis://localhost:6379
+REDIS_URL=

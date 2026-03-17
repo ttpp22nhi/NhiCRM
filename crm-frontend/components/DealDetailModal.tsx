@@ -1,0 +1,248 @@
+'use client'
+
+import { useState } from 'react'
+import { X, Edit2, DollarSign, User, Calendar, Package, FileText, StickyNote, Briefcase, CheckSquare, ChevronDown } from 'lucide-react'
+import type { Deal } from './KanbanBoard'
+import { DealTimeline } from './DealTimeline'
+
+const STAGE_LABELS: Record<string, string> = {
+  tiep_can: 'Tiếp cận',
+  tu_van: 'Tư vấn',
+  bao_gia: 'Báo giá',
+  thuong_thao: 'Thương thảo',
+  thanh_cong: 'Thành công'
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  active: 'Đang hoạt động',
+  pending_approval: 'Chờ phê duyệt',
+  won: 'Đã chốt',
+  cancelled: 'Đã hủy',
+  lost: 'Thất bại'
+}
+
+function formatDate(ts?: number | string | null): string {
+  const n = ts == null ? NaN : typeof ts === 'string' ? parseInt(ts, 10) : Number(ts)
+  if (Number.isNaN(n) || n <= 0) return '—'
+  const d = new Date(n.toString().length <= 10 ? n * 1000 : n)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString('vi-VN')
+}
+
+function formatCurrency(amount: number) {
+  return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount)
+}
+
+interface DealDetailModalProps {
+  deal: Deal
+  onClose: () => void
+  onEdit?: (deal: Deal) => void
+  onApprove?: (deal: Deal) => void | Promise<void>
+  canApprove?: boolean
+}
+
+export function DealDetailModal({ deal, onClose, onEdit, onApprove, canApprove }: DealDetailModalProps) {
+  const showApprove = deal.status === 'pending_approval' && canApprove && onApprove
+  const [showSuccessDetails, setShowSuccessDetails] = useState(false)
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between p-4 border-b border-gray-200">
+          <h2 className="text-lg font-bold text-gray-900">Chi tiết Deal</h2>
+          <div className="flex items-center gap-2">
+            {showApprove && (
+              <button
+                type="button"
+                onClick={() => onApprove(deal)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+              >
+                Phê duyệt
+              </button>
+            )}
+            {onEdit && (
+              <button
+                type="button"
+                onClick={() => { onEdit(deal); onClose() }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-[#0074BD] text-white rounded-lg hover:bg-[#005a94]"
+              >
+                <Edit2 className="w-4 h-4" />
+                Chỉnh sửa
+              </button>
+            )}
+            <button onClick={onClose} className="p-1.5 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-4 overflow-y-auto space-y-4">
+          <div>
+            {deal.display_code && (
+              <p className="text-sm font-medium text-gray-500 mb-1">Mã: {deal.display_code}</p>
+            )}
+            <h3 className="text-base font-semibold text-gray-900 mb-1">{deal.title}</h3>
+            <div className="flex flex-wrap gap-2 mt-1">
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+                {STATUS_LABELS[deal.status] || deal.status}
+              </span>
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700">
+                {STAGE_LABELS[deal.stage] || deal.stage}
+              </span>
+              {deal.confidence_level && (
+                <span
+                  className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                    deal.confidence_level === 'high'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : deal.confidence_level === 'low'
+                      ? 'bg-red-100 text-red-800'
+                      : 'bg-amber-100 text-amber-800'
+                  }`}
+                >
+                  {deal.confidence_level === 'high'
+                    ? 'Chắc chắn (Xanh)'
+                    : deal.confidence_level === 'low'
+                    ? 'Rủi ro cao (Đỏ)'
+                    : '50/50 (Vàng)'}
+                </span>
+              )}
+            </div>
+            {deal.confidence_note && (
+              <div className="mt-2 p-2 bg-amber-50 border border-amber-200 rounded text-sm text-amber-900">
+                <span className="font-medium">Ghi chú mức độ tự tin: </span>
+                {deal.confidence_note}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 text-sm">
+            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+              <DollarSign className="w-5 h-5 text-green-600 flex-shrink-0" />
+              <div>
+                <p className="text-xs text-gray-500">Giá trị</p>
+                <p className="font-semibold text-gray-900">{formatCurrency(deal.amount ?? 0)}</p>
+              </div>
+            </div>
+
+            {deal.customer_full_name && (
+              <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                <User className="w-5 h-5 text-gray-500 flex-shrink-0" />
+                <div>
+                  <p className="text-xs text-gray-500">Khách hàng</p>
+                  <p className="font-medium text-gray-900">{deal.customer_full_name}</p>
+                  {deal.customer_phone && <p className="text-gray-600 text-xs">{deal.customer_phone}</p>}
+                </div>
+              </div>
+            )}
+
+            {deal.assigned_employee_name && (
+              <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                <Briefcase className="w-5 h-5 text-gray-500 flex-shrink-0" />
+                <div>
+                  <p className="text-xs text-gray-500">Người phụ trách</p>
+                  <p className="font-medium text-gray-900">{deal.assigned_employee_name}</p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+              <Calendar className="w-5 h-5 text-gray-500 flex-shrink-0" />
+              <div className="min-w-0">
+                <p className="text-xs text-gray-500">Ngày dự kiến đóng</p>
+                <p className="text-gray-900">{deal.expected_closing_date ? formatDate(deal.expected_closing_date) : '—'}</p>
+                {(deal.created_at != null || deal.time_create != null) && (
+                  <p className="text-xs text-gray-400 mt-0.5">Ngày tạo: {formatDate(deal.created_at ?? deal.time_create)}</p>
+                )}
+              </div>
+            </div>
+
+            {deal.metadata != null && typeof deal.metadata.task_total === 'number' && deal.metadata.task_total > 0 && (
+              <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                <CheckSquare className="w-5 h-5 text-gray-500 flex-shrink-0" />
+                <div>
+                  <p className="text-xs text-gray-500">Công việc</p>
+                  <p className="font-medium text-gray-900">
+                    {deal.metadata.task_completed ?? 0}/{deal.metadata.task_total} công việc đã hoàn thành
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {(deal.status === 'cancelled' || deal.status === 'lost') && deal.loss_reason && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-xs text-amber-800 font-medium">Lý do hủy / thất bại</p>
+                <p className="text-sm text-amber-900 mt-0.5">{deal.loss_reason}</p>
+              </div>
+            )}
+
+            {(deal.product_name || deal.quantity != null || deal.invoice_info || deal.notes) && (
+              <div className="border-t border-gray-200 pt-3 space-y-3">
+                <div className="rounded-xl border border-gray-200 overflow-hidden bg-white">
+                  <button
+                    type="button"
+                    onClick={() => setShowSuccessDetails((v) => !v)}
+                    className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-gray-50"
+                    aria-expanded={showSuccessDetails}
+                  >
+                    <div className="text-left">
+                      <p className="text-sm font-semibold text-gray-900">Chi tiết khi thành công</p>
+                      <p className="text-xs text-gray-500 normal-case">Tuỳ chọn · chỉ cần khi chốt deal</p>
+                    </div>
+                    <ChevronDown
+                      className={`w-5 h-5 text-gray-400 transition-transform ${showSuccessDetails ? 'rotate-180' : 'rotate-0'}`}
+                    />
+                  </button>
+                  {!showSuccessDetails ? null : (
+                    <div className="px-4 pb-4 pt-1 space-y-3 bg-white">
+                {deal.product_name && (
+                  <div className="flex gap-3">
+                    <Package className="w-5 h-5 text-gray-400 flex-shrink-0" />
+                    <div>
+                      <p className="text-xs text-gray-500">Sản phẩm</p>
+                      <p className="text-gray-900">{deal.product_name}</p>
+                    </div>
+                  </div>
+                )}
+                {deal.quantity != null && String(deal.quantity) !== '' && (
+                  <div className="flex gap-3">
+                    <Package className="w-5 h-5 text-gray-400 flex-shrink-0" />
+                    <div>
+                      <p className="text-xs text-gray-500">Số lượng</p>
+                      <p className="text-gray-900">{Number(deal.quantity)}</p>
+                    </div>
+                  </div>
+                )}
+                {deal.invoice_info && (
+                  <div className="flex gap-3">
+                    <FileText className="w-5 h-5 text-gray-400 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-500">Thông tin hóa đơn</p>
+                      <p className="text-gray-900 whitespace-pre-wrap">{deal.invoice_info}</p>
+                    </div>
+                  </div>
+                )}
+                {deal.notes && (
+                  <div className="flex gap-3">
+                    <StickyNote className="w-5 h-5 text-gray-400 flex-shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-xs text-gray-500">Ghi chú</p>
+                      <p className="text-gray-900 whitespace-pre-wrap">{deal.notes}</p>
+                    </div>
+                  </div>
+                )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+          {/* Workflow (timeline) + File đính kèm */}
+          <div className="border-t border-gray-200 pt-4 mt-4">
+            <DealTimeline dealId={deal.deal_id} onRefresh={() => {}} />
+          </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

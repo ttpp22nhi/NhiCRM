@@ -83,10 +83,15 @@ export default function LoginPage() {
       // Super Admin không có tenant_id → vào trang Hệ thống (quản lý tenants)
       const storedUser = localStorage.getItem('user')
       const parsed = storedUser ? JSON.parse(storedUser) : null
-      if (parsed?.role === 'super_admin' && (parsed?.tenant_id == null || parsed?.tenant_id === '')) {
-        router.push('/system/tenants')
+      const targetPath =
+        parsed?.role === 'super_admin' && (parsed?.tenant_id == null || parsed?.tenant_id === '')
+          ? '/system/tenants'
+          : '/dashboard'
+      // Dùng window.location để tải lại trang, tránh race: ProtectedRoute mount trước khi context cập nhật và đẩy về /login
+      if (typeof window !== 'undefined') {
+        window.location.href = targetPath
       } else {
-        router.push('/dashboard')
+        router.push(targetPath)
       }
     } catch (err: any) {
       const errorMessage = err.message || 'Đăng nhập thất bại'

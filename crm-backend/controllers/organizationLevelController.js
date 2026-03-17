@@ -40,9 +40,20 @@ export const updateOrganizationLevel = async (req, res) => {
         message: 'Tên cấp bậc là bắt buộc.'
       })
     }
+    const nameTrimmed = level_name.trim()
+    const exists = await pool.query(
+      'SELECT id FROM organization_levels WHERE tenant_id = $1 AND id != $2 AND LOWER(TRIM(level_name)) = LOWER($3)',
+      [tenantId, id, nameTrimmed]
+    )
+    if (exists.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tên cấp bậc đã tồn tại trong đơn vị của bạn.'
+      })
+    }
     const result = await pool.query(
       `UPDATE organization_levels SET level_name = $1, updated_at = $2 WHERE id = $3 AND tenant_id = $4 RETURNING *`,
-      [level_name.trim(), Date.now(), id, tenantId]
+      [nameTrimmed, Date.now(), id, tenantId]
     )
     if (result.rows.length === 0) {
       return res.status(404).json({
@@ -78,6 +89,17 @@ export const createOrganizationLevel = async (req, res) => {
         message: 'Tên cấp bậc là bắt buộc.'
       })
     }
+    const nameTrimmed = level_name.trim()
+    const exists = await pool.query(
+      'SELECT id FROM organization_levels WHERE tenant_id = $1 AND LOWER(TRIM(level_name)) = LOWER($2)',
+      [tenantId, nameTrimmed]
+    )
+    if (exists.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Tên cấp bậc đã tồn tại trong đơn vị của bạn.'
+      })
+    }
     const order = level_order != null ? parseInt(level_order, 10) : null
     if (order == null || isNaN(order) || order < 1) {
       return res.status(400).json({
@@ -90,7 +112,7 @@ export const createOrganizationLevel = async (req, res) => {
     await pool.query(
       `INSERT INTO organization_levels (id, level_order, level_name, tenant_id, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6)`,
-      [id, order, level_name.trim(), tenantId, now, now]
+      [id, order, nameTrimmed, tenantId, now, now]
     )
     const created = await pool.query('SELECT * FROM organization_levels WHERE id = $1 AND tenant_id = $2', [id, tenantId])
     res.status(201).json({
@@ -132,6 +154,12 @@ export const deleteOrganizationLevel = async (req, res) => {
       })
     }
     const deletedOrder = current.rows[0].level_order
+    if (deletedOrder === 1) {
+      return res.status(403).json({
+        success: false,
+        message: 'Không được xóa cấp gốc (Cấp 1).'
+      })
+    }
 
     await pool.query('DELETE FROM organization_levels WHERE id = $1 AND tenant_id = $2', [id, tenantId])
 
@@ -180,6 +208,12 @@ export const moveOrganizationLevel = async (req, res) => {
     }
     const item = current.rows[0]
     const myOrder = item.level_order
+    if (myOrder === 1) {
+      return res.status(403).json({
+        success: false,
+        message: 'Cấp gốc (Cấp 1) không đổi thứ tự.'
+      })
+    }
 
     const neighborOrder = direction === 'up' ? myOrder - 1 : myOrder + 1
     if (neighborOrder < 1) {

@@ -1,16 +1,24 @@
 import pool from '../database.js'
 import { v4 as uuidv4 } from 'uuid'
 import { getTenantId } from '../utils/tenantHelper.js'
+import { updateDealTaskMetadata } from '../services/dealMetadataService.js'
+import { generateDisplayCode } from '../services/displayCodeService.js'
+import { getAssignableEmployeeIds } from '../services/assignableEmployeesService.js'
+import { buildScopeCondition } from '../services/scopeService.js'
 
 /**
- * Lấy danh sách tasks — theo tenant
+ * Lấy danh sách tasks — theo phân cấp (tenant + director/manager/leader/sales)
  */
 export const getTasks = async (req, res) => {
   const { role, id: userId } = req.user
-  const { assigned_to } = req.query
+  const { assigned_to: assignedToFilter } = req.query
   const tenantId = getTenantId(req)
 
   try {
+    const { scopeClause, scopeParams } = await buildScopeCondition(tenantId, userId, role, 't.assigned_to')
+    const params = [tenantId, ...scopeParams]
+    let paramIndex = params.length + 1
+
     let query = `
       SELECT 
         t.*,
@@ -22,16 +30,12 @@ export const getTasks = async (req, res) => {
       FROM tasks t
       LEFT JOIN customers c ON t.customer_id = c.customer_id AND c.deleted_at IS NULL AND c.tenant_id = t.tenant_id
       LEFT JOIN employees e ON t.assigned_to = e.employee_id
-      WHERE t.tenant_id = $1
+      WHERE t.tenant_id = $1 AND (${scopeClause})
     `
-    const params = [tenantId]
 
-    if (role === 'sales') {
-      query += ' AND t.assigned_to = $2'
-      params.push(userId)
-    } else if (assigned_to) {
-      query += ' AND t.assigned_to = $2'
-      params.push(assigned_to)
+    if (assignedToFilter) {
+      query += ` AND t.assigned_to = $${paramIndex++}`
+      params.push(assignedToFilter)
     }
 
     query += ' ORDER BY t.due_date ASC NULLS LAST, t.created_at DESC'
@@ -52,12 +56,92 @@ export const getTasks = async (req, res) => {
   }
 }
 
+const taskSelectFields = `
+  t.*,
+  c.full_name as customer_full_name,
+  c.phone as customer_phone,
+  c.customer_id,
+  e.full_name as assigned_employee_name,
+  e.username as assigned_employee_username
+`
+
+/**
+ * Lấy một task theo task_id — áp dụng scope phân cấp
+ */
+export const getTaskById = async (req, res) => {
+  const { role, id: userId } = req.user
+  const { id: taskId } = req.params
+  const tenantId = getTenantId(req)
+
+  try {
+    const { scopeClause, scopeParams } = await buildScopeCondition(tenantId, userId, role, 't.assigned_to')
+    const params = [tenantId, ...scopeParams, taskId]
+    const taskIdParamIndex = 2 + scopeParams.length
+
+    const query = `
+      SELECT ${taskSelectFields}
+      FROM tasks t
+      LEFT JOIN customers c ON t.customer_id = c.customer_id AND c.deleted_at IS NULL AND c.tenant_id = t.tenant_id
+      LEFT JOIN employees e ON t.assigned_to = e.employee_id
+      WHERE t.tenant_id = $1 AND (${scopeClause}) AND t.task_id = $${taskIdParamIndex}
+    `
+    const result = await pool.query(query, params)
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy task.' })
+    }
+    res.json({ success: true, data: result.rows[0] })
+  } catch (error) {
+    console.error('Lỗi getTaskById:', error)
+    res.status(500).json({ success: false, message: 'Lỗi hệ thống.', error: error.message })
+  }
+}
+
+/**
+ * Lấy task theo display_code — áp dụng scope phân cấp
+ */
+export const getTaskByDisplayCode = async (req, res) => {
+  const { role, id: userId } = req.user
+  const { display_code: displayCode } = req.query
+  const tenantId = getTenantId(req)
+
+  if (!displayCode || typeof displayCode !== 'string' || !displayCode.trim()) {
+    return res.status(400).json({ success: false, message: 'Thiếu display_code.' })
+  }
+
+  const code = displayCode.trim()
+  if (!/^TSK-\d{4}-\d{3}$/.test(code)) {
+    return res.status(400).json({ success: false, message: 'Mã task không hợp lệ.' })
+  }
+
+  try {
+    const { scopeClause, scopeParams } = await buildScopeCondition(tenantId, userId, role, 't.assigned_to')
+    const params = [tenantId, ...scopeParams, code]
+    const codeParamIndex = 2 + scopeParams.length
+
+    const query = `
+      SELECT ${taskSelectFields}
+      FROM tasks t
+      LEFT JOIN customers c ON t.customer_id = c.customer_id AND c.deleted_at IS NULL AND c.tenant_id = t.tenant_id
+      LEFT JOIN employees e ON t.assigned_to = e.employee_id
+      WHERE t.tenant_id = $1 AND (${scopeClause}) AND t.display_code = $${codeParamIndex}
+    `
+    const result = await pool.query(query, params)
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy task với mã này.' })
+    }
+    res.json({ success: true, data: result.rows[0] })
+  } catch (error) {
+    console.error('Lỗi getTaskByDisplayCode:', error)
+    res.status(500).json({ success: false, message: 'Lỗi hệ thống.', error: error.message })
+  }
+}
+
 /**
  * Tạo task mới
  */
 export const createTask = async (req, res) => {
   const { role, id: userId } = req.user
-  const { customer_id, title, due_date, priority, assigned_to } = req.body
+  const { customer_id, title, due_date, priority, assigned_to, related_type, related_id } = req.body
   const tenantId = getTenantId(req)
 
   try {
@@ -90,23 +174,47 @@ export const createTask = async (req, res) => {
       if (employeeCheck.rows.length === 0) {
         return res.status(404).json({ success: false, message: 'Nhân viên được gán không thuộc đơn vị của bạn.' })
       }
+      const allowedIds = await getAssignableEmployeeIds(tenantId, userId, role)
+      if (!allowedIds.includes(finalAssignedTo)) {
+        return res.status(403).json({ success: false, message: 'Bạn không được phép gán task cho nhân viên này (vượt quyền phân cấp).' })
+      }
     }
 
     const task_id = uuidv4()
     const now = Date.now()
     const finalDueDate = due_date ? parseInt(due_date) : null
+    const finalRelatedType = (related_type === 'DEAL' || related_type === 'CUSTOMER') ? related_type : null
+    const finalRelatedId = (finalRelatedType && related_id) ? String(related_id).trim() : null
+
+    let parentDisplayCode = null
+    if (finalRelatedType === 'DEAL' && finalRelatedId) {
+      const dealRow = await pool.query(
+        'SELECT display_code FROM deals WHERE deal_id = $1 AND tenant_id = $2',
+        [finalRelatedId, tenantId]
+      )
+      if (dealRow.rows.length > 0 && dealRow.rows[0].display_code) {
+        parentDisplayCode = dealRow.rows[0].display_code
+      }
+    }
+
+    const displayCode = await generateDisplayCode('TSK', tenantId)
 
     const insertQuery = `
       INSERT INTO tasks (
-        task_id, customer_id, title, due_date, priority, is_completed, created_at, assigned_to, tenant_id
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        task_id, customer_id, title, due_date, priority, is_completed, created_at, assigned_to, tenant_id, related_type, related_id, display_code, parent_display_code
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
       RETURNING *
     `
     const values = [
-      task_id, customer_id || null, title, finalDueDate, priority || 'medium', false, now, finalAssignedTo, tenantId
+      task_id, customer_id || null, title, finalDueDate, priority || 'medium', false, now, finalAssignedTo, tenantId,
+      finalRelatedType, finalRelatedId, displayCode, parentDisplayCode
     ]
 
     const result = await pool.query(insertQuery, values)
+
+    if (finalRelatedType === 'DEAL' && finalRelatedId) {
+      updateDealTaskMetadata(finalRelatedId, tenantId).catch((e) => console.error('updateDealTaskMetadata:', e))
+    }
 
     if (finalAssignedTo && finalAssignedTo !== userId) {
       try {
@@ -160,7 +268,7 @@ export const updateTask = async (req, res) => {
   
   const { id } = req.params
   const { role, id: userId } = req.user || {}
-  const { is_completed, completion_content, title, due_date, priority } = req.body || {}
+  const { is_completed, completion_content, title, due_date, priority, assigned_to } = req.body || {}
   const tenantId = getTenantId(req)
 
   if (!req.user || !userId) {
@@ -193,6 +301,23 @@ export const updateTask = async (req, res) => {
         message: 'Bạn không có quyền sửa task này.',
         error: `Sales chỉ có thể sửa task được gán cho mình. Task này được gán cho employee_id: ${task.assigned_to}, nhưng bạn là: ${userId}`
       })
+    }
+
+    if (assigned_to !== undefined && assigned_to !== task.assigned_to) {
+      if (role === 'sales') {
+        return res.status(403).json({ success: false, message: 'Bạn không có quyền thay đổi người được gán task.' })
+      }
+      const empCheck = await pool.query(
+        'SELECT employee_id FROM employees WHERE employee_id = $1 AND tenant_id = $2 AND is_active = true',
+        [assigned_to, tenantId]
+      )
+      if (empCheck.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Nhân viên được gán không thuộc đơn vị của bạn.' })
+      }
+      const allowedIds = await getAssignableEmployeeIds(tenantId, userId, role)
+      if (!allowedIds.includes(assigned_to)) {
+        return res.status(403).json({ success: false, message: 'Bạn không được phép gán task cho nhân viên này (vượt quyền phân cấp).' })
+      }
     }
 
     // Nếu đánh dấu hoàn thành và có completion_content
@@ -272,6 +397,11 @@ export const updateTask = async (req, res) => {
       updateValues.push(priority)
     }
 
+    if (assigned_to !== undefined) {
+      updateFields.push(`assigned_to = $${paramIndex++}`)
+      updateValues.push(assigned_to)
+    }
+
     if (updateFields.length === 0) {
       console.log('Không có trường nào để cập nhật. Body:', req.body)
       return res.status(400).json({
@@ -313,10 +443,15 @@ export const updateTask = async (req, res) => {
       })
     }
 
+    const updated = result.rows[0]
+    if (updated.related_type === 'DEAL' && updated.related_id) {
+      updateDealTaskMetadata(updated.related_id, tenantId).catch((e) => console.error('updateDealTaskMetadata:', e))
+    }
+
     res.json({
       success: true,
       message: 'Cập nhật task thành công!',
-      data: result.rows[0]
+      data: updated
     })
   } catch (error) {
     console.error('Lỗi updateTask:', error)
@@ -371,7 +506,13 @@ export const deleteTask = async (req, res) => {
     if (role === 'sales' && task.assigned_to !== userId) {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa task này.' })
     }
+    const dealIdForMeta = task.related_type === 'DEAL' && task.related_id ? task.related_id : null
+
     await pool.query('DELETE FROM tasks WHERE task_id = $1 AND tenant_id = $2', [id, tenantId])
+
+    if (dealIdForMeta) {
+      updateDealTaskMetadata(dealIdForMeta, tenantId).catch((e) => console.error('updateDealTaskMetadata:', e))
+    }
 
     res.json({
       success: true,

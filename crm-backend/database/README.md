@@ -99,6 +99,26 @@ Quản lý nhiệm vụ.
 
 4. **UUID**: Tất cả các ID sử dụng VARCHAR(50) để lưu UUID v4.
 
+## Schema (scale data)
+
+Ứng dụng dùng **biến môi trường `DB_SCHEMA`** (mặc định: `public`) để chọn schema PostgreSQL. Giúp scale: nhiều môi trường (staging/prod) hoặc nhiều schema trong cùng DB.
+
+- **Backend**: Mỗi kết nối tự set `search_path` theo `DB_SCHEMA`.
+- **Migration**: Khi chạy `node run-migration.js <file.sql>` hoặc các script batch, mọi `public.` trong SQL được thay bằng schema đã cấu hình.
+
+Ví dụ dùng schema khác:
+
+```bash
+# .env
+DB_SCHEMA=crm_staging
+```
+
+Trước khi chạy migration lần đầu với schema mới, tạo schema trong PostgreSQL:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS crm_staging;
+```
+
 ## Cách sử dụng
 
 Để tạo lại database từ file schema:
@@ -107,11 +127,21 @@ Quản lý nhiệm vụ.
 # Kết nối PostgreSQL
 psql -U your_username -d your_database
 
-# Chạy file schema
+# (Tùy chọn) Nếu dùng schema khác public:
+# CREATE SCHEMA IF NOT EXISTS ten_schema;
+
+# Chạy file schema (file đang ghi public. – khi chạy bằng node run-migration thì đã thay schema)
 \i database/schema.sql
 ```
 
-Hoặc sử dụng pgAdmin hoặc DBeaver để import file SQL.
+Hoặc chạy migration từ backend (đã áp dụng DB_SCHEMA):
+
+```bash
+cd crm-backend
+DB_SCHEMA=crm_staging node run-migration.js migrations/create_tenants_table.sql
+```
+
+Hoặc dùng pgAdmin / DBeaver để import file SQL (khi đó cần tự sửa `public` sang tên schema nếu dùng schema khác).
 
 ## Cập nhật
 

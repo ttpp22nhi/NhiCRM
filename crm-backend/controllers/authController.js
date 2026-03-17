@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import pool from '../database.js';
 import { getTenantId } from '../utils/tenantHelper.js';
+import { getAssignableEmployees } from '../services/assignableEmployeesService.js';
 
 /**
  * Đăng ký nhân viên mới (Chỉ Admin mới có quyền)
@@ -135,14 +136,27 @@ export const login = async (req, res) => {
         [username, tenantId]
       );
     } else {
+      // Không có domain:
+      // - Chỉ cho phép đăng nhập không domain nếu username thuộc role super_admin (cấp hệ thống).
+      // - Các role khác bắt buộc có domain để xác định tenant.
       result = await pool.query(
         'SELECT * FROM employees WHERE username = $1 AND is_active = TRUE',
         [username]
       );
+      if (result.rows.length === 0) {
+        return res.status(401).json({ success: false, message: 'Tài khoản không tồn tại hoặc bị khóa.' });
+      }
       if (result.rows.length > 1) {
         return res.status(400).json({
           success: false,
           message: 'Có nhiều tài khoản trùng tên đăng nhập. Vui lòng nhập Domain công ty (trường domain) hoặc đăng nhập qua URL đơn vị (ví dụ: tenant1.yourcrm.com).'
+        });
+      }
+      const only = result.rows[0];
+      if (String(only.role || '').toLowerCase() !== 'super_admin') {
+        return res.status(400).json({
+          success: false,
+          message: 'Vui lòng nhập Domain công ty để đăng nhập.'
         });
       }
     }
@@ -323,6 +337,26 @@ export const getEmployeeById = async (req, res) => {
     res.status(500).json({ 
       success: false, 
       message: 'Lỗi hệ thống khi lấy thông tin nhân viên.' 
+    });
+  }
+};
+
+/**
+ * Lấy danh sách nhân viên được phép gán (Assigned To) theo phân cấp:
+ * director = toàn tenant; manager = self + leader/sales trong cây đơn vị; leader = self + sales cùng đơn vị; sales = chỉ mình
+ */
+export const getAssignableEmployeesList = async (req, res) => {
+  const { id: userId, role } = req.user;
+  try {
+    const tenantId = getTenantId(req);
+    const list = await getAssignableEmployees(tenantId, userId, role);
+    res.json({ success: true, data: list });
+  } catch (error) {
+    console.error('Lỗi getAssignableEmployeesList:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Không thể lấy danh sách nhân viên được phép gán.',
+      error: error.message
     });
   }
 };
@@ -627,6 +661,7 @@ export const getTransferStats = async (req, res) => {
        FROM deals d
        INNER JOIN customers c ON d.customer_id = c.customer_id AND c.tenant_id = d.tenant_id
        WHERE c.assigned_to = $1 AND c.tenant_id = $2 AND c.deleted_at IS NULL
+       AND (COALESCE(d.is_deleted, false) = false)
        AND d.stage NOT IN ('closed_won', 'closed_lost', 'Thành công', 'Thất bại')`,
       [from_employee_id, tenantId]
     );
@@ -746,6 +781,7 @@ export const transferCustomers = async (req, res) => {
          FROM deals d
          INNER JOIN customers c ON d.customer_id = c.customer_id AND c.tenant_id = d.tenant_id
          WHERE c.assigned_to = $1 AND c.tenant_id = $2 AND c.deleted_at IS NULL
+         AND (COALESCE(d.is_deleted, false) = false)
          AND d.stage NOT IN ('closed_won', 'closed_lost', 'Thành công', 'Thất bại')`,
         [from_employee_id, tenantId]
       );

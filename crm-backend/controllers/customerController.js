@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import pool from '../database.js';
 import { getTenantId } from '../utils/tenantHelper.js';
 import { getAccessScope, buildCustomerFilter } from '../services/permissionService.js';
+import { getAssignableEmployeeIds } from '../services/assignableEmployeesService.js';
 
 /**
  * Kiểm tra trùng lặp khách hàng dựa trên số điện thoại hoặc mã số thuế
@@ -132,7 +133,7 @@ export const createCustomer = async (req, res) => {
       // Admin/manager có thể chọn nhân viên, nếu không chọn thì gán cho chính mình
       finalAssignedTo = assigned_to || id;
       
-      // Nếu admin/manager chọn nhân viên, kiểm tra nhân viên thuộc cùng tenant và còn active
+      // Nếu chọn nhân viên, kiểm tra thuộc tenant + active và nằm trong danh sách được phép gán (phân cấp)
       if (assigned_to && assigned_to !== id) {
         const checkEmployee = await pool.query(
           'SELECT employee_id FROM employees WHERE employee_id = $1 AND tenant_id = $2 AND is_active = TRUE',
@@ -140,6 +141,10 @@ export const createCustomer = async (req, res) => {
         );
         if (checkEmployee.rows.length === 0) {
           return res.status(400).json({ success: false, message: 'Nhân viên được chọn không tồn tại hoặc không thuộc đơn vị của bạn.' });
+        }
+        const allowedIds = await getAssignableEmployeeIds(tenantId, id, role);
+        if (!allowedIds.includes(assigned_to)) {
+          return res.status(403).json({ success: false, message: 'Bạn không được phép gán khách hàng cho nhân viên này (vượt quyền phân cấp).' });
         }
       }
     }
@@ -343,7 +348,7 @@ export const updateCustomer = async (req, res) => {
       // Sales không thể thay đổi assigned_to, luôn giữ nguyên
       finalAssignedTo = customer.assigned_to;
     } else {
-      // Admin/manager có thể chọn nhân viên, nếu không chọn thì giữ nguyên
+      // Director/manager/leader có thể chọn nhân viên trong phạm vi được phép
       if (assigned_to) {
         const checkEmployee = await pool.query(
           'SELECT employee_id FROM employees WHERE employee_id = $1 AND tenant_id = $2 AND is_active = TRUE',
@@ -351,6 +356,10 @@ export const updateCustomer = async (req, res) => {
         );
         if (checkEmployee.rows.length === 0) {
           return res.status(400).json({ success: false, message: 'Nhân viên được chọn không tồn tại hoặc không thuộc đơn vị của bạn.' });
+        }
+        const allowedIds = await getAssignableEmployeeIds(tenantId, userId, role);
+        if (!allowedIds.includes(assigned_to)) {
+          return res.status(403).json({ success: false, message: 'Bạn không được phép gán khách hàng cho nhân viên này (vượt quyền phân cấp).' });
         }
         finalAssignedTo = assigned_to;
       }
@@ -555,6 +564,7 @@ export const bulkTransferCustomers = async (req, res) => {
          INNER JOIN customers c ON d.customer_id = c.customer_id
          WHERE c.customer_id IN (${customerPlaceholders})
          AND c.tenant_id = $${customer_ids.length + 1} AND c.deleted_at IS NULL
+         AND (COALESCE(d.is_deleted, false) = false)
          AND d.stage NOT IN ('closed_won', 'closed_lost', 'Thành công', 'Thất bại')`,
         [...customer_ids, tenantId]
       );
