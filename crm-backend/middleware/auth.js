@@ -1,5 +1,9 @@
 import jwt from 'jsonwebtoken';
 import pool from '../database.js';
+import {
+  isExecutiveRole,
+  isTenantAdminRole,
+} from '../config/rbac.js';
 
 /**
  * Middleware xác thực mã Token (JWT)
@@ -172,23 +176,48 @@ export const verifySuperAdmin = (req, res, next) => {
 };
 
 /**
- * Middleware kiểm tra quyền Admin
- * Phải được sử dụng sau verifyToken
+ * Quản trị tenant: chỉ admin + super_admin (cấu trúc tổ chức, ma trận phân quyền, sửa nhân viên, đăng ký…).
  */
-export const verifyAdmin = (req, res, next) => {
+export const verifyTenantAdmin = (req, res, next) => {
   if (!req.user) {
-    return res.status(401).json({ 
-      success: false, 
-      message: 'Vui lòng đăng nhập trước.' 
+    return res.status(401).json({
+      success: false,
+      message: 'Vui lòng đăng nhập trước.',
     });
   }
-
-  if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
-    return res.status(403).json({ 
-      success: false, 
-      message: 'Chỉ quản trị viên mới có quyền thực hiện thao tác này.' 
+  if (!isTenantAdminRole(req.user.role)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Chỉ quản trị viên (Admin) mới có quyền thực hiện thao tác này.',
     });
   }
-
   next();
 };
+
+/**
+ * Lãnh đạo vận hành: admin, super_admin, giám đốc, quản lý — không gồm chỉnh cấu hình tenant.
+ */
+export const verifyExecutive = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Vui lòng đăng nhập trước.',
+    });
+  }
+  if (!isExecutiveRole(req.user.role)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Chỉ quản trị viên, giám đốc hoặc quản lý mới có quyền thực hiện thao tác này.',
+    });
+  }
+  next();
+};
+
+/** @deprecated Dùng verifyTenantAdmin — giữ export để tương thích mã cũ */
+export const verifyAdmin = verifyTenantAdmin;
+
+/** @deprecated Dùng verifyExecutive */
+export const verifyAdminOrDirector = verifyExecutive;
+
+/** Đồng nghĩa verifyTenantAdmin (reset mật khẩu, v.v.) */
+export const verifyStrictAdmin = verifyTenantAdmin;

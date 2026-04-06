@@ -9,8 +9,8 @@
 
 import pool from '../database.js'
 
-const FULL_VISIBILITY_ROLES = ['super_admin', 'admin', 'director']
-const PATH_SCOPE_ROLES = ['manager', 'leader']
+const FULL_VISIBILITY_ROLES = ['super_admin', 'admin', 'director', 'manager']
+const PATH_SCOPE_ROLES = ['leader']
 
 async function getUserDepartmentPath(tenantId, userId) {
   const row = await pool.query(

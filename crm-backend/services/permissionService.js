@@ -31,6 +31,11 @@ export async function getAccessScope(userId, resource, action, tenantId) {
   }
 
   const { role, department_id } = userResult.rows[0]
+  const roleNorm = String(role || '').toLowerCase()
+  // Rule hiện tại: director/manager có quyền như admin trong phạm vi tenant.
+  if (['admin', 'super_admin', 'director', 'manager'].includes(roleNorm)) {
+    return { scope: 'global' }
+  }
   let userDepartmentPath = null
   if (department_id) {
     const pathRow = await pool.query(

@@ -163,7 +163,10 @@ export const getInteractionsByCustomer = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Khách hàng không tồn tại hoặc đã bị xóa.' })
     }
     const customer = customerCheck.rows[0]
-    if (role !== 'admin' && role !== 'manager' && customer.assigned_to !== userId) {
+    const roleNorm = String(role || '').toLowerCase()
+    // Rule mới: mọi role trừ sales đều được xem lịch sử tương tác trong tenant.
+    // sales chỉ được xem khách hàng do mình phụ trách.
+    if (roleNorm === 'sales' && customer.assigned_to !== userId) {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền xem tương tác của khách hàng này.' })
     }
 

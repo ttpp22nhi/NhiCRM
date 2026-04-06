@@ -10,3 +10,14 @@ JWT_SECRET=mot_cai_ma_bi_mat_bat_ky
 # Redis cache (optional). If not set, caching is disabled and APIs run normally.
 # Example: redis://localhost:6379
 REDIS_URL=
+
+# CORS: origin frontend (nhiều origin cách nhau bằng dấu phẩy khi truy cập từ mạng nội bộ).
+# Example: http://localhost:3001 hoặc http://localhost:3001,http://192.168.1.10:3001
+FRONTEND_URL=
+
+# URL API backend (dùng cho frontend crm-frontend qua biến NEXT_PUBLIC_API_URL).
+# Nếu để trống, frontend sẽ tự gọi cùng host + port 3000. Example: http://localhost:3000 hoặc http://192.168.1.10:3000
+NEXT_PUBLIC_API_URL=
+
+# Swagger: thêm lựa chọn server IP/domain (dropdown trong /api-docs). Example: http://10.18.96.180:3000
+PUBLIC_API_BASE_URL=

@@ -3,8 +3,11 @@ import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import { register, login, changePassword, getEmployees, getSalesEmployees, getAssignableEmployeesList, getEmployeeById, resetPassword, updateEmployee, transferCustomers, getTransferStats } from './controllers/authController.js';
-import { verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, verifySuperAdmin } from './middleware/auth.js';
+import { downloadEmployeeImportTemplate, importEmployeesFromExcel } from './controllers/employeeImportController.js';
+import { uploadEmployeeImportExcel } from './middleware/uploadEmployeeImport.js';
+import { verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, verifyExecutive, verifyStrictAdmin, verifySuperAdmin } from './middleware/auth.js';
 import { createCustomer, getCustomers, updateCustomer, deleteCustomer, checkDuplicateCustomer, bulkTransferCustomers, getCustomerOwnershipHistory } from './controllers/customerController.js';
+import { downloadCustomerImportTemplate, importCustomersFromExcel } from './controllers/customerImportController.js';
 import { createInteraction, getInteractionsByCustomer } from './controllers/interactionController.js';
 import {
   getDashboardStats,
@@ -37,9 +40,9 @@ dotenv.config();
 
 const app = express();
 
-// Middleware CORS - Xử lý preflight requests tự động
+// Middleware CORS - Cho phép mọi origin (domain hoặc IP) để truy cập từ mạng nội bộ không cần cấu hình.
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3001',
+  origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-Id'],
@@ -84,7 +87,11 @@ app.get('/swagger.json', (req, res) => {
  * @swagger
  * /api/auth/login:
  *   post:
- *     summary: Đăng nhập nhân viên
+ *     summary: Đăng nhập nhân viên (multi-tenant)
+ *     description: |
+ *       Body gồm username, password và tùy chọn **domain** (tenant).
+ *       - Super Admin có thể đăng nhập không cần domain.
+ *       - Các role khác (admin, director, manager, leader, sales) bắt buộc gửi **domain** (hoặc truy cập qua subdomain) để xác định công ty.
  *     tags: [Authentication]
  *     requestBody:
  *       required: true
@@ -99,6 +106,12 @@ app.get('/swagger.json', (req, res) => {
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/LoginResponse'
+ *       400:
+ *         description: Thiếu domain / domain không tồn tại / nhiều tenant trùng username
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  *       401:
  *         description: Thông tin đăng nhập không chính xác
  *         content:
@@ -135,7 +148,7 @@ app.post('/api/auth/login', login);
  *       403:
  *         description: Không có quyền (chỉ Admin)
  */
-app.post('/api/auth/register', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, register);
+app.post('/api/auth/register', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, register);
 
 /**
  * @swagger
@@ -200,9 +213,39 @@ app.post('/api/auth/change-password', verifyToken, extractTenant, requireTenant,
  *       403:
  *         description: Không có quyền (chỉ Admin)
  */
-app.get('/api/employees', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getEmployees);
+app.get('/api/employees', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyExecutive, getEmployees);
 
 app.get('/api/employees/assignable', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getAssignableEmployeesList);
+
+app.get(
+  '/api/employees/import/template',
+  verifyToken,
+  extractTenant,
+  requireTenant,
+  checkTenantSubscription,
+  verifyTenantAdmin,
+  downloadEmployeeImportTemplate
+)
+app.post(
+  '/api/employees/import',
+  verifyToken,
+  extractTenant,
+  requireTenant,
+  checkTenantSubscription,
+  verifyTenantAdmin,
+  (req, res, next) => {
+    uploadEmployeeImportExcel.single('file')(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message || 'Lỗi tải file.',
+        })
+      }
+      next()
+    })
+  },
+  importEmployeesFromExcel
+)
 
 /**
  * @swagger
@@ -220,7 +263,7 @@ app.get('/api/employees/assignable', verifyToken, extractTenant, requireTenant, 
  *       403:
  *         description: Chỉ Admin
  */
-app.get('/api/departments', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getDepartments);
+app.get('/api/departments', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, getDepartments);
 
 /**
  * @swagger
@@ -243,7 +286,7 @@ app.get('/api/departments/flat', verifyToken, extractTenant, requireTenant, chec
  *     summary: Lấy chi tiết phòng ban
  *     tags: [Departments]
  */
-app.get('/api/departments/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getDepartmentById);
+app.get('/api/departments/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, getDepartmentById);
 
 /**
  * @swagger
@@ -252,7 +295,7 @@ app.get('/api/departments/:id', verifyToken, extractTenant, requireTenant, check
  *     summary: Tạo phòng/tổ mới
  *     tags: [Departments]
  */
-app.post('/api/departments', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, createDepartment);
+app.post('/api/departments', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, createDepartment);
 
 /**
  * @swagger
@@ -261,7 +304,7 @@ app.post('/api/departments', verifyToken, extractTenant, requireTenant, checkTen
  *     summary: Cập nhật phòng/tổ
  *     tags: [Departments]
  */
-app.put('/api/departments/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, updateDepartment);
+app.put('/api/departments/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, updateDepartment);
 
 /**
  * @swagger
@@ -270,17 +313,17 @@ app.put('/api/departments/:id', verifyToken, extractTenant, requireTenant, check
  *     summary: Xóa phòng/tổ (kiểm tra còn nhân viên không)
  *     tags: [Departments]
  */
-app.delete('/api/departments/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, deleteDepartment);
+app.delete('/api/departments/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, deleteDepartment);
 
-app.get('/api/organization-levels', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getOrganizationLevels);
-app.post('/api/organization-levels', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, createOrganizationLevel);
-app.put('/api/organization-levels/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, updateOrganizationLevel);
-app.delete('/api/organization-levels/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, deleteOrganizationLevel);
-app.post('/api/organization-levels/:id/move', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, moveOrganizationLevel);
+app.get('/api/organization-levels', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, getOrganizationLevels);
+app.post('/api/organization-levels', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, createOrganizationLevel);
+app.put('/api/organization-levels/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, updateOrganizationLevel);
+app.delete('/api/organization-levels/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, deleteOrganizationLevel);
+app.post('/api/organization-levels/:id/move', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, moveOrganizationLevel);
 
-app.get('/api/permissions', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getRolePermissions);
-app.get('/api/permissions/matrix', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getPermissionMatrix);
-app.post('/api/permissions', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, upsertRolePermission);
+app.get('/api/permissions', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, getRolePermissions);
+app.get('/api/permissions/matrix', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, getPermissionMatrix);
+app.post('/api/permissions', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, upsertRolePermission);
 
 /**
  * @swagger
@@ -375,7 +418,7 @@ app.get('/api/employees/:id', verifyToken, extractTenant, requireTenant, checkTe
  *       404:
  *         description: Không tìm thấy nhân viên
  */
-app.put('/api/employees/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, updateEmployee);
+app.put('/api/employees/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, updateEmployee);
 
 /**
  * @swagger
@@ -425,7 +468,7 @@ app.put('/api/employees/:id', verifyToken, extractTenant, requireTenant, checkTe
  *       404:
  *         description: Không tìm thấy nhân viên
  */
-app.post('/api/employees/:id/reset-password', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, resetPassword);
+app.post('/api/employees/:id/reset-password', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyStrictAdmin, resetPassword);
 
 /**
  * @swagger
@@ -463,7 +506,7 @@ app.post('/api/employees/:id/reset-password', verifyToken, extractTenant, requir
  *       404:
  *         description: Không tìm thấy nhân viên
  */
-app.post('/api/employees/transfer-customers', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, transferCustomers);
+app.post('/api/employees/transfer-customers', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyExecutive, transferCustomers);
 
 /**
  * @swagger
@@ -492,7 +535,7 @@ app.post('/api/employees/transfer-customers', verifyToken, extractTenant, requir
  *       404:
  *         description: Không tìm thấy nhân viên
  */
-app.get('/api/employees/transfer-stats', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getTransferStats);
+app.get('/api/employees/transfer-stats', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyExecutive, getTransferStats);
 
 /**
  * @swagger
@@ -639,6 +682,33 @@ app.get('/api/employees/transfer-stats', verifyToken, extractTenant, requireTena
 app.post('/api/customers', verifyToken, extractTenant, requireTenant, checkTenantSubscription, createCustomer);
 app.get('/api/customers', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getCustomers);
 app.post('/api/customers/check-duplicate', verifyToken, extractTenant, requireTenant, checkTenantSubscription, checkDuplicateCustomer);
+app.get(
+  '/api/customers/import/template',
+  verifyToken,
+  extractTenant,
+  requireTenant,
+  checkTenantSubscription,
+  downloadCustomerImportTemplate
+);
+app.post(
+  '/api/customers/import',
+  verifyToken,
+  extractTenant,
+  requireTenant,
+  checkTenantSubscription,
+  (req, res, next) => {
+    uploadEmployeeImportExcel.single('file')(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({
+          success: false,
+          message: err.message || 'Lỗi tải file.',
+        });
+      }
+      next();
+    });
+  },
+  importCustomersFromExcel
+);
 app.put('/api/customers/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, updateCustomer);
 app.delete('/api/customers/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, deleteCustomer);
 app.get('/api/customers/:customerId/ownership-history', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getCustomerOwnershipHistory);
@@ -788,7 +858,7 @@ app.delete('/api/tasks/:id', verifyToken, extractTenant, requireTenant, checkTen
  */
 app.get('/api/deals', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDeals);
 app.get('/api/pipeline-stages', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getPipelineStages);
-app.get('/api/deals/trash', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, getDealsTrash);
+app.get('/api/deals/trash', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, getDealsTrash);
 
 /**
  * @swagger
@@ -813,7 +883,7 @@ app.post('/api/deals', verifyToken, extractTenant, requireTenant, checkTenantSub
 app.patch('/api/deals/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, updateDeal);
 app.post('/api/deals/:id/approve', verifyToken, extractTenant, requireTenant, checkTenantSubscription, approveDeal);
 app.delete('/api/deals/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, deleteDeal);
-app.post('/api/deals/:id/restore', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyAdmin, restoreDeal);
+app.post('/api/deals/:id/restore', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, restoreDeal);
 app.get('/api/deals/:id/activities', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDealActivities);
 app.post('/api/deals/:id/activities', verifyToken, extractTenant, requireTenant, checkTenantSubscription, addDealNote);
 app.get('/api/deals/:id/attachments', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDealAttachments);

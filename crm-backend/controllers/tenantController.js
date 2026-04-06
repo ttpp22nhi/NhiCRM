@@ -26,7 +26,7 @@ export const getTenants = async (req, res) => {
   } catch (error) {
     console.error('Lỗi getTenants:', error)
     res.status(500).json({
-      success: false,
+      success: false, business_code: 'TENANT_UNSPECIFIED',
       message: 'Lỗi hệ thống khi lấy danh sách tenant.',
       error: error.message
     })
@@ -42,7 +42,7 @@ export const getTenantById = async (req, res) => {
     )
     if (result.rows.length === 0) {
       return res.status(404).json({
-        success: false,
+        success: false, business_code: 'TENANT_UNSPECIFIED',
         message: 'Không tìm thấy tenant.'
       })
     }
@@ -50,7 +50,7 @@ export const getTenantById = async (req, res) => {
   } catch (error) {
     console.error('Lỗi getTenantById:', error)
     res.status(500).json({
-      success: false,
+      success: false, business_code: 'TENANT_UNSPECIFIED',
       message: 'Lỗi hệ thống.',
       error: error.message
     })
@@ -69,15 +69,15 @@ export const createTenant = async (req, res) => {
   const { name, domain, package_type, max_users, max_levels, start_date, end_date } = req.body
   try {
     if (!name || !name.trim()) {
-      return res.status(400).json({ success: false, message: 'Tên tenant là bắt buộc.' })
+      return res.status(400).json({ success: false, business_code: 'TENANT_UNSPECIFIED', message: 'Tên tenant là bắt buộc.' })
     }
     if (!domain || !domain.trim()) {
-      return res.status(400).json({ success: false, message: 'Domain là bắt buộc.' })
+      return res.status(400).json({ success: false, business_code: 'TENANT_UNSPECIFIED', message: 'Domain là bắt buộc.' })
     }
     const pkg = (package_type || 'Starter').trim()
     if (!PACKAGE_TYPES.includes(pkg)) {
       return res.status(400).json({
-        success: false,
+        success: false, business_code: 'TENANT_UNSPECIFIED',
         message: `package_type phải là một trong: ${PACKAGE_TYPES.join(', ')}`
       })
     }
@@ -104,11 +104,11 @@ export const createTenant = async (req, res) => {
     })
   } catch (error) {
     if (error.code === '23505') {
-      return res.status(400).json({ success: false, message: 'Domain đã tồn tại.' })
+      return res.status(400).json({ success: false, business_code: 'TENANT_UNSPECIFIED', message: 'Domain đã tồn tại.' })
     }
     console.error('Lỗi createTenant:', error)
     res.status(500).json({
-      success: false,
+      success: false, business_code: 'TENANT_UNSPECIFIED',
       message: 'Lỗi hệ thống khi tạo tenant.',
       error: error.message
     })
@@ -121,7 +121,7 @@ export const updateTenant = async (req, res) => {
   try {
     const check = await pool.query('SELECT id FROM tenants WHERE id = $1', [id])
     if (check.rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Không tìm thấy tenant.' })
+      return res.status(404).json({ success: false, business_code: 'TENANT_UNSPECIFIED', message: 'Không tìm thấy tenant.' })
     }
 
     const updates = []
@@ -140,7 +140,7 @@ export const updateTenant = async (req, res) => {
       const pkg = package_type.trim()
       if (!PACKAGE_TYPES.includes(pkg)) {
         return res.status(400).json({
-          success: false,
+          success: false, business_code: 'TENANT_UNSPECIFIED',
           message: `package_type phải là một trong: ${PACKAGE_TYPES.join(', ')}`
         })
       }
@@ -169,7 +169,7 @@ export const updateTenant = async (req, res) => {
     }
 
     if (updates.length === 0) {
-      return res.status(400).json({ success: false, message: 'Không có trường nào để cập nhật.' })
+      return res.status(400).json({ success: false, business_code: 'TENANT_UNSPECIFIED', message: 'Không có trường nào để cập nhật.' })
     }
 
     updates.push(`updated_at = $${idx++}`)
@@ -190,11 +190,11 @@ export const updateTenant = async (req, res) => {
     })
   } catch (error) {
     if (error.code === '23505') {
-      return res.status(400).json({ success: false, message: 'Domain đã tồn tại.' })
+      return res.status(400).json({ success: false, business_code: 'TENANT_UNSPECIFIED', message: 'Domain đã tồn tại.' })
     }
     console.error('Lỗi updateTenant:', error)
     res.status(500).json({
-      success: false,
+      success: false, business_code: 'TENANT_UNSPECIFIED',
       message: 'Lỗi hệ thống khi cập nhật tenant.',
       error: error.message
     })

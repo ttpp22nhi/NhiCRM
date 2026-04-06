@@ -1,9 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
 import pool from '../database.js';
 import { getTenantId } from '../utils/tenantHelper.js';
+import { getAssignableEmployeeIds } from '../services/assignableEmployeesService.js';
 
 /**
- * Tạo yêu cầu chuyển giao khách hàng (Sales)
+ * Tạo yêu cầu chuyển giao khách hàng (Sales/Manager)
  * POST /api/transfer/request
  */
 export const createTransferRequest = async (req, res) => {
@@ -12,6 +13,13 @@ export const createTransferRequest = async (req, res) => {
   const tenantId = getTenantId(req);
 
   try {
+    if (!role || !['sales', 'manager', 'director', 'admin', 'super_admin'].includes(role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Bạn không có quyền tạo yêu cầu chuyển giao.'
+      });
+    }
+
     if (!customer_ids || !Array.isArray(customer_ids) || customer_ids.length === 0) {
       return res.status(400).json({
         success: false,
@@ -84,6 +92,36 @@ export const createTransferRequest = async (req, res) => {
       }
     }
 
+    if (['manager', 'director', 'admin', 'super_admin'].includes(role)) {
+      const customerPlaceholders = customer_ids.map((_, index) => `$${index + 1}`).join(', ');
+      const customerCheckResult = await pool.query(
+        `SELECT customer_id, full_name, assigned_to
+         FROM public.customers
+         WHERE customer_id IN (${customerPlaceholders})
+         AND tenant_id = $${customer_ids.length + 1} AND deleted_at IS NULL`,
+        [...customer_ids, tenantId]
+      );
+
+      if (customerCheckResult.rows.length !== customer_ids.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'Một số khách hàng không tồn tại hoặc đã bị xóa.'
+        });
+      }
+
+      // Nhóm non-sales có quyền admin-like: danh sách allowedAssignees sẽ là toàn tenant.
+      const allowedAssignees = await getAssignableEmployeeIds(tenantId, userId, role);
+      const invalidCustomers = customerCheckResult.rows.filter(
+        customer => !allowedAssignees.includes(customer.assigned_to)
+      );
+      if (invalidCustomers.length > 0) {
+        return res.status(403).json({
+          success: false,
+          message: `Bạn không có quyền chuyển giao một số khách hàng ngoài phạm vi quản lý: ${invalidCustomers.map(c => c.full_name).join(', ')}`
+        });
+      }
+    }
+
     const existingRequestResult = await pool.query(
       `SELECT transfer_request_id, customer_ids, status 
        FROM public.transfer_requests 
@@ -123,8 +161,8 @@ export const createTransferRequest = async (req, res) => {
     );
 
     const managersResult = await pool.query(
-      `SELECT employee_id FROM public.employees 
-       WHERE role IN ('admin', 'manager') AND is_active = true AND tenant_id = $1`,
+      `SELECT employee_id FROM public.employees
+       WHERE role = 'manager' AND is_active = true AND tenant_id = $1`,
       [tenantId]
     );
 
@@ -135,6 +173,7 @@ export const createTransferRequest = async (req, res) => {
     const senderName = senderResult.rows[0]?.full_name || 'Nhân viên';
 
     for (const manager of managersResult.rows) {
+      if (manager.employee_id === userId) continue;
       const notificationId = uuidv4();
       await pool.query(
         `INSERT INTO public.notifications (
@@ -184,7 +223,7 @@ export const getPendingTransferRequests = async (req, res) => {
   const tenantId = getTenantId(req);
 
   try {
-    if (role !== 'manager' && role !== 'admin') {
+    if (!['manager', 'director', 'admin', 'super_admin'].includes(role)) {
       return res.status(403).json({
         success: false,
         message: 'Bạn không có quyền xem danh sách yêu cầu chuyển giao.'
@@ -252,7 +291,7 @@ export const getPendingTransferRequests = async (req, res) => {
 };
 
 /**
- * Phê duyệt hoặc từ chối yêu cầu chuyển giao (Manager)
+ * Phê duyệt hoặc từ chối yêu cầu chuyển giao
  * PATCH /api/transfer/approve/:id
  */
 export const approveTransferRequest = async (req, res) => {
@@ -262,7 +301,7 @@ export const approveTransferRequest = async (req, res) => {
 
   try {
     // 1. Kiểm tra quyền
-    if (role !== 'manager' && role !== 'admin') {
+    if (!['manager', 'director', 'admin', 'super_admin'].includes(role)) {
       return res.status(403).json({
         success: false,
         message: 'Bạn không có quyền phê duyệt yêu cầu chuyển giao.'
@@ -289,6 +328,7 @@ export const approveTransferRequest = async (req, res) => {
     const requestResult = await pool.query(
       `SELECT 
         tr.*,
+        sender.role as sender_role,
         sender.full_name as sender_name,
         receiver.full_name as receiver_name
       FROM public.transfer_requests tr
@@ -306,6 +346,14 @@ export const approveTransferRequest = async (req, res) => {
     }
 
     const request = requestResult.rows[0];
+    // Rule nghiệp vụ: yêu cầu do manager tạo phải do manager phê duyệt.
+    if (request.sender_role === 'manager' && role !== 'manager') {
+      return res.status(403).json({
+        success: false,
+        message: 'Yêu cầu chuyển giao do Quản lý tạo chỉ Quản lý mới được phê duyệt.'
+      });
+    }
+
 
     if (request.status !== 'pending') {
       return res.status(400).json({
@@ -638,7 +686,7 @@ export const getApprovalLogs = async (req, res) => {
   let { page = 1, limit = 20, transfer_request_id, approver_id } = req.query;
 
   try {
-    if (role !== 'manager' && role !== 'admin') {
+    if (!['manager', 'director', 'admin', 'super_admin'].includes(role)) {
       return res.status(403).json({
         success: false,
         message: 'Bạn không có quyền xem lịch sử phê duyệt chuyển giao.'

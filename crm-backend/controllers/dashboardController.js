@@ -29,6 +29,12 @@ async function resolveDashboardScopeOptions(tenantId, userId, role, scopePath) {
     return { scopeOptions: { scopePath: queryScopePath }, canUseScopePath, queryScopePath }
   }
 
+  // Business rule: Admin/Super Admin luôn có quyền xem toàn tenant trên Dashboard.
+  // Không phụ thuộc role_permissions để tránh bị thu hẹp scope ngoài ý muốn.
+  if (role === 'admin' || role === 'super_admin') {
+    return { scopeOptions: null, canUseScopePath, queryScopePath }
+  }
+
   const access = await getAccessScope(userId, 'deals', 'read', tenantId)
   if (access.scope === 'global') {
     return { scopeOptions: null, canUseScopePath, queryScopePath }

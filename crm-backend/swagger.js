@@ -14,12 +14,17 @@ const options = {
         email: 'support@crm-alpha.vn',
       },
     },
-    servers: [
-      {
-        url: `http://localhost:${process.env.PORT || 3000}`,
-        description: 'Development server',
-      },
-    ],
+    servers: (() => {
+      const port = process.env.PORT || 3000;
+      const list = [
+        { url: `http://localhost:${port}`, description: 'Localhost' },
+      ];
+      const alternate = process.env.PUBLIC_API_BASE_URL || process.env.SWAGGER_SERVER_URL;
+      if (alternate && String(alternate).trim()) {
+        list.push({ url: String(alternate).trim().replace(/\/$/, ''), description: 'IP / Domain' });
+      }
+      return list;
+    })(),
     components: {
       securitySchemes: {
         bearerAuth: {
@@ -50,10 +55,17 @@ const options = {
             username: {
               type: 'string',
               example: 'admin',
+              description: 'Tên đăng nhập',
             },
             password: {
               type: 'string',
               example: '123456@Admin',
+              description: 'Mật khẩu',
+            },
+            domain: {
+              type: 'string',
+              example: 'tenant1',
+              description: 'Domain công ty (tenant).  Có thể lấy từ subdomain hoặc gửi trong body. Để trống nếu đăng nhập Super Admin.',
             },
           },
         },
@@ -78,7 +90,9 @@ const options = {
                 id: { type: 'string' },
                 username: { type: 'string' },
                 full_name: { type: 'string' },
-                role: { type: 'string', enum: ['admin', 'sales', 'manager'] },
+                email: { type: 'string' },
+                role: { type: 'string', enum: ['super_admin', 'admin', 'director', 'manager', 'leader', 'sales'] },
+                tenant_id: { type: 'string', nullable: true },
               },
             },
           },
@@ -91,7 +105,10 @@ const options = {
             password: { type: 'string', example: 'password123' },
             full_name: { type: 'string', example: 'Nguyễn Văn A' },
             email: { type: 'string', example: 'sales1@example.com' },
-            role: { type: 'string', enum: ['admin', 'sales', 'manager'], example: 'sales' },
+            role: { type: 'string', enum: ['super_admin', 'admin', 'director', 'manager', 'leader', 'sales'], example: 'sales' },
+            department_id: { type: 'string', nullable: true },
+            title: { type: 'string', nullable: true },
+            rank: { type: 'string', nullable: true },
           },
         },
         Customer: {
@@ -118,7 +135,10 @@ const options = {
             username: { type: 'string' },
             full_name: { type: 'string' },
             email: { type: 'string' },
-            role: { type: 'string', enum: ['admin', 'sales', 'manager'] },
+            role: { type: 'string', enum: ['super_admin', 'admin', 'director', 'manager', 'leader', 'sales'] },
+            department_id: { type: 'string', nullable: true },
+            title: { type: 'string', nullable: true },
+            rank: { type: 'string', nullable: true },
             is_active: { type: 'boolean' },
             created_at: { type: 'integer', format: 'int64' },
           },

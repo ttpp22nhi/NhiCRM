@@ -8,7 +8,7 @@
 
 import pool from '../database.js'
 
-const DIRECTOR_ROLES = ['super_admin', 'admin', 'director']
+const ADMIN_LIKE_ROLES = ['super_admin', 'admin', 'director', 'manager']
 
 /**
  * Lấy danh sách employee_id được phép gán cho user (để validate 403)
@@ -16,7 +16,7 @@ const DIRECTOR_ROLES = ['super_admin', 'admin', 'director']
  */
 export async function getAssignableEmployeeIds(tenantId, userId, role) {
   const roleNorm = (role || '').toLowerCase()
-  if (DIRECTOR_ROLES.includes(roleNorm)) {
+  if (ADMIN_LIKE_ROLES.includes(roleNorm)) {
     const r = await pool.query(
       'SELECT employee_id FROM employees WHERE tenant_id = $1 AND is_active = TRUE',
       [tenantId]

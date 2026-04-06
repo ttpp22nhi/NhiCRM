@@ -33,6 +33,7 @@ export const getNotifications = async (req, res) => {
     console.error('Lỗi getNotifications:', error)
     res.status(500).json({
       success: false,
+      business_code: 'NOTIFICATION_UNSPECIFIED',
       message: 'Lỗi hệ thống khi lấy danh sách thông báo.',
       error: error.message
     })
@@ -54,6 +55,7 @@ export const markAsRead = async (req, res) => {
     if (checkResult.rows.length === 0) {
       return res.status(404).json({
         success: false,
+      business_code: 'NOTIFICATION_UNSPECIFIED',
         message: 'Thông báo không tồn tại hoặc không thuộc về bạn.'
       })
     }
@@ -72,6 +74,7 @@ export const markAsRead = async (req, res) => {
     console.error('Lỗi markAsRead:', error)
     res.status(500).json({
       success: false,
+      business_code: 'NOTIFICATION_UNSPECIFIED',
       message: 'Lỗi hệ thống khi đánh dấu thông báo.',
       error: error.message
     })
@@ -99,6 +102,7 @@ export const markAllAsRead = async (req, res) => {
     console.error('Lỗi markAllAsRead:', error)
     res.status(500).json({
       success: false,
+      business_code: 'NOTIFICATION_UNSPECIFIED',
       message: 'Lỗi hệ thống khi đánh dấu thông báo.',
       error: error.message
     })

@@ -195,7 +195,7 @@ export const createCustomer = async (req, res) => {
  */
 export const getCustomers = async (req, res) => {
   const { id } = req.user;
-  const { search, type, page, limit } = req.query;
+  const { search, type, page, limit, assigned_to: assignedToQuery } = req.query;
 
   const currentPage = parseInt(page) || 1;
   const pageSize = parseInt(limit) || 10;
@@ -252,6 +252,20 @@ export const getCustomers = async (req, res) => {
       conditions.push(`c.customer_type IN (${placeholders})`);
       values.push(...types);
       paramIndex += types.length;
+    }
+
+    if (assignedToQuery && String(assignedToQuery).trim() !== '') {
+      const aid = String(assignedToQuery).trim();
+      const allowedIds = await getAssignableEmployeeIds(tenantId, id, req.user.role);
+      if (!allowedIds.includes(aid)) {
+        return res.status(403).json({
+          success: false,
+          message: 'Không được lọc theo nhân viên chăm sóc này.',
+        });
+      }
+      conditions.push(`c.assigned_to = $${paramIndex}`);
+      values.push(aid);
+      paramIndex++;
     }
 
     // Query để đếm tổng số bản ghi (cho pagination)

@@ -268,7 +268,7 @@ export const updateTask = async (req, res) => {
   
   const { id } = req.params
   const { role, id: userId } = req.user || {}
-  const { is_completed, completion_content, title, due_date, priority, assigned_to } = req.body || {}
+  const { is_completed, completion_content, title, due_date, priority, assigned_to, customer_id: bodyCustomerId } = req.body || {}
   const tenantId = getTenantId(req)
 
   if (!req.user || !userId) {
@@ -317,6 +317,38 @@ export const updateTask = async (req, res) => {
       const allowedIds = await getAssignableEmployeeIds(tenantId, userId, role)
       if (!allowedIds.includes(assigned_to)) {
         return res.status(403).json({ success: false, message: 'Bạn không được phép gán task cho nhân viên này (vượt quyền phân cấp).' })
+      }
+    }
+
+    // Rule: Task từ Deal — không cho đổi khách hàng trên task; phải đổi trên Deal.
+    const isFromDeal = task.related_type === 'DEAL' && task.related_id
+    if (isFromDeal && bodyCustomerId !== undefined) {
+      const normalizedBody = bodyCustomerId == null ? null : String(bodyCustomerId).trim() || null
+      const currentCustomer = task.customer_id || null
+      if (normalizedBody !== currentCustomer) {
+        return res.status(400).json({
+          success: false,
+          message: 'Task này thuộc cơ hội (Deal). Để đổi khách hàng, vui lòng chỉnh tại Cơ hội tương ứng.',
+          error: 'customer_id cannot be changed on a task linked to a deal'
+        })
+      }
+    }
+
+    // Rule: Task độc lập — cho phép cập nhật customer_id (validate tồn tại, cùng tenant, chưa xóa).
+    if (!isFromDeal && bodyCustomerId !== undefined) {
+      const newCustomerId = bodyCustomerId == null || bodyCustomerId === '' ? null : String(bodyCustomerId).trim()
+      if (newCustomerId) {
+        const customerCheck = await pool.query(
+          'SELECT customer_id FROM customers WHERE customer_id = $1 AND tenant_id = $2 AND deleted_at IS NULL',
+          [newCustomerId, tenantId]
+        )
+        if (customerCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Khách hàng không tồn tại hoặc đã bị xóa.',
+            error: 'customer_id invalid or deleted'
+          })
+        }
       }
     }
 
@@ -402,6 +434,13 @@ export const updateTask = async (req, res) => {
       updateValues.push(assigned_to)
     }
 
+    // Chỉ task không từ Deal mới được cập nhật customer_id (đã validate ở trên).
+    if (!isFromDeal && bodyCustomerId !== undefined) {
+      const newCustomerId = bodyCustomerId == null || bodyCustomerId === '' ? null : String(bodyCustomerId).trim()
+      updateFields.push(`customer_id = $${paramIndex++}`)
+      updateValues.push(newCustomerId)
+    }
+
     if (updateFields.length === 0) {
       console.log('Không có trường nào để cập nhật. Body:', req.body)
       return res.status(400).json({
@@ -414,7 +453,8 @@ export const updateTask = async (req, res) => {
           completion_content,
           title,
           due_date,
-          priority
+          priority,
+          customer_id: bodyCustomerId
         }
       })
     }
