@@ -1,15 +1,37 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
 import { useAuth } from '@/contexts/AuthContext'
 import { ChangePasswordForm } from '@/components/ChangePasswordForm'
+import { apiClient } from '@/lib/api'
 import { User, Mail, Shield, UserCheck, Calendar, Key, X } from 'lucide-react'
 
 export default function ProfilePage() {
   const { user } = useAuth()
   const [showChangePassword, setShowChangePassword] = useState(false)
+  const [departmentName, setDepartmentName] = useState<string>('')
+
+  useEffect(() => {
+    if (!user?.id) {
+      setDepartmentName('')
+      return
+    }
+    let cancelled = false
+    const loadDepartment = async () => {
+      try {
+        const res = await apiClient.get(`/api/employees/${user.id}`)
+        if (!cancelled && res.data?.success) {
+          setDepartmentName(res.data?.data?.department_name || '')
+        }
+      } catch (_) {
+        if (!cancelled) setDepartmentName('')
+      }
+    }
+    loadDepartment()
+    return () => { cancelled = true }
+  }, [user?.id])
 
   if (!user) {
     return null
@@ -117,6 +139,17 @@ export default function ProfilePage() {
                     <label className="text-sm font-medium text-gray-500">User ID</label>
                   </div>
                   <p className="text-sm font-mono text-gray-600">{user.id}</p>
+                </div>
+
+                {/* Đơn vị */}
+                <div className="bg-gray-50 rounded-lg p-4 md:col-span-2">
+                  <div className="flex items-center gap-2 mb-2">
+                    <UserCheck className="w-5 h-5 text-gray-400" />
+                    <label className="text-sm font-medium text-gray-500">Đơn vị</label>
+                  </div>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {departmentName || 'Chưa gán đơn vị'}
+                  </p>
                 </div>
               </div>
 

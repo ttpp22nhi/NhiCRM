@@ -15,8 +15,10 @@ interface DealCardProps {
 }
 
 export function DealCard({ deal, onEdit, onViewDetail, onCancel, onDelete, canDelete }: DealCardProps) {
+  const draggable = deal.status === 'active'
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: deal.deal_id
+    id: deal.deal_id,
+    disabled: !draggable
   })
 
   const baseTransform = CSS.Transform.toString(transform)
@@ -74,8 +76,8 @@ export function DealCard({ deal, onEdit, onViewDetail, onCancel, onDelete, canDe
       ref={setNodeRef}
       style={style}
       {...attributes}
-      {...listeners}
-      className={`bg-white rounded-lg shadow-md p-4 mb-3 cursor-move hover:shadow-lg transition-shadow border-l-4 ${borderClass} ${opacityClass}`}
+      {...(draggable ? listeners : {})}
+      className={`bg-white rounded-lg shadow-md p-4 mb-3 ${draggable ? 'cursor-move' : 'cursor-default'} hover:shadow-lg transition-shadow border-l-4 ${borderClass} ${opacityClass}`}
     >
       <div className="flex items-start justify-between mb-2">
         <div className="min-w-0 flex-1 flex items-start gap-2">

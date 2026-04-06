@@ -5,18 +5,24 @@ import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
 import { CustomerList } from '@/components/CustomerList'
 import { CustomerForm } from '@/components/CustomerForm'
+import { CustomerImportModal } from '@/components/CustomerImportModal'
 import { useAuth } from '@/contexts/AuthContext'
 import { useSubscription } from '@/contexts/SubscriptionContext'
-import { Plus, X, ArrowRightLeft } from 'lucide-react'
+import { Plus, X, ArrowRightLeft, FileSpreadsheet } from 'lucide-react'
 
 export default function CustomersPage() {
   const { user } = useAuth()
   const { expired } = useSubscription()
   const [showForm, setShowForm] = useState(false)
+  const [showImport, setShowImport] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   
-  // Chỉ Admin và Manager mới có quyền chuyển giao
-  const canTransfer = user?.role === 'admin' || user?.role === 'manager'
+  // Admin-like: Admin/Super Admin/Giám đốc/Quản lý
+  const canTransfer =
+    user?.role === 'admin' ||
+    user?.role === 'super_admin' ||
+    user?.role === 'director' ||
+    user?.role === 'manager'
 
   const handleCustomerCreated = () => {
     setShowForm(false)
@@ -33,9 +39,10 @@ export default function CustomersPage() {
               <h1 className="text-3xl font-bold text-gray-900">Quản lý khách hàng</h1>
               <p className="text-gray-600 mt-2">Danh sách và thông tin khách hàng</p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               {canTransfer && (
                 <button
+                  type="button"
                   onClick={() => {
                     if (expired) return
                     const handleBulkTransfer = (window as any).__customerListBulkTransfer
@@ -53,6 +60,21 @@ export default function CustomersPage() {
                 </button>
               )}
               <button
+                type="button"
+                onClick={() => !expired && setShowImport(true)}
+                disabled={expired}
+                title={
+                  expired ? 'Gói dịch vụ đã hết hạn. Vui lòng gia hạn.' : 'Import danh sách từ Excel'
+                }
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition font-medium border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 ${
+                  expired ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
+              >
+                <FileSpreadsheet className="w-5 h-5" />
+                <span>Import Excel</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => !expired && setShowForm(true)}
                 disabled={expired}
                 title={expired ? 'Gói dịch vụ đã hết hạn. Vui lòng gia hạn để thêm khách hàng.' : undefined}
@@ -67,6 +89,13 @@ export default function CustomersPage() {
           </div>
 
           <CustomerList key={refreshKey} />
+
+          {showImport && (
+            <CustomerImportModal
+              onClose={() => setShowImport(false)}
+              onSuccess={() => setRefreshKey((k) => k + 1)}
+            />
+          )}
 
           {showForm && (
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">

@@ -14,7 +14,7 @@ import { DealDetailModal } from '@/components/DealDetailModal'
 import { CancelDealModal } from '@/components/CancelDealModal'
 import { KanbanBoard, type Deal, type Stage } from '@/components/KanbanBoard'
 
-type StatusFilter = 'active' | 'won' | 'cancelled_lost' | 'pending_approval'
+type StatusFilter = 'all' | 'active' | 'won' | 'cancelled_lost'
 type DealCategoryFilter = 'MASS' | 'PROJECT' | ''
 
 function formatDealDate(ts: number | string | undefined | null): string {
@@ -22,64 +22,6 @@ function formatDealDate(ts: number | string | undefined | null): string {
   if (Number.isNaN(n) || n <= 0) return '—'
   const d = new Date(n.toString().length <= 10 ? n * 1000 : n)
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('vi-VN')
-}
-
-function PendingApprovalList({
-  deals,
-  onApprove,
-  onViewDetail,
-  onEdit,
-  canApprove
-}: {
-  deals: Deal[]
-  onApprove: (deal: Deal) => void | Promise<void>
-  onViewDetail?: (deal: Deal) => void
-  onEdit: (deal: Deal) => void
-  canApprove: boolean
-}) {
-  if (deals.length === 0) {
-    return (
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <p className="text-gray-500 p-6 text-center">Không có deal nào chờ phê duyệt.</p>
-      </div>
-    )
-  }
-  return (
-    <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-      <ul className="divide-y divide-gray-200">
-        {deals.map((deal) => (
-          <li key={deal.deal_id} className="p-4 flex items-center justify-between hover:bg-gray-50">
-            <div>
-              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 mr-2">Chờ phê duyệt</span>
-              {deal.display_code && <span className="text-xs text-gray-500">{deal.display_code}</span>}
-              <p className="font-medium text-gray-900 mt-1">{deal.title}</p>
-              <p className="text-sm text-gray-600">
-                {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(deal.amount || 0)}
-                {deal.customer_full_name && ` · ${deal.customer_full_name}`}
-              </p>
-              {(deal.created_at != null || deal.time_create != null) && (
-                <p className="text-xs text-gray-400 mt-0.5">Ngày tạo: {formatDealDate(deal.created_at ?? deal.time_create)}</p>
-              )}
-            </div>
-            <div className="flex gap-2">
-              {onViewDetail && (
-                <button onClick={() => onViewDetail(deal)} className="text-sm text-[#0074BD] hover:underline">Xem chi tiết</button>
-              )}
-              <button onClick={() => onEdit(deal)} className="text-sm text-gray-600 hover:underline">Sửa</button>
-              {canApprove && (
-                <button
-                  onClick={() => onApprove(deal)}
-                  className="px-3 py-1.5 text-sm font-medium bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
-                >
-                  Phê duyệt
-                </button>
-              )}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
 }
 
 function ClosedDealsList({
@@ -189,7 +131,6 @@ export default function DealsPage() {
       if (statusFilter === 'active') params.status = 'active'
       else if (statusFilter === 'won') params.status = 'won'
       else if (statusFilter === 'cancelled_lost') params.status = 'cancelled,lost'
-      else if (statusFilter === 'pending_approval') params.status = 'pending_approval'
       if (dateFrom) params.from_date = dateFrom
       if (dateTo) params.to_date = dateTo
       if (createdDateFrom) params.created_from = createdDateFrom
@@ -318,10 +259,11 @@ export default function DealsPage() {
                 </button>
               ))}
             </div>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700">Trạng thái:</span>
             {[
+              { key: 'all' as const, label: 'Tất cả' },
               { key: 'active' as const, label: 'Đang hoạt động' },
-              ...(canApproveDeal ? [{ key: 'pending_approval' as const, label: 'Chờ phê duyệt' }] : []),
               { key: 'won' as const, label: 'Đã chốt' },
               { key: 'cancelled_lost' as const, label: 'Đã hủy / Thất bại' }
             ].map(({ key, label }) => (
@@ -406,6 +348,19 @@ export default function DealsPage() {
           </div>
 
           {/* Nội dung theo bộ lọc (lọc theo status để mỗi tab chỉ hiện đúng deal) */}
+          {statusFilter === 'all' && (
+            <KanbanBoard
+              deals={deals}
+              stages={pipelineStages.length > 0 ? pipelineStages : undefined}
+              showAllStatuses
+              onStageChange={handleStageChange}
+              onEdit={setEditingDeal}
+              onViewDetail={setDetailDeal}
+              onCancel={handleCancel}
+              onDelete={handleDelete}
+              canDelete={canDeleteDeal}
+            />
+          )}
           {statusFilter === 'active' && (
             <KanbanBoard
               deals={deals.filter((d) => (d.status || 'active') === 'active')}
@@ -416,24 +371,6 @@ export default function DealsPage() {
               onCancel={handleCancel}
               onDelete={handleDelete}
               canDelete={canDeleteDeal}
-            />
-          )}
-          {statusFilter === 'pending_approval' && (
-            <PendingApprovalList
-              deals={deals.filter((d) => d.status === 'pending_approval')}
-              onApprove={async (deal) => {
-                try {
-                  await apiClient.post(`/api/deals/${deal.deal_id}/approve`)
-                  toast.success('Đã phê duyệt deal. Deal đã vào Pipeline.')
-                  fetchDeals()
-                  setDetailDeal(null)
-                } catch (err: any) {
-                  toast.error(err.response?.data?.message || 'Phê duyệt thất bại.')
-                }
-              }}
-              onViewDetail={setDetailDeal}
-              onEdit={setEditingDeal}
-              canApprove={canApproveDeal}
             />
           )}
           {(statusFilter === 'won' || statusFilter === 'cancelled_lost') && (

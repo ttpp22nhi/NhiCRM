@@ -60,6 +60,8 @@ const DEFAULT_STAGES: Stage[] = [
 interface KanbanBoardProps {
   deals: Deal[]
   stages?: Stage[]
+  /** Mặc định chỉ hiển thị deal status=active. Nếu true: hiển thị tất cả status trong cùng Kanban (read-only cho deal không active). */
+  showAllStatuses?: boolean
   onStageChange: (dealId: string, newStage: string, previousStage: string, note?: string) => void
   onEdit: (deal: Deal) => void
   onViewDetail?: (deal: Deal) => void
@@ -70,8 +72,14 @@ interface KanbanBoardProps {
 
 type PendingStageChange = { dealId: string; newStage: string; previousStage: string; dealTitle: string }
 
-export function KanbanBoard({ deals, stages: stagesProp, onStageChange, onEdit, onViewDetail, onCancel, onDelete, canDelete }: KanbanBoardProps) {
-  const stages = stagesProp && stagesProp.length > 0 ? stagesProp : DEFAULT_STAGES
+export function KanbanBoard({ deals, stages: stagesProp, showAllStatuses, onStageChange, onEdit, onViewDetail, onCancel, onDelete, canDelete }: KanbanBoardProps) {
+  const baseStages = stagesProp && stagesProp.length > 0 ? stagesProp : DEFAULT_STAGES
+  const stages: Stage[] = showAllStatuses
+    ? [
+        ...baseStages,
+        { id: '__status_cancelled_lost__', label: 'Đã hủy / Thất bại', color: 'bg-rose-50 border-rose-200' }
+      ]
+    : baseStages
   const [activeDeal, setActiveDeal] = useState<Deal | null>(null)
   const [pendingStageChange, setPendingStageChange] = useState<PendingStageChange | null>(null)
   const [stageChangeNote, setStageChangeNote] = useState('')
@@ -101,6 +109,8 @@ export function KanbanBoard({ deals, stages: stagesProp, onStageChange, onEdit, 
     const dealId = active.id as string
     const currentDeal = deals.find((d) => d.deal_id === dealId)
     if (!currentDeal) return
+    // Chỉ cho kéo/thả (đổi stage) với deal đang active
+    if (currentDeal.status !== 'active') return
 
     const overId = over.id as string
     const isStageId = stages.some((s) => s.id === overId)
@@ -142,6 +152,10 @@ export function KanbanBoard({ deals, stages: stagesProp, onStageChange, onEdit, 
   }
 
   const getDealsByStage = (stageId: string) => {
+    if (showAllStatuses) {
+      if (stageId === '__status_cancelled_lost__') return deals.filter((d) => d.status === 'cancelled' || d.status === 'lost')
+      return deals.filter((d) => d.stage === stageId && (d.status || 'active') !== 'cancelled' && (d.status || 'active') !== 'lost')
+    }
     return deals.filter((d) => d.stage === stageId && d.status === 'active')
   }
 
@@ -165,6 +179,7 @@ export function KanbanBoard({ deals, stages: stagesProp, onStageChange, onEdit, 
             key={stage.id}
             stage={stage}
             deals={getDealsByStage(stage.id)}
+            droppable={!showAllStatuses || stage.id !== '__status_cancelled_lost__'}
             onEdit={onEdit}
             onViewDetail={onViewDetail}
             onCancel={onCancel}

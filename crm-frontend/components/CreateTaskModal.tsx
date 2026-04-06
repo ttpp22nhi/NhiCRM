@@ -13,6 +13,10 @@ export interface TaskForForm {
   due_date?: number
   priority: string
   assigned_to?: string
+  /** Task từ Deal: không cho đổi khách hàng trên task */
+  related_type?: string
+  related_id?: string
+  parent_display_code?: string
 }
 
 interface CreateTaskModalProps {
@@ -45,6 +49,7 @@ function toDatetimeLocal(ts?: number | null): string {
 
 export function CreateTaskModal({ onClose, onSuccess, employees, userRole, task }: CreateTaskModalProps) {
   const isEdit = !!task
+  const isFromDeal = !!(task?.related_type === 'DEAL' && task?.related_id)
   const [loading, setLoading] = useState(false)
   const [customers, setCustomers] = useState<{ customer_id: string; full_name?: string; phone?: string }[]>([])
   const [formData, setFormData] = useState({
@@ -108,6 +113,8 @@ export function CreateTaskModal({ onClose, onSuccess, employees, userRole, task 
           priority: payload.priority
         }
         if (canAssign && formData.assigned_to) patchPayload.assigned_to = formData.assigned_to
+        // Task từ Deal: không gửi customer_id (backend sẽ từ chối nếu gửi). Task độc lập: gửi nếu có.
+        if (!isFromDeal && payload.customer_id !== undefined) patchPayload.customer_id = payload.customer_id || null
         const res = await apiClient.patch(`/api/tasks/${task.task_id}`, patchPayload)
         if (res.data.success) {
           toast.success('Cập nhật công việc thành công!')
@@ -172,18 +179,40 @@ export function CreateTaskModal({ onClose, onSuccess, employees, userRole, task 
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Khách hàng</label>
-            <select
-              value={formData.customer_id}
-              onChange={(e) => setFormData((prev) => ({ ...prev, customer_id: e.target.value }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0074BD] focus:border-transparent"
-            >
-              <option value="">-- Không chọn --</option>
-              {customers.map((c) => (
-                <option key={c.customer_id} value={c.customer_id}>
-                  {c.full_name || c.phone || c.customer_id}
-                </option>
-              ))}
-            </select>
+            {isFromDeal ? (
+              <div className="px-3 py-2.5 border border-amber-200 bg-amber-50 rounded-lg text-sm text-amber-800 space-y-1.5">
+                <p className="font-medium">
+                  Task này thuộc cơ hội {task?.parent_display_code || 'Deal'}.
+                </p>
+                <p className="text-amber-700">
+                  Để đổi khách hàng, vui lòng chỉnh tại Cơ hội tương ứng.
+                </p>
+                {task?.related_id && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      window.location.href = `/deals?openDealId=${task.related_id}`
+                    }}
+                    className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-amber-600 text-white hover:bg-amber-700"
+                  >
+                    Mở Cơ hội
+                  </button>
+                )}
+              </div>
+            ) : (
+              <select
+                value={formData.customer_id}
+                onChange={(e) => setFormData((prev) => ({ ...prev, customer_id: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0074BD] focus:border-transparent"
+              >
+                <option value="">-- Không chọn --</option>
+                {customers.map((c) => (
+                  <option key={c.customer_id} value={c.customer_id}>
+                    {c.full_name || c.phone || c.customer_id}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           <div>

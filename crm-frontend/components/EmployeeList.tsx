@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { apiClient } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
-import { Users, Mail, Shield, UserCheck, AlertCircle, Key, Copy, X, CheckCircle, Edit, Eye, MoreVertical, ArrowRightLeft } from 'lucide-react'
+import { Users, Mail, Shield, AlertCircle, Key, Copy, X, CheckCircle, Edit, Eye, MoreVertical, ArrowRightLeft, Filter } from 'lucide-react'
 import { EditEmployeeForm } from './EditEmployeeForm'
 import { EmployeeDetailView } from './EmployeeDetailView'
 import { TransferCustomersModal } from './TransferCustomersModal'
@@ -46,9 +46,31 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
   const [transferringEmployee, setTransferringEmployee] = useState<Employee | null>(null)
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null)
+  const [roleFilter, setRoleFilter] = useState<string>('')
   const actionButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
-  const isAdmin = user?.role === 'admin' || user?.role === 'super_admin'
+  const ROLE_FILTER_OPTIONS: { value: string; label: string }[] = [
+    { value: 'super_admin', label: 'Super Admin' },
+    { value: 'admin', label: 'Quản trị viên' },
+    { value: 'director', label: 'Giám đốc' },
+    { value: 'manager', label: 'Quản lý' },
+    { value: 'leader', label: 'Tổ trưởng' },
+    { value: 'sales', label: 'Nhân viên bán hàng' },
+  ]
+
+  const filteredEmployees = useMemo(() => {
+    if (!roleFilter) return employees
+    const r = roleFilter.toLowerCase()
+    return employees.filter((e) => String(e.role || '').toLowerCase() === r)
+  }, [employees, roleFilter])
+
+  const hasAdminLikeAccess =
+    user?.role === 'admin' ||
+    user?.role === 'super_admin' ||
+    user?.role === 'director' ||
+    user?.role === 'manager'
+  const canEditEmployee = user?.role === 'admin' || user?.role === 'super_admin'
+  const canResetPassword = user?.role === 'admin' || user?.role === 'super_admin'
 
   const getRoleLabel = (role: string) => {
     switch (role) {
@@ -116,6 +138,10 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
       }
     }
   }, [openMenuId])
+
+  useEffect(() => {
+    setOpenMenuId(null)
+  }, [roleFilter])
 
   const fetchEmployees = async () => {
     try {
@@ -245,6 +271,50 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
 
   return (
     <div className="bg-white rounded-lg shadow overflow-hidden">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50/90">
+        <div className="flex items-center gap-2 text-sm text-gray-700">
+          <Filter className="w-4 h-4 text-gray-500 shrink-0" />
+          <label htmlFor="employee-role-filter" className="font-medium text-gray-700 shrink-0">
+            Vai trò
+          </label>
+          <select
+            id="employee-role-filter"
+            value={roleFilter}
+            onChange={(e) => setRoleFilter(e.target.value)}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none min-w-[200px]"
+          >
+            <option value="">Tất cả</option>
+            {ROLE_FILTER_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="text-xs text-gray-500 sm:text-right">
+          Hiển thị{' '}
+          <span className="font-semibold text-gray-700">{filteredEmployees.length}</span>
+          {employees.length !== filteredEmployees.length && (
+            <>
+              {' '}
+              / {employees.length}
+            </>
+          )}{' '}
+          nhân viên
+        </p>
+      </div>
+      {filteredEmployees.length === 0 ? (
+        <div className="p-10 text-center text-gray-600 text-sm">
+          Không có nhân viên nào khớp vai trò đã chọn.{' '}
+          <button
+            type="button"
+            onClick={() => setRoleFilter('')}
+            className="text-primary-600 hover:underline font-medium"
+          >
+            Xóa bộ lọc
+          </button>
+        </div>
+      ) : (
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200 text-sm">
           <thead className="bg-gray-50">
@@ -267,7 +337,7 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {employees.map((employee) => (
+            {filteredEmployees.map((employee) => (
               <tr key={employee.employee_id} className="hover:bg-gray-50 transition">
                 <td className="px-3 py-3">
                   <div className="flex items-center">
@@ -331,10 +401,11 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
           </tbody>
         </table>
       </div>
+      )}
 
       {/* Dropdown Thao tác render qua Portal để không bị cắt bởi overflow */}
       {openMenuId && menuPosition && typeof document !== 'undefined' && (() => {
-        const employee = employees.find(e => e.employee_id === openMenuId)
+        const employee = filteredEmployees.find(e => e.employee_id === openMenuId) ?? employees.find(e => e.employee_id === openMenuId)
         if (!employee) return null
         const menu = (
           <div
@@ -351,7 +422,7 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
               <Eye className="w-4 h-4" />
               <span>Xem chi tiết</span>
             </button>
-            {isAdmin && (
+            {canEditEmployee && (
               <button
                 onClick={() => {
                   setEditingEmployee(employee)
@@ -363,7 +434,7 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
                 <span>Sửa thông tin</span>
               </button>
             )}
-            {isAdmin && (
+            {canResetPassword && (
               <button
                 onClick={() => {
                   handleResetPassword(employee.employee_id, employee.full_name, employee.username, employee.email)
@@ -376,7 +447,7 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
                 <span>{resettingId === employee.employee_id ? 'Đang reset...' : 'Reset mật khẩu'}</span>
               </button>
             )}
-            {isAdmin && (
+            {hasAdminLikeAccess && (
               <button
                 onClick={() => {
                   setTransferringEmployee(employee)

@@ -9,6 +9,7 @@ import { apiClient } from '@/lib/api'
 import { CheckCircle, XCircle, Clock, Users, Loader2, AlertCircle, User, FileText, Search, Filter, ChevronLeft, ChevronRight, X, Calendar } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAlert } from '@/components/AlertModal'
+import { isTransferApprover } from '@/lib/rbac'
 
 interface TransferRequest {
   transfer_request_id: string
@@ -81,15 +82,15 @@ export default function TransfersPage() {
   const [searchRequestId, setSearchRequestId] = useState('')
   const [searchApproverId, setSearchApproverId] = useState('')
 
-  // Chỉ Manager và Admin mới được truy cập
+  // Chỉ vai trò được phép phê duyệt chuyển giao (khớp API)
   useEffect(() => {
-    if (user && user.role !== 'manager' && user.role !== 'admin') {
+    if (user && !isTransferApprover(user.role)) {
       router.push('/dashboard')
     }
   }, [user, router])
 
   useEffect(() => {
-    if (user && (user.role === 'manager' || user.role === 'admin')) {
+    if (user && isTransferApprover(user.role)) {
       if (activeTab === 'approvals') {
         fetchPendingRequests()
       } else {
@@ -220,7 +221,7 @@ export default function TransfersPage() {
     setCurrentPage(1)
   }
 
-  if (user && user.role !== 'manager' && user.role !== 'admin') {
+  if (user && !isTransferApprover(user.role)) {
     return null
   }
 

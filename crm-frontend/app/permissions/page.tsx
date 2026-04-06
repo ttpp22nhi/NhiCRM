@@ -140,7 +140,7 @@ export default function PermissionsPage() {
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center gap-2">
               <Shield className="w-8 h-8 text-primary-600" />
-              <h1 className="text-2xl font-bold text-gray-900">Ma trận phân quyền</h1>
+              <h1 className="text-2xl font-bold text-gray-900">Phân quyền theo vai trò</h1>
             </div>
             <Link
               href="/organization"
@@ -150,7 +150,7 @@ export default function PermissionsPage() {
             </Link>
           </div>
           <p className="text-gray-600 mb-6">
-            Chọn Resource (Khách hàng/Cơ hội) và Scope (Cá nhân/Đơn vị/Nhánh con/Toàn công ty) cho từng Vai trò.
+            Thiết lập phạm vi quyền theo từng vai trò. Giao diện dạng thẻ giúp dễ xem hơn thay vì ma trận bảng.
           </p>
 
           {loading ? (
@@ -159,68 +159,67 @@ export default function PermissionsPage() {
               <span className="ml-3 text-gray-600">Đang tải...</span>
             </div>
           ) : (
-            <div className="bg-white rounded-lg shadow border border-gray-200 overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead>
-                  <tr className="bg-gray-50">
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">
-                      Vai trò
-                    </th>
-                    {RESOURCES.map((res) =>
-                      ACTIONS.map((act) => (
-                        <th
-                          key={`${res.id}-${act.id}`}
-                          className="px-3 py-2 text-center text-xs font-medium text-gray-500"
-                        >
-                          {res.label} - {act.label}
-                        </th>
-                      ))
-                    )}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {ROLES.map((role) => (
-                    <tr key={role} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 font-medium text-gray-900 whitespace-nowrap">
-                        {getRoleLabel(role)}
-                      </td>
-                      {RESOURCES.map((res) =>
-                        ACTIONS.map((act) => (
-                          <td key={`${role}-${res.id}-${act.id}`} className="px-3 py-2">
-                            <div className="flex flex-col gap-1">
-                              <select
-                                value={matrix[role]?.[res.id]?.[act.id] || 'personal'}
-                                onChange={(e) =>
-                                  setScope(role, res.id, act.id, e.target.value)
-                                }
-                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-primary-500"
-                              >
-                                {SCOPES.map((s) => (
-                                  <option key={s.id} value={s.id}>
-                                    {s.label}
-                                  </option>
-                                ))}
-                              </select>
-                              <button
-                                type="button"
-                                onClick={() => savePermission(role, res.id, act.id)}
-                                disabled={!!saving}
-                                className="text-xs px-2 py-1 bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50"
-                              >
-                                {saving === `${role}-${res.id}-${act.id}` ? (
-                                  <Loader2 className="w-3 h-3 animate-spin mx-auto" />
-                                ) : (
-                                  <Save className="w-3 h-3 mx-auto" />
-                                )}
-                              </button>
+            <div className="space-y-6">
+              {ROLES.map((role) => (
+                <section
+                  key={role}
+                  className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
+                >
+                  <div className="px-5 py-4 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                    <h2 className="text-lg font-semibold text-gray-900">{getRoleLabel(role)}</h2>
+                    <span className="text-xs px-2 py-1 rounded-full bg-white border border-gray-200 text-gray-600">
+                      {role}
+                    </span>
+                  </div>
+
+                  <div className="p-5 space-y-5">
+                    {RESOURCES.map((res) => (
+                      <div key={`${role}-${res.id}`} className="rounded-lg border border-gray-200 p-4">
+                        <h3 className="text-sm font-semibold text-gray-800 mb-3">{res.label}</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {ACTIONS.map((act) => (
+                            <div
+                              key={`${role}-${res.id}-${act.id}`}
+                              className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 bg-gray-50 p-3"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-gray-800">{act.label}</p>
+                                <p className="text-xs text-gray-500">{res.label}</p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <select
+                                  value={matrix[role]?.[res.id]?.[act.id] || 'personal'}
+                                  onChange={(e) => setScope(role, res.id, act.id, e.target.value)}
+                                  className="px-2 py-1.5 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-primary-500 bg-white"
+                                >
+                                  {SCOPES.map((s) => (
+                                    <option key={s.id} value={s.id}>
+                                      {s.label}
+                                    </option>
+                                  ))}
+                                </select>
+                                <button
+                                  type="button"
+                                  onClick={() => savePermission(role, res.id, act.id)}
+                                  disabled={!!saving}
+                                  className="inline-flex items-center justify-center w-8 h-8 bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50"
+                                  title="Lưu quyền"
+                                >
+                                  {saving === `${role}-${res.id}-${act.id}` ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Save className="w-4 h-4" />
+                                  )}
+                                </button>
+                              </div>
                             </div>
-                          </td>
-                        ))
-                      )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              ))}
             </div>
           )}
         </div>

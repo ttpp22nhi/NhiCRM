@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { apiClient } from '@/lib/api'
 import { Users, Phone, Mail, MapPin, Building, AlertCircle, User, Search, Filter, X, FileSpreadsheet, ChevronLeft, ChevronRight, Pencil, Trash2, ArrowRightLeft, CheckSquare, Send, Clock, DollarSign, Plus } from 'lucide-react'
@@ -41,6 +41,13 @@ interface PaginationInfo {
   pageSize: number
 }
 
+interface AssignableEmployee {
+  employee_id: string
+  full_name: string
+  username: string
+  email?: string
+}
+
 interface CustomerListProps {
   refreshKey?: number
   onBulkTransferClick?: () => void
@@ -56,6 +63,10 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
   const [showTypeFilter, setShowTypeFilter] = useState(false)
+  const [assignableEmployees, setAssignableEmployees] = useState<AssignableEmployee[]>([])
+  const [assignedToFilter, setAssignedToFilter] = useState('')
+  const [assignSearch, setAssignSearch] = useState('')
+  const [assignPickerOpen, setAssignPickerOpen] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [pageSize, setPageSize] = useState(10)
   const [pagination, setPagination] = useState<PaginationInfo>({
@@ -74,11 +85,33 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
   const [selectedCustomerForDeal, setSelectedCustomerForDeal] = useState<string | null>(null)
   const [pendingTransferCustomers, setPendingTransferCustomers] = useState<Set<string>>(new Set())
   const typeFilterRef = useRef<HTMLDivElement>(null)
+  const caretakerFilterRef = useRef<HTMLDivElement>(null)
+  const hasAdminLikeAccess =
+    user?.role === 'admin' ||
+    user?.role === 'super_admin' ||
+    user?.role === 'director' ||
+    user?.role === 'manager'
 
   // Debounce searchQuery với delay 500ms để tránh gọi API quá nhiều lần
   // Khi người dùng gõ "Nguyễn Văn A", thay vì gọi API 12 lần (mỗi ký tự),
   // chỉ gọi 1 lần sau khi người dùng ngừng gõ 500ms
   const debouncedSearchQuery = useDebounce(searchQuery, 500)
+
+  const filteredAssignableEmployees = useMemo(() => {
+    const q = assignSearch.trim().toLowerCase()
+    if (!q) return assignableEmployees
+    return assignableEmployees.filter((e) => {
+      const name = (e.full_name || '').toLowerCase()
+      const un = (e.username || '').toLowerCase()
+      const em = (e.email || '').toLowerCase()
+      return name.includes(q) || un.includes(q) || em.includes(q)
+    })
+  }, [assignableEmployees, assignSearch])
+
+  const selectedCaretakerEmployee = useMemo(
+    () => assignableEmployees.find((e) => e.employee_id === assignedToFilter),
+    [assignableEmployees, assignedToFilter]
+  )
 
   // Danh sách tất cả các loại khách hàng
   const customerTypes = [
@@ -96,13 +129,27 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
   // Reset về trang 1 khi search hoặc filter thay đổi
   useEffect(() => {
     setCurrentPage(1)
-  }, [debouncedSearchQuery, selectedTypes])
+  }, [debouncedSearchQuery, selectedTypes, assignedToFilter])
 
-  // Chỉ gọi API khi debouncedSearchQuery, selectedTypes, currentPage hoặc pageSize thay đổi
-  // selectedTypes không cần debounce vì nó là checkbox click, không phải typing
+  useEffect(() => {
+    const loadAssignable = async () => {
+      if (!user) return
+      try {
+        const res = await apiClient.get('/api/employees/assignable')
+        if (res.data.success) {
+          setAssignableEmployees(res.data.data || [])
+        }
+      } catch {
+        setAssignableEmployees([])
+      }
+    }
+    loadAssignable()
+  }, [user])
+
+  // Chỉ gọi API khi debouncedSearchQuery, selectedTypes, assignedToFilter, currentPage, pageSize hoặc refreshKey thay đổi
   useEffect(() => {
     fetchCustomers()
-  }, [debouncedSearchQuery, selectedTypes, currentPage, pageSize])
+  }, [debouncedSearchQuery, selectedTypes, assignedToFilter, currentPage, pageSize, refreshKey])
 
   // Kiểm tra trạng thái pending transfer cho các khách hàng (chỉ cho Sales)
   useEffect(() => {
@@ -143,6 +190,21 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
     }
   }, [showTypeFilter])
 
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        caretakerFilterRef.current &&
+        !caretakerFilterRef.current.contains(event.target as Node)
+      ) {
+        setAssignPickerOpen(false)
+      }
+    }
+    if (assignPickerOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [assignPickerOpen])
+
   const fetchCustomers = async () => {
     try {
       setLoading(true)
@@ -156,6 +218,9 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
       selectedTypes.forEach(type => {
         params.append('type', type)
       })
+      if (assignedToFilter.trim()) {
+        params.append('assigned_to', assignedToFilter.trim())
+      }
       // Thêm pagination parameters
       params.append('page', currentPage.toString())
       params.append('limit', pageSize.toString())
@@ -508,6 +573,108 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
             )}
           </div>
 
+          {assignableEmployees.length > 0 && (
+            <div
+              ref={caretakerFilterRef}
+              className="w-full sm:min-w-[16rem] sm:max-w-sm flex flex-col gap-1"
+            >
+              {assignedToFilter ? (
+                <div className="flex items-center gap-2 flex-wrap text-xs text-gray-700">
+                  <span className="text-gray-500 shrink-0">Đang lọc NV chăm sóc:</span>
+                  <span className="font-medium truncate">
+                    {selectedCaretakerEmployee
+                      ? `${selectedCaretakerEmployee.full_name} (@${selectedCaretakerEmployee.username})`
+                      : assignedToFilter}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssignedToFilter('')
+                      setAssignSearch('')
+                      setAssignPickerOpen(false)
+                    }}
+                    className="shrink-0 p-0.5 rounded text-gray-500 hover:text-red-600 hover:bg-red-50"
+                    title="Bỏ lọc nhân viên"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : null}
+              <div className="relative">
+                <User className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4 pointer-events-none z-10" />
+                <input
+                  type="text"
+                  value={assignSearch}
+                  onChange={(e) => {
+                    setAssignSearch(e.target.value)
+                    setAssignPickerOpen(true)
+                  }}
+                  onFocus={() => setAssignPickerOpen(true)}
+                  placeholder="Gõ tên, username hoặc email để tìm NV chăm sóc..."
+                  className="w-full pl-8 pr-8 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none transition bg-white text-gray-800 placeholder:text-gray-400"
+                  aria-label="Tìm và chọn nhân viên chăm sóc"
+                  autoComplete="off"
+                />
+                {assignSearch ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAssignSearch('')
+                      setAssignPickerOpen(true)
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5"
+                    title="Xóa ô tìm"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                ) : null}
+                {assignPickerOpen ? (
+                  <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-64 overflow-y-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAssignedToFilter('')
+                        setAssignSearch('')
+                        setAssignPickerOpen(false)
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 border-b border-gray-100 text-primary-700 font-medium"
+                    >
+                      Tất cả nhân viên chăm sóc
+                    </button>
+                    {filteredAssignableEmployees.length === 0 ? (
+                      <div className="px-3 py-3 text-sm text-gray-500">
+                        {assignSearch.trim()
+                          ? `Không có nhân viên khớp "${assignSearch.trim()}". Thử từ khóa khác.`
+                          : 'Không có nhân viên trong danh sách.'}
+                      </div>
+                    ) : (
+                      filteredAssignableEmployees.map((emp) => (
+                        <button
+                          key={emp.employee_id}
+                          type="button"
+                          onClick={() => {
+                            setAssignedToFilter(emp.employee_id)
+                            setAssignSearch('')
+                            setAssignPickerOpen(false)
+                          }}
+                          className={`w-full text-left px-3 py-2 text-sm hover:bg-primary-50 border-b border-gray-50 last:border-b-0 ${
+                            assignedToFilter === emp.employee_id ? 'bg-primary-50/80' : ''
+                          }`}
+                        >
+                          <span className="font-medium text-gray-900">{emp.full_name}</span>
+                          <span className="text-gray-500"> · @{emp.username}</span>
+                          {emp.email ? (
+                            <span className="block text-xs text-gray-400 truncate">{emp.email}</span>
+                          ) : null}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          )}
+
           {/* Nút Tạo Deal mới */}
           <button
             type="button"
@@ -557,10 +724,10 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
         <div className="bg-white rounded-lg shadow p-6 text-center">
           <Users className="w-12 h-12 text-gray-400 mx-auto mb-2" />
           <h3 className="text-sm font-semibold text-gray-900 mb-1">
-            {searchQuery || selectedTypes.length > 0 ? 'Không tìm thấy khách hàng' : 'Chưa có khách hàng'}
+            {searchQuery || selectedTypes.length > 0 || assignedToFilter ? 'Không tìm thấy khách hàng' : 'Chưa có khách hàng'}
           </h3>
           <p className="text-xs text-gray-600">
-            {searchQuery || selectedTypes.length > 0
+            {searchQuery || selectedTypes.length > 0 || assignedToFilter
               ? 'Thử thay đổi từ khóa tìm kiếm hoặc bộ lọc' 
               : 'Bắt đầu bằng cách thêm khách hàng đầu tiên của bạn'}
           </p>
@@ -713,7 +880,7 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
                 <td className="px-2 py-2">
                   <div className="flex items-center gap-1">
                     {/* Kiểm tra quyền: Admin/Manager có quyền sửa/xóa mọi khách hàng, Sales chỉ sửa/xóa khách hàng của mình */}
-                    {((user?.role === 'admin' || user?.role === 'manager') || 
+                    {(hasAdminLikeAccess || 
                       (user?.role === 'sales' && customer.assigned_to === user?.id)) ? (
                       <>
                         <button
@@ -840,7 +1007,7 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
               </span>
             </div>
             {/* Admin và Manager: Chuyển giao trực tiếp */}
-            {(user?.role === 'admin' || user?.role === 'manager') && (
+            {hasAdminLikeAccess && (
               <>
                 <div className="h-6 w-px bg-gray-300"></div>
                 <button

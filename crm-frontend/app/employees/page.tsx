@@ -5,19 +5,24 @@ import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
 import { EmployeeList } from '@/components/EmployeeList'
 import { EmployeeForm } from '@/components/EmployeeForm'
+import { EmployeeImportModal } from '@/components/EmployeeImportModal'
 import { useAuth } from '@/contexts/AuthContext'
 import { useSubscription } from '@/contexts/SubscriptionContext'
 import { useRouter } from 'next/navigation'
-import { Plus, X, Shield } from 'lucide-react'
+import { Plus, X, Shield, FileSpreadsheet } from 'lucide-react'
+import { isExecutive, isTenantAdmin } from '@/lib/rbac'
 
 export default function EmployeesPage() {
   const { user } = useAuth()
   const { expired } = useSubscription()
   const router = useRouter()
   const [showForm, setShowForm] = useState(false)
+  const [showImport, setShowImport] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
+  const canManageEmployees = isTenantAdmin(user?.role)
+  const canViewEmployees = isExecutive(user?.role)
 
-  if (user && user.role !== 'admin' && user.role !== 'super_admin') {
+  if (user && !canViewEmployees) {
     router.push('/dashboard')
     return null
   }
@@ -38,27 +43,60 @@ export default function EmployeesPage() {
                 <Shield className="w-6 h-6 sm:w-8 sm:h-8 text-primary-600" />
                 <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-gray-900">Quản lý nhân viên</h1>
               </div>
-              <p className="text-xs sm:text-sm text-gray-600 mt-1">Tạo và quản lý tài khoản nhân viên (Chỉ dành cho Admin)</p>
+              <p className="text-xs sm:text-sm text-gray-600 mt-1">
+                {canManageEmployees
+                  ? 'Tạo và quản lý tài khoản nhân viên'
+                  : 'Xem danh sách nhân viên (theo phạm vi tenant)'}
+              </p>
             </div>
-            <button
-              onClick={() => !expired && setShowForm(true)}
-              disabled={expired}
-              title={expired ? 'Gói dịch vụ đã hết hạn. Vui lòng gia hạn để thêm nhân viên.' : undefined}
-              className={`flex items-center space-x-1 sm:space-x-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg transition font-medium text-sm sm:text-base ${
-                expired
-                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  : 'bg-primary-600 text-white hover:bg-primary-700'
-              }`}
-            >
-              <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
-              <span className="hidden sm:inline">Thêm nhân viên</span>
-              <span className="sm:hidden">Thêm</span>
-            </button>
+            {canManageEmployees && (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => !expired && setShowImport(true)}
+                  disabled={expired}
+                  title={
+                    expired
+                      ? 'Gói dịch vụ đã hết hạn. Vui lòng gia hạn để import nhân viên.'
+                      : 'Import danh sách từ file Excel mẫu'
+                  }
+                  className={`flex items-center space-x-1 sm:space-x-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg transition font-medium text-sm sm:text-base border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 ${
+                    expired ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
+                >
+                  <FileSpreadsheet className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <span className="hidden sm:inline">Import Excel</span>
+                  <span className="sm:hidden">Import</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => !expired && setShowForm(true)}
+                  disabled={expired}
+                  title={expired ? 'Gói dịch vụ đã hết hạn. Vui lòng gia hạn để thêm nhân viên.' : undefined}
+                  className={`flex items-center space-x-1 sm:space-x-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg transition font-medium text-sm sm:text-base ${
+                    expired
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-primary-600 text-white hover:bg-primary-700'
+                  }`}
+                >
+                  <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <span className="hidden sm:inline">Thêm nhân viên</span>
+                  <span className="sm:hidden">Thêm</span>
+                </button>
+              </div>
+            )}
           </div>
 
           <EmployeeList key={refreshKey} />
 
-          {showForm && (
+          {showImport && canManageEmployees && (
+            <EmployeeImportModal
+              onClose={() => setShowImport(false)}
+              onSuccess={() => setRefreshKey((k) => k + 1)}
+            />
+          )}
+
+          {showForm && canManageEmployees && (
             <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
               <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
                 <div className="flex justify-between items-center p-6 border-b">

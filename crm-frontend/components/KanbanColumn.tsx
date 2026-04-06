@@ -8,6 +8,7 @@ import { DealCard } from './DealCard'
 interface KanbanColumnProps {
   stage: Stage
   deals: Deal[]
+  droppable?: boolean
   onEdit: (deal: Deal) => void
   onViewDetail?: (deal: Deal) => void
   onCancel?: (deal: Deal, asLost: boolean) => void
@@ -22,15 +23,15 @@ const formatCurrency = (amount: number) => {
   }).format(amount)
 }
 
-export function KanbanColumn({ stage, deals, onEdit, onViewDetail, onCancel, onDelete, canDelete }: KanbanColumnProps) {
+export function KanbanColumn({ stage, deals, droppable = true, onEdit, onViewDetail, onCancel, onDelete, canDelete }: KanbanColumnProps) {
   const totalAmount = deals.reduce((sum, deal) => sum + (deal.amount || 0), 0)
-  const { setNodeRef, isOver } = useDroppable({ id: stage.id })
+  const { setNodeRef, isOver } = useDroppable({ id: stage.id, disabled: !droppable })
 
   return (
     <div
-      ref={setNodeRef}
+      ref={droppable ? setNodeRef : undefined}
       className={`flex-1 min-w-[280px] rounded-lg border-2 p-4 transition-colors ${stage.color} ${
-        isOver ? 'ring-2 ring-[#0074BD] ring-offset-2' : ''
+        droppable && isOver ? 'ring-2 ring-[#0074BD] ring-offset-2' : ''
       }`}
     >
       <div className="flex items-center justify-between mb-4">

@@ -9,6 +9,7 @@ import Link from 'next/link'
 import toast from 'react-hot-toast'
 import { NotificationBell } from './NotificationBell'
 import { SubscriptionBanner } from './SubscriptionBanner'
+import { isTenantAdmin, isExecutive, isTransferApprover, canOpenAdminSection } from '@/lib/rbac'
 
 export function Navbar() {
   const { user, logout } = useAuth()
@@ -61,6 +62,8 @@ export function Navbar() {
 
   /** Super Admin chưa chọn công ty: chỉ dùng được Hệ thống → Tenants; vào công ty xong mới thấy đủ menu. */
   const isSuperAdminNoTenant = user?.role === 'super_admin' && (user?.tenant_id == null || user?.tenant_id === '')
+  const canOpenAdminMenu =
+    !!user?.role && canOpenAdminSection(user.role) && !isSuperAdminNoTenant
 
   const getRoleColor = (role?: string) => {
     switch (role) {
@@ -151,7 +154,7 @@ export function Navbar() {
               )}
 
               {/* Quản trị - sub-menu (admin/super_admin) - ẩn khi super_admin chưa chọn tenant */}
-              {(user?.role === 'admin' || (user?.role === 'super_admin' && !isSuperAdminNoTenant)) && (
+              {canOpenAdminMenu && (
                 <div className="relative" ref={adminMenuRef}>
                   <button
                     onClick={() => { setShowAdminMenu(!showAdminMenu); setShowBizMenu(false) }}
@@ -162,40 +165,37 @@ export function Navbar() {
                   </button>
                   {showAdminMenu && (
                     <div className="absolute left-0 mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
-                      <Link href="/organization-structure" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
-                        <GitBranch className="w-4 h-4" />
-                        Cây cấu trúc công ty
-                      </Link>
-                      <Link href="/organization" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
-                        <Building2 className="w-4 h-4" />
-                        Quản lý tổ chức
-                      </Link>
-                      <Link href="/permissions" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
-                        <Shield className="w-4 h-4" />
-                        Phân quyền
-                      </Link>
-                      <Link href="/employees" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
-                        <Users className="w-4 h-4" />
-                        Nhân viên
-                      </Link>
-                      <Link href="/transfers" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
-                        <ArrowRightLeft className="w-4 h-4" />
-                        Quản lý chuyển giao
-                      </Link>
+                      {isTenantAdmin(user?.role) && (
+                        <>
+                          <Link href="/organization-structure" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                            <GitBranch className="w-4 h-4" />
+                            Cây cấu trúc công ty
+                          </Link>
+                          <Link href="/organization" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                            <Building2 className="w-4 h-4" />
+                            Quản lý tổ chức
+                          </Link>
+                          <Link href="/permissions" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                            <Shield className="w-4 h-4" />
+                            Phân quyền
+                          </Link>
+                        </>
+                      )}
+                      {isExecutive(user?.role) && (
+                        <Link href="/employees" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                          <Users className="w-4 h-4" />
+                          Nhân viên
+                        </Link>
+                      )}
+                      {isTransferApprover(user?.role) && (
+                        <Link href="/transfers" onClick={() => setShowAdminMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                          <ArrowRightLeft className="w-4 h-4" />
+                          Quản lý chuyển giao
+                        </Link>
+                      )}
                     </div>
                   )}
                 </div>
-              )}
-
-              {/* Quản lý chuyển giao - chỉ Manager (không phải admin) */}
-              {user?.role === 'manager' && (
-                <Link
-                  href="/transfers"
-                  className="flex items-center gap-1 text-gray-700 hover:text-primary-600 hover:bg-gray-50 px-3 py-2 rounded-md text-sm font-medium transition"
-                >
-                  <ArrowRightLeft className="w-4 h-4" />
-                  Chuyển giao
-                </Link>
               )}
             </div>
           </div>
@@ -336,36 +336,38 @@ export function Navbar() {
                   </Link>
                 </div>
               )}
-              {(user?.role === 'admin' || (user?.role === 'super_admin' && !isSuperAdminNoTenant)) && (
+              {canOpenAdminMenu && (
                 <div className="border-t border-gray-100 pt-2">
                   <p className="px-3 py-1 text-xs font-semibold text-gray-500 uppercase tracking-wider">Quản trị</p>
-                  <Link href="/organization-structure" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
-                    <GitBranch className="w-5 h-5" />
-                    <span>Cây cấu trúc công ty</span>
-                  </Link>
-                  <Link href="/organization" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
-                    <Building2 className="w-5 h-5" />
-                    <span>Quản lý tổ chức</span>
-                  </Link>
-                  <Link href="/permissions" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
-                    <Shield className="w-5 h-5" />
-                    <span>Phân quyền</span>
-                  </Link>
-                  <Link href="/employees" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
-                    <Users className="w-5 h-5" />
-                    <span>Nhân viên</span>
-                  </Link>
-                  <Link href="/transfers" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
-                    <ArrowRightLeft className="w-5 h-5" />
-                    <span>Quản lý chuyển giao</span>
-                  </Link>
+                  {isTenantAdmin(user?.role) && (
+                    <>
+                      <Link href="/organization-structure" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                        <GitBranch className="w-5 h-5" />
+                        <span>Cây cấu trúc công ty</span>
+                      </Link>
+                      <Link href="/organization" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                        <Building2 className="w-5 h-5" />
+                        <span>Quản lý tổ chức</span>
+                      </Link>
+                      <Link href="/permissions" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                        <Shield className="w-5 h-5" />
+                        <span>Phân quyền</span>
+                      </Link>
+                    </>
+                  )}
+                  {isExecutive(user?.role) && (
+                    <Link href="/employees" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                      <Users className="w-5 h-5" />
+                      <span>Nhân viên</span>
+                    </Link>
+                  )}
+                  {isTransferApprover(user?.role) && (
+                    <Link href="/transfers" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                      <ArrowRightLeft className="w-5 h-5" />
+                      <span>Quản lý chuyển giao</span>
+                    </Link>
+                  )}
                 </div>
-              )}
-              {user?.role === 'manager' && (
-                <Link href="/transfers" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md">
-                  <ArrowRightLeft className="w-5 h-5" />
-                  <span>Chuyển giao</span>
-                </Link>
               )}
               <div className="border-t border-gray-200 pt-2 mt-2">
                 {!isSuperAdminNoTenant && (

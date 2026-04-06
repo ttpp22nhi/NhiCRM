@@ -1,0 +1,78 @@
+Để hoàn thiện hệ thống và giúp người dùng có thể lưu trữ hoặc gửi báo cáo ngoại tuyến khi cần thiết, chúng ta sẽ xây dựng chức năng **Smart Excel Export**. Thay vì chỉ xuất dữ liệu thô, các file Excel này sẽ được định dạng chuyên nghiệp, có sẵn các bảng tính toán (Pivot) và biểu đồ cơ bản.
+
+Dưới đây là các chức năng xuất báo cáo chi tiết cho từng module:
+
+---
+
+### 1. Báo cáo Doanh thu & Dự báo (Sales Forecast Report)
+
+Đây là báo cáo quan trọng nhất dành cho **Director** và **Manager**.
+
+* **Nội dung xuất:** Danh sách Deal, Giá trị thực, % Giai đoạn, Mức độ tin cậy (Xanh/Vàng/Đỏ), và đặc biệt là cột **Doanh thu kỳ vọng (Weighted Value)**.
+* **Tính năng thông minh:** * Tự động tính tổng doanh thu dự kiến ở cuối trang.
+* Tô màu dòng dựa trên mức độ tin cậy (Dòng có mức Đỏ sẽ được highlight để chú ý).
+
+
+* **Prompt cho AI:** > "Viết hàm `exportSalesForecast` sử dụng thư viện ExcelJS. Gom nhóm dữ liệu theo `path` (đơn vị). Tính toán cột $WeightedValue$ theo công thức trong `crm-logic-manifest.md`. Định dạng màu sắc Green/Yellow/Red cho cột Confidence."
+
+---
+
+### 2. Báo cáo Hiệu suất Nhân viên (Employee Performance)
+
+Dành cho **Manager** và **Leader** để đánh giá đội ngũ.
+
+* **Nội dung xuất:** Tên nhân viên, Số lượng Deal đang mở, Tỷ lệ thắng (Win Rate), Tổng giá trị đã chốt, Số lượng Task hoàn thành đúng hạn.
+* **Tính năng thông minh:** Xếp hạng nhân viên ngay trong file Excel dựa trên tổng giá trị Won.
+* **Prompt cho AI:**
+> "Xây dựng chức năng xuất báo cáo KPI nhân viên. Dữ liệu bao gồm các chỉ số thống kê từ bảng `deals` và `tasks`. Thêm một Sheet phụ tóm tắt biểu đồ cột so sánh doanh số giữa các nhân viên trong phòng."
+
+
+
+---
+
+### 3. Báo cáo Phân tích Thất bại (Loss Analysis Report)
+
+Giúp doanh nghiệp cải thiện sản phẩm/dịch vụ.
+
+* **Nội dung xuất:** Danh sách các Deal thất bại, Khách hàng, Giá trị, và quan trọng nhất là cột **Lý do thất bại (Loss Reason)** kèm ghi chú.
+* **Tính năng thông minh:** Tự động tạo một biểu đồ tròn (Pie Chart) ở Sheet đầu tiên thống kê tỷ lệ các lý do thất bại (ví dụ: 40% do Giá, 30% do Đối thủ).
+* **Prompt cho AI:**
+> "Tạo chức năng xuất báo cáo Loss Analysis. Tổng hợp dữ liệu từ các Deal có status là 'Loss'. Sử dụng Excel template có sẵn biểu đồ tròn để phân tích lý do thất bại tự động khi đổ dữ liệu vào."
+
+
+
+---
+
+### 4. Nhật ký Công việc & Tiến độ (Task & Activity Log)
+
+Dành cho việc kiểm soát vận hành chi tiết.
+
+* **Nội dung xuất:** Tên Task, Người thực hiện, Deal liên quan, Trạng thái, Thời gian bắt đầu - Kết thúc thực tế.
+* **Tính năng thông minh:** Đánh dấu các Task bị quá hạn (Overdue) bằng màu đỏ đậm.
+
+---
+
+### 5. Cấu trúc File Excel chuyên nghiệp (Template Standard)
+
+Mọi file Excel xuất ra từ hệ thống phải tuân thủ tiêu chuẩn:
+
+1. **Sheet 1 - Dashboard:** Tóm tắt các con số tổng quát (Tổng giá trị, Tổng số lượng, Tỷ lệ chuyển đổi) và biểu đồ.
+2. **Sheet 2 - Data:** Dữ liệu chi tiết từng dòng để người dùng có thể tự lọc (Filter).
+
+
+---
+
+### Cập nhật file `crm-logic-manifest.md` (Phần Export)
+
+Bạn hãy thêm quy tắc này vào file Manifest:
+
+```markdown
+## 9. QUY TẮC XUẤT FILE EXCEL (EXCEL EXPORT RULES)
+* **Branding:** Mọi file xuất ra phải có Header chứa thông tin Tenant và thời gian xuất.
+* **Data Privacy:** - Sales chỉ được xuất báo cáo dữ liệu của chính mình.
+    - Leader/Manager chỉ được xuất dữ liệu trong `path` quản lý.
+    - Director được phép xuất toàn bộ.
+* **Format:** Sử dụng định dạng Table trong Excel để người dùng dễ dàng Filter/Sort sau khi tải về.
+* **Audit:** Lưu lại lịch sử mỗi lần xuất file (Ai xuất, Xuất báo cáo gì, Thời gian nào) để phòng ngừa rò rỉ dữ liệu lớn.
+
+```
