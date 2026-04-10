@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { Suspense, useState, useEffect } from 'react'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
 import { apiClient } from '@/lib/api'
@@ -84,7 +84,7 @@ function ClosedDealsList({
   )
 }
 
-export default function DealsPage() {
+function DealsPageContent() {
   const { user } = useAuth()
   const searchParams = useSearchParams()
   const [deals, setDeals] = useState<Deal[]>([])
@@ -434,6 +434,28 @@ export default function DealsPage() {
         )}
       </div>
     </ProtectedRoute>
+  )
+}
+
+export default function DealsPage() {
+  return (
+    <Suspense
+      fallback={
+        <ProtectedRoute>
+          <div className="min-h-screen bg-gray-50">
+            <Navbar />
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="w-8 h-8 animate-spin text-[#0074BD]" />
+                <span className="ml-3 text-gray-600">Đang tải deals...</span>
+              </div>
+            </div>
+          </div>
+        </ProtectedRoute>
+      }
+    >
+      <DealsPageContent />
+    </Suspense>
   )
 }
 

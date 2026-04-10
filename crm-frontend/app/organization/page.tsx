@@ -471,7 +471,7 @@ export default function OrganizationPage() {
                             requiredParentLevelOrder == null ||
                             (dLevelOrder != null && dLevelOrder === requiredParentLevelOrder)
                           return (
-                            <option key={d.id} value={d.id} disabled={editing?.id === d.id || !valid}>
+                            <option key={d.id} value={d.id} disabled={!valid}>
                               {d.type}: {d.name}
                               {dLevelOrder != null && !valid ? ` (Cấp ${dLevelOrder})` : ''}
                             </option>

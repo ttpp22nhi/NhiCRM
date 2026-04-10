@@ -1,23 +1,36 @@
+# === Database (bắt buộc cho runtime) ===
 DB_USER=postgres
 DB_HOST=localhost
 DB_NAME=crm_core_system
 DB_PASSWORD=Mật_Khẩu_Của_Bạn
 DB_PORT=5432
-# Schema PostgreSQL (mặc định: public). Đổi để scale (vd. crm_staging, crm_tenant_1).
+# search_path PostgreSQL (mặc định: public). Xem config/schema.js và database/README.md
 DB_SCHEMA=public
+
+# === Auth ===
 JWT_SECRET=mot_cai_ma_bi_mat_bat_ky
 
-# Redis cache (optional). If not set, caching is disabled and APIs run normally.
-# Example: redis://localhost:6379
+# === Server ===
+PORT=3000
+# production: bật SSL client DB trong database.js; ẩn chi tiết lỗi ở một số chỗ
+# NODE_ENV=production
+
+# === Redis (tùy chọn) ===
+# redis://127.0.0.1:6379 — để trống thì không dùng cache
 REDIS_URL=
 
-# CORS: origin frontend (nhiều origin cách nhau bằng dấu phẩy khi truy cập từ mạng nội bộ).
-# Example: http://localhost:3001 hoặc http://localhost:3001,http://192.168.1.10:3001
+# === URL công khai (tùy chọn, nên set khi có domain / sau Nginx) ===
+# Link xem nhanh file deal (dealActivitiesController). Mặc định: từ Host header
+# BASE_URL=https://crm.congty.com
+
+# Swagger: thêm server "IP / Domain" trong /api-docs (swagger.js)
+# Có thể dùng SWAGGER_SERVER_URL thay cho dòng dưới (cùng ý nghĩa, PUBLIC_API_BASE_URL ưu tiên trong code)
+PUBLIC_API_BASE_URL=
+# SWAGGER_SERVER_URL=
+
+# Ghi nhận URL giao diện — backend hiện CHƯA đọc biến này (CORS: origin: true trong server.js)
 FRONTEND_URL=
 
-# URL API backend (dùng cho frontend crm-frontend qua biến NEXT_PUBLIC_API_URL).
-# Nếu để trống, frontend sẽ tự gọi cùng host + port 3000. Example: http://localhost:3000 hoặc http://192.168.1.10:3000
-NEXT_PUBLIC_API_URL=
-
-# Swagger: thêm lựa chọn server IP/domain (dropdown trong /api-docs). Example: http://10.18.96.180:3000
-PUBLIC_API_BASE_URL=
+# === Frontend: KHÔNG đặt NEXT_PUBLIC_* trong file này ===
+# Next.js chỉ đọc từ crm-frontend — ví dụ crm-frontend/.env.production :
+# NEXT_PUBLIC_API_URL=https://crm.congty.com
