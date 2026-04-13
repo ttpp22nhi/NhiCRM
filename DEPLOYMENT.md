@@ -1,6 +1,6 @@
 # Hướng dẫn triển khai NhiCRM lên server và gắn domain
 
-Tài liệu mô tả cách deploy **crm-frontend** (Next.js) và **crm-backend** (Node/Express) cùng **PostgreSQL** (và tùy chọn **Redis**) lên Linux, gắn **một domain + HTTPS** theo kiểu **cùng host**: trang web và API (`/api/...`) đi chung hostname; **Nginx** hoặc **Apache** làm reverse proxy tới hai process nội bộ (`127.0.0.1`). File mẫu: `deploy/nhicrm.conf` (Nginx), `deploy/nhicrm-apache.conf` (Apache 2.4). **aaPanel + Apache:** xem **`deploy/AAPANEL-APACHE.md`**.
+Tài liệu mô tả cách deploy **crm-frontend** (Next.js) và **crm-backend** (Node/Express) cùng **PostgreSQL** (và tùy chọn **Redis**) lên Linux, gắn **một domain + HTTPS** theo kiểu **cùng host**: trang web và API (`/api/...`) đi chung hostname; **Nginx** hoặc **Apache** làm reverse proxy tới hai process nội bộ (`127.0.0.1`). File mẫu: `deploy/nhicrm.conf` (Nginx), `deploy/nhicrm-apache.conf` (Apache 2.4). **aaPanel + Apache:** xem **`deploy/AAPANEL-APACHE.md`**. **aaPanel + Docker + Apache:** xem **`deploy/AAPANEL-DOCKER.md`**.
 
 ---
 
@@ -220,6 +220,7 @@ Trình duyệt **không** gọi trực tiếp 3000/3001 ra internet; chỉ **m�
 - Upload body: **`LimitRequestBody`** trong file mẫu (tương đương `client_max_body_size` của Nginx).
 - **Đã dùng Apache (httpd) cho port 80:** không cài thêm Nginx cùng cổng — chỉnh VirtualHost / site hiện có theo mẫu.
 - **aaPanel + Apache (từng bước trong panel):** **`deploy/AAPANEL-APACHE.md`**.
+- **aaPanel + Docker + Apache:** **`deploy/AAPANEL-DOCKER.md`** (docker compose + proxy Apache vào `127.0.0.1:3000/3001`).
 
 ### Lỗi thường gặp (proxy)
 
@@ -285,4 +286,4 @@ Backend có logic **domain tenant** (subdomain) khi đăng nhập. Đây **khôn
 
 ---
 
-*Tài liệu tham khảo kỹ thuật: `crm-backend/env_example.txt`, `crm-frontend/lib/api.ts`, `crm-backend/database.js`, `crm-backend/swagger.js`, `crm-backend/server.js`, `deploy/nhicrm.conf`, `deploy/nhicrm-apache.conf`, `deploy/AAPANEL-APACHE.md`.*
+*Tài liệu tham khảo kỹ thuật: `crm-backend/env_example.txt`, `crm-frontend/lib/api.ts`, `crm-backend/database.js`, `crm-backend/swagger.js`, `crm-backend/server.js`, `deploy/nhicrm.conf`, `deploy/nhicrm-apache.conf`, `deploy/AAPANEL-APACHE.md`, `deploy/docker-compose.aapanel.yml`, `deploy/docker.aapanel.env.example`, `deploy/AAPANEL-DOCKER.md`.*

@@ -4,7 +4,7 @@ Hướng dẫn deploy **crm-backend** + **crm-frontend** khi server dùng **[aaP
 
 **Nguyên tắc:** aaPanel đã quản **cổng 80/443** và file VirtualHost. Bạn **không** tạo thêm Nginx song song; **không** chỉnh trùng `Listen 80` ngoài panel. Toàn bộ proxy nằm trong **cấu hình site Apache** do panel tạo (hoặc chỉnh qua **Terminal** đúng file vhost của site đó).
 
-Tham chiếu chung: **`DEPLOYMENT.md`** (mục 5 biến môi trường, mục 6 PM2, mục 7 luồng URL). File mẫu proxy: **`deploy/nhicrm-apache.conf`**.
+Tham chiếu chung: **`DEPLOYMENT.md`** (mục 5 biến môi trường, mục 6 PM2, mục 7 luồng URL). File mẫu proxy: **`deploy/nhicrm-apache.conf`**. Nếu muốn chạy app bằng containers thay vì PM2: xem **`deploy/AAPANEL-DOCKER.md`**.
 
 ---
 
