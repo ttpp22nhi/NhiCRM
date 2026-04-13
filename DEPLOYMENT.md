@@ -15,10 +15,10 @@ Tài liệu mô tả cách deploy **crm-frontend** (Next.js) và **crm-backend**
 
 Trình duyệt chỉ nên truy cập **HTTPS qua một domain**; **Nginx hoặc Apache** làm **reverse proxy** tới hai process Node trên `127.0.0.1`:
 
-- **Giao diện:** `https://crm.congty.com` → Next.js (cổng nội bộ `3001`).
-- **API:** `https://crm.congty.com/api/...` → Express (cổng nội bộ `3000`).
+- **Giao diện:** `https://crm.mobifonetayninh.vn` → Next.js (cổng nội bộ `3001`).
+- **API:** `https://crm.mobifonetayninh.vn/api/...` → Express (cổng nội bộ `3000`).
 
-Production **bắt buộc** set `NEXT_PUBLIC_API_URL=https://crm.congty.com` (đúng domain thật, **không** `:3000`, **không** thêm `/api` vào cuối biến — giải thích ở mục **5** và **7**). Trong `crm-frontend/lib/api.ts`, nếu **không** có biến này, trình duyệt sẽ gọi `cùng hostname:3000`; sau reverse proxy (chỉ mở 443) cách đó **sai**.
+Production **bắt buộc** set `NEXT_PUBLIC_API_URL=https://crm.mobifonetayninh.vn` (đúng domain thật, **không** `:3000`, **không** thêm `/api` vào cuối biến — giải thích ở mục **5** và **7**). Trong `crm-frontend/lib/api.ts`, nếu **không** có biến này, trình duyệt sẽ gọi `cùng hostname:3000`; sau reverse proxy (chỉ mở 443) cách đó **sai**.
 
 ---
 
@@ -108,7 +108,7 @@ Các biến **backend thực sự đọc** trong code hiện tại:
 | `REDIS_URL` | Không | Ví dụ `redis://127.0.0.1:6379`; để trống thì không dùng cache Redis |
 | `PUBLIC_API_BASE_URL` | Không | Thêm mục **IP / Domain** trong Swagger (`swagger.js`). Dùng URL mà người dùng **thực sự** gọi API (HTTPS domain, hoặc `http://IP:3000` nếu chưa có reverse proxy) |
 | `SWAGGER_SERVER_URL` | Không | Cùng mục đích với `PUBLIC_API_BASE_URL`; nếu cả hai đều có, code dùng `PUBLIC_API_BASE_URL` trước |
-| `BASE_URL` | Không | Một số link (vd. xem nhanh file deal) dùng URL nền; nếu để trống sẽ lấy từ request (`dealActivitiesController`). **Nên** set `https://crm.congty.com` k/production sau reverse proxy để link luôn đúng HTTPS |
+| `BASE_URL` | Không | Một số link (vd. xem nhanh file deal) dùng URL nền; nếu để trống sẽ lấy từ request (`dealActivitiesController`). **Nên** set `https://crm.mobifonetayninh.vn` k/production sau reverse proxy để link luôn đúng HTTPS |
 
 CORS trong `server.js` đang dùng `origin: true`; **`FRONTEND_URL` hiện không được backend import** — có thể ghi trong `.env` để thống nhất tài liệu / dùng sau, nhưng **không** thay cấu hình CORS.
 
@@ -125,9 +125,9 @@ DB_PORT=5432
 DB_SCHEMA=public
 JWT_SECRET=thay_bang_chuoi_dai_ngau_nhien
 REDIS_URL=
-BASE_URL=https://crm.congty.com
-PUBLIC_API_BASE_URL=https://crm.congty.com
-FRONTEND_URL=https://crm.congty.com
+BASE_URL=https://crm.mobifonetayninh.vn
+PUBLIC_API_BASE_URL=https://crm.mobifonetayninh.vn
+FRONTEND_URL=https://crm.mobifonetayninh.vn
 ```
 
 ### 5.2. Frontend — `crm-frontend/.env.production` (và `.env.local` khi dev)
@@ -136,12 +136,12 @@ Next.js nhúng `NEXT_PUBLIC_*` lúc **build** (production) hoặc khi chạy dev
 
 | Biến | Mô tả |
 |------|--------|
-| `NEXT_PUBLIC_API_URL` | `baseURL` của `axios` trong `crm-frontend/lib/api.ts`. Production: `https://crm.congty.com` (**không** `:3000`, **không** thêm `/api` — mọi path trong code đã là `/api/...`). Nếu **không** set, trên trình duyệt app sẽ gọi `cùng hostname:3000` → sau proxy (chỉ 443) sẽ **sai**. |
+| `NEXT_PUBLIC_API_URL` | `baseURL` của `axios` trong `crm-frontend/lib/api.ts`. Production: `https://crm.mobifonetayninh.vn` (**không** `:3000`, **không** thêm `/api` — mọi path trong code đã là `/api/...`). Nếu **không** set, trên trình duyệt app sẽ gọi `cùng hostname:3000` → sau proxy (chỉ 443) sẽ **sai**. |
 
 Tạo/sửa **trước** `npm run build` trên server:
 
 ```env
-NEXT_PUBLIC_API_URL=https://crm.congty.com
+NEXT_PUBLIC_API_URL=https://crm.mobifonetayninh.vn
 ```
 
 Không commit file chứa secret thật; chỉ dùng trên server hoặc CI.
@@ -188,27 +188,27 @@ curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:3001/
 
 ## 7. Reverse proxy + domain + HTTPS (một domain, cùng host)
 
-Giả sử domain **crm.congty.com** trỏ **A record** về IP server. Giao diện và API dùng **cùng hostname**; chỉ khác đường dẫn: mọi URL bắt đầu bằng `/api/` do reverse proxy chuyển sang backend.
+Giả sử domain **crm.mobifonetayninh.vn** trỏ **A record** về IP server. Giao diện và API dùng **cùng hostname**; chỉ khác đường dẫn: mọi URL bắt đầu bằng `/api/` do reverse proxy chuyển sang backend.
 
 ### Luồng truy cập (Nginx hoặc Apache giống nhau về mặt URL)
 
 | Người dùng mở | Proxy chuyển tới | Ghi chú |
 |---------------|------------------|---------|
-| `https://crm.congty.com/...` (trang, asset Next) | `http://127.0.0.1:3001` | Frontend PM2 (`next start`) |
-| `https://crm.congty.com/api/...` | `http://127.0.0.1:3000/api/...` | Backend Express (`PORT=3000`) |
+| `https://crm.mobifonetayninh.vn/...` (trang, asset Next) | `http://127.0.0.1:3001` | Frontend PM2 (`next start`) |
+| `https://crm.mobifonetayninh.vn/api/...` | `http://127.0.0.1:3000/api/...` | Backend Express (`PORT=3000`) |
 
 Trình duyệt **không** gọi trực tiếp 3000/3001 ra internet; chỉ **một** web server (Nginx **hoặc** Apache) lắng nghe 80/443.
 
 ### Khớp biến môi trường (giống cho cả Nginx và Apache)
 
-- **Frontend** (`crm-frontend/.env.production`): `NEXT_PUBLIC_API_URL=https://crm.congty.com` (mục **5.2**).
-- **Backend** (`crm-backend/.env`): `PUBLIC_API_BASE_URL` và (khuyến nghị) `BASE_URL` = `https://crm.congty.com`; `NODE_ENV=production` khi deploy thật.
+- **Frontend** (`crm-frontend/.env.production`): `NEXT_PUBLIC_API_URL=https://crm.mobifonetayninh.vn` (mục **5.2**).
+- **Backend** (`crm-backend/.env`): `PUBLIC_API_BASE_URL` và (khuyến nghị) `BASE_URL` = `https://crm.mobifonetayninh.vn`; `NODE_ENV=production` khi deploy thật.
 - `FRONTEND_URL` tùy chọn (xem **5.1**).
 
 ### 7.1. Nginx
 
 - File mẫu trong repo: **`deploy/nhicrm.conf`**. Trên server (Ubuntu/Debian): copy nội dung đã chỉnh vào **`/etc/nginx/sites-available/nhicrm.conf`**, symlink `sites-enabled`, **`sudo nginx -t && sudo systemctl reload nginx`**.
-- SSL: **`sudo certbot --nginx -d crm.congty.com`** (hoặc chỉ khối `listen 80` trước khi có cert — xem comment đầu file mẫu).
+- SSL: **`sudo certbot --nginx -d crm.mobifonetayninh.vn`** (hoặc chỉ khối `listen 80` trước khi có cert — xem comment đầu file mẫu).
 - **aaPanel / đã có Nginx quản lý 80:** không tạo thêm listener trùng — thêm `location /api/` và `location /` trong **site** do panel quản, hoặc dùng UI reverse proxy.
 
 ### 7.2. Apache 2.4
@@ -216,7 +216,7 @@ Trình duyệt **không** gọi trực tiếp 3000/3001 ra internet; chỉ **m�
 - Bật module: **`sudo a2enmod proxy proxy_http ssl headers`**, **`sudo systemctl restart apache2`** (tên dịch vụ có thể là `httpd` trên RHEL/CentOS).
 - File mẫu trong repo: **`deploy/nhicrm-apache.conf`**. Trên server: copy vào **`/etc/apache2/sites-available/nhicrm.conf`**, **`sudo a2ensite nhicrm.conf`**, **`sudo apachectl configtest && sudo systemctl reload apache2`**. (RHEL: thường đặt file trong `/etc/httpd/conf.d/`.)
 - **Thứ tự bắt buộc:** khai báo **`ProxyPass /api/`** trước **`ProxyPass /`** (Apache áp rule theo thứ tự).
-- SSL: **`sudo certbot --apache -d crm.congty.com`** hoặc SSL trong panel (aaPanel, v.v.).
+- SSL: **`sudo certbot --apache -d crm.mobifonetayninh.vn`** hoặc SSL trong panel (aaPanel, v.v.).
 - Upload body: **`LimitRequestBody`** trong file mẫu (tương đương `client_max_body_size` của Nginx).
 - **Đã dùng Apache (httpd) cho port 80:** không cài thêm Nginx cùng cổng — chỉnh VirtualHost / site hiện có theo mẫu.
 - **aaPanel + Apache (từng bước trong panel):** **`deploy/AAPANEL-APACHE.md`**.
@@ -235,16 +235,16 @@ Trình duyệt **không** gọi trực tiếp 3000/3001 ra internet; chỉ **m�
 
 Backend có logic **domain tenant** (subdomain) khi đăng nhập. Đây **không** phải tách API sang host khác: vẫn một site + `/api/` như mục **7**, chỉ bổ sung hostname cho từng tenant.
 
-- **DNS:** wildcard hoặc từng subdomain tenant trỏ về cùng IP (ví dụ `tenant1.crm.congty.com`).
-- **Reverse proxy:** Nginx `server_name` hoặc Apache `ServerName` / `ServerAlias` có thể dùng `*.crm.congty.com` hoặc danh sách cụ thể, **cùng** quy tắc proxy `/api/` và `/` như mẫu `deploy/nhicrm.conf` / `deploy/nhicrm-apache.conf`.
+- **DNS:** wildcard hoặc từng subdomain tenant trỏ về cùng IP (ví dụ `tenant1.crm.mobifonetayninh.vn`).
+- **Reverse proxy:** Nginx `server_name` hoặc Apache `ServerName` / `ServerAlias` có thể dùng `*.crm.mobifonetayninh.vn` hoặc danh sách cụ thể, **cùng** quy tắc proxy `/api/` và `/` như mẫu `deploy/nhicrm.conf` / `deploy/nhicrm-apache.conf`.
 
 ---
 
 ## 9. Kiểm tra sau deploy
 
-1. Mở `https://crm.congty.com` — trang login/load OK.
+1. Mở `https://crm.mobifonetayninh.vn` — trang login/load OK.
 2. Đăng nhập; tab Network: request API phải tới đúng **HTTPS** và **không** lỗi CORS/mixed content.
-3. `https://crm.congty.com/api-docs` (nếu muốn mở Swagger trên production — có thể hạn chế IP hoặc tắt).
+3. `https://crm.mobifonetayninh.vn/api-docs` (nếu muốn mở Swagger trên production — có thể hạn chế IP hoặc tắt).
 4. Import Excel / upload file: nếu lỗi 413 — tăng `client_max_body_size` (Nginx) hoặc `LimitRequestBody` (Apache).
 
 ---

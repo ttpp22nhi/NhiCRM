@@ -21,7 +21,7 @@ REDIS_URL=
 
 # === URL công khai (tùy chọn, nên set khi có domain / sau Nginx) ===
 # Link xem nhanh file deal (dealActivitiesController). Mặc định: từ Host header
-# BASE_URL=https://crm.congty.com
+# BASE_URL=https://crm.mobifonetayninh.vn
 
 # Swagger: thêm server "IP / Domain" trong /api-docs (swagger.js)
 # Có thể dùng SWAGGER_SERVER_URL thay cho dòng dưới (cùng ý nghĩa, PUBLIC_API_BASE_URL ưu tiên trong code)
@@ -33,4 +33,4 @@ FRONTEND_URL=
 
 # === Frontend: KHÔNG đặt NEXT_PUBLIC_* trong file này ===
 # Next.js chỉ đọc từ crm-frontend — ví dụ crm-frontend/.env.production :
-# NEXT_PUBLIC_API_URL=https://crm.congty.com
+# NEXT_PUBLIC_API_URL=https://crm.mobifonetayninh.vn
