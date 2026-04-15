@@ -120,6 +120,14 @@ export const login = async (req, res) => {
     }
     const domainNorm = domainRaw ? domainRaw.toLowerCase().replace(/\s+/g, '-') : '';
 
+    /** Super Admin cấp hệ thống: tenant_id NULL (đăng nhập không gắn công ty cụ thể). */
+    const selectSuperAdminSystem = () =>
+      pool.query(
+        `SELECT * FROM employees WHERE username = $1 AND is_active = TRUE
+         AND LOWER(TRIM(role)) = 'super_admin' AND tenant_id IS NULL`,
+        [username]
+      );
+
     let result;
 
     if (domainNorm) {
@@ -128,13 +136,25 @@ export const login = async (req, res) => {
         [domainNorm]
       );
       if (tenantRow.rows.length === 0) {
-        return res.status(400).json({ success: false, message: 'Domain công ty không tồn tại hoặc đã bị khóa.' });
+        // Subdomain từ Host (vd. crm.domain.com → "crm") có thể không phải domain tenant:
+        // cho phép Super Admin hệ thống đăng nhập nếu khớp đúng một tài khoản.
+        result = await selectSuperAdminSystem();
+        if (result.rows.length !== 1) {
+          return res.status(400).json({ success: false, message: 'Domain công ty không tồn tại hoặc đã bị khóa.' });
+        }
+      } else {
+        const tenantId = tenantRow.rows[0].id;
+        result = await pool.query(
+          'SELECT * FROM employees WHERE username = $1 AND tenant_id = $2 AND is_active = TRUE',
+          [username, tenantId]
+        );
+        if (result.rows.length === 0) {
+          const sa = await selectSuperAdminSystem();
+          if (sa.rows.length === 1) {
+            result = sa;
+          }
+        }
       }
-      const tenantId = tenantRow.rows[0].id;
-      result = await pool.query(
-        'SELECT * FROM employees WHERE username = $1 AND tenant_id = $2 AND is_active = TRUE',
-        [username, tenantId]
-      );
     } else {
       // Không có domain:
       // - Chỉ cho phép đăng nhập không domain nếu username thuộc role super_admin (cấp hệ thống).
