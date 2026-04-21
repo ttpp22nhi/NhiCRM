@@ -134,7 +134,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 to-primary-100 px-4">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-primary-50 to-primary-100 px-4 py-8">
       <div className="max-w-md w-full bg-white rounded-2xl shadow-xl p-8">
         <div className="text-center mb-8">
           <div className="flex justify-center mb-6">
@@ -177,7 +177,7 @@ export default function LoginPage() {
                 placeholder="VD: cong-ty-abc (dành cho Admin công ty con)"
               />
             </div>
-            <p className="text-xs text-gray-500 mt-1">Nếu bạn là Admin công ty con, nhập domain công ty (xem tại Hệ thống → Quản lý công ty).</p>
+            {/* <p className="text-xs text-gray-500 mt-1">Nếu bạn là Admin công ty con, nhập domain công ty (xem tại Hệ thống → Quản lý công ty).</p> */}
           </div>
 
           <div>
@@ -256,6 +256,11 @@ export default function LoginPage() {
           </p>
         </div>
       </div>
+
+      <footer className="mt-8 text-center text-xs text-gray-500 leading-relaxed">
+        <p>© 2026 MobiFone Tây Ninh.</p>
+        <p>Built by Trung tâm Kinh doanh Giải pháp số</p>
+      </footer>
     </div>
   )
 }
