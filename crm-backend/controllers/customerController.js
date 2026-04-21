@@ -4,6 +4,7 @@ import pool from '../database.js';
 import { getTenantId } from '../utils/tenantHelper.js';
 import { getAccessScope, buildCustomerFilter } from '../services/permissionService.js';
 import { getAssignableEmployeeIds } from '../services/assignableEmployeesService.js';
+import { parseKpiCustomerKind } from '../constants/kpiCustomerKind.js';
 
 /**
  * Kiểm tra trùng lặp khách hàng dựa trên số điện thoại hoặc mã số thuế
@@ -104,6 +105,7 @@ export const createCustomer = async (req, res) => {
     phone, 
     address, 
     customer_type, 
+    kpi_customer_kind,
     company_name, 
     tax_code, 
     source,
@@ -152,15 +154,17 @@ export const createCustomer = async (req, res) => {
     const customer_id = uuidv4();
     const now = Date.now();
 
+    const kpiKind = parseKpiCustomerKind(kpi_customer_kind)
     const query = `
       INSERT INTO customers (
-        customer_id, full_name, email, phone, address, customer_type, company_name, tax_code, source,
+        customer_id, full_name, email, phone, address, customer_type, kpi_customer_kind, company_name, tax_code, source,
         assigned_to, tenant_id, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *;
     `;
     const values = [
       customer_id, full_name, email || '', phone, address || '', customer_type || 'individual',
+      kpiKind,
       company_name || '', tax_code || '', source || 'Direct', finalAssignedTo, tenantId, now, now
     ];
 
@@ -317,6 +321,7 @@ export const updateCustomer = async (req, res) => {
     phone,
     address,
     customer_type,
+    kpi_customer_kind,
     company_name,
     tax_code,
     source,
@@ -330,7 +335,7 @@ export const updateCustomer = async (req, res) => {
 
     // 1. Kiểm tra khách hàng có tồn tại, thuộc tenant và chưa bị xóa
     const checkCustomer = await pool.query(
-      'SELECT assigned_to, deleted_at FROM customers WHERE customer_id = $1 AND tenant_id = $2',
+      'SELECT assigned_to, deleted_at, kpi_customer_kind FROM customers WHERE customer_id = $1 AND tenant_id = $2',
       [id, tenantId]
     );
     if (checkCustomer.rows.length === 0) {
@@ -380,15 +385,22 @@ export const updateCustomer = async (req, res) => {
     }
 
     const now = Date.now();
+    const existingKpi = checkCustomer.rows[0].kpi_customer_kind
+    const nextKpiKind =
+      kpi_customer_kind !== undefined
+        ? parseKpiCustomerKind(kpi_customer_kind)
+        : parseKpiCustomerKind(existingKpi)
+
     const updateQuery = `
       UPDATE customers 
-      SET full_name = $1, email = $2, phone = $3, address = $4, customer_type = $5, company_name = $6, tax_code = $7, source = $8, assigned_to = $9, updated_at = $10
-      WHERE customer_id = $11 AND tenant_id = $12 AND deleted_at IS NULL
+      SET full_name = $1, email = $2, phone = $3, address = $4, customer_type = $5, kpi_customer_kind = $6, company_name = $7, tax_code = $8, source = $9, assigned_to = $10, updated_at = $11
+      WHERE customer_id = $12 AND tenant_id = $13 AND deleted_at IS NULL
       RETURNING *;
     `;
 
     const values = [
       full_name, email || '', phone, address || '', customer_type || 'individual',
+      nextKpiKind,
       company_name || '', tax_code || '', source || 'Direct', finalAssignedTo, now, id, tenantId
     ];
     const result = await pool.query(updateQuery, values);

@@ -5,6 +5,7 @@ import { apiClient } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { AlertCircle, Search, X } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { inferKpiCustomerKind, type KpiCustomerKind } from '@/lib/kpiCustomerKind'
 
 interface Employee {
   employee_id: string
@@ -21,6 +22,7 @@ interface Customer {
   phone: string
   address: string
   customer_type: string
+  kpi_customer_kind?: string | null
   company_name: string
   tax_code: string
   source: string
@@ -41,6 +43,7 @@ export function EditCustomerForm({ customer, onSuccess, onCancel }: EditCustomer
     phone: customer.phone || '',
     address: customer.address || '',
     customer_type: customer.customer_type || 'individual',
+    kpi_customer_kind: inferKpiCustomerKind(customer) as KpiCustomerKind,
     company_name: customer.company_name || '',
     tax_code: customer.tax_code || '',
     source: customer.source || 'Direct',
@@ -249,6 +252,23 @@ export function EditCustomerForm({ customer, onSuccess, onCancel }: EditCustomer
           <option value="hop_tac_xa">Hợp tác xã</option>
           <option value="company">Doanh nghiệp</option>
         </select>
+      </div>
+
+      <div>
+        <label htmlFor="kpi_customer_kind" className="block text-sm font-medium text-gray-700 mb-2">
+          Phân loại KPI (doanh thu mới / hiện hữu)
+        </label>
+        <select
+          id="kpi_customer_kind"
+          name="kpi_customer_kind"
+          value={formData.kpi_customer_kind}
+          onChange={handleChange}
+          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
+        >
+          <option value="NEW">Khách mới</option>
+          <option value="EXISTING">Khách hiện hữu</option>
+        </select>
+        <p className="text-xs text-gray-500 mt-1">Khác với &quot;Loại khách hàng&quot; phía trên. Có thể tự động chuyển hiện hữu khi có deal thắng theo quy tắc hệ thống.</p>
       </div>
 
       {showCompanyFields && (

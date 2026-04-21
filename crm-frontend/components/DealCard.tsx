@@ -2,7 +2,7 @@
 
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { DollarSign, Calendar, User, Edit, Package, FileText, StickyNote, XCircle, ThumbsDown, Trash2, Eye, CheckSquare } from 'lucide-react'
+import { DollarSign, Calendar, User, UserCheck, Edit, Package, FileText, StickyNote, XCircle, ThumbsDown, Trash2, Eye, CheckSquare } from 'lucide-react'
 import type { Deal } from './KanbanBoard'
 
 interface DealCardProps {
@@ -153,6 +153,15 @@ export function DealCard({ deal, onEdit, onViewDetail, onCancel, onDelete, canDe
           <div className="flex items-center gap-2">
             <User className="w-4 h-4 text-gray-400" />
             <span className="text-sm text-gray-700">{deal.customer_full_name}</span>
+          </div>
+        )}
+
+        {(deal.assigned_employee_name || deal.assigned_employee_username) && (
+          <div className="flex items-center gap-2" title="Người phụ trách">
+            <UserCheck className="w-4 h-4 text-indigo-500" />
+            <span className="text-sm font-medium text-indigo-700 truncate">
+              {deal.assigned_employee_name || deal.assigned_employee_username}
+            </span>
           </div>
         )}
 

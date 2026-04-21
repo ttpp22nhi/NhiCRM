@@ -3,6 +3,7 @@ import pool from '../database.js';
 import {
   isExecutiveRole,
   isTenantAdminRole,
+  canCreateEmployees,
 } from '../config/rbac.js';
 
 /**
@@ -208,6 +209,25 @@ export const verifyExecutive = (req, res, next) => {
     return res.status(403).json({
       success: false,
       message: 'Chỉ quản trị viên, giám đốc hoặc quản lý mới có quyền thực hiện thao tác này.',
+    });
+  }
+  next();
+};
+
+/**
+ * Tạo nhân viên mới (POST /api/auth/register, import Excel): Admin, Super Admin, Giám đốc, Quản lý.
+ */
+export const verifyEmployeeCreator = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({
+      success: false,
+      message: 'Vui lòng đăng nhập trước.',
+    });
+  }
+  if (!canCreateEmployees(req.user.role)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Chỉ Quản trị viên, Giám đốc hoặc Quản lý mới được thêm nhân viên mới.',
     });
   }
   next();

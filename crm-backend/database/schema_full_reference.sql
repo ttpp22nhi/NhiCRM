@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS public.employees (
   department_id VARCHAR(50) NULL,
   title VARCHAR(100) NULL,
   rank VARCHAR(50) NULL,
+  territory TEXT NULL,
   CONSTRAINT employees_pkey PRIMARY KEY (employee_id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS employees_username_tenant_unique ON public.employees (username, tenant_id);
@@ -123,6 +124,8 @@ CREATE TABLE IF NOT EXISTS public.deals (
   assigned_to VARCHAR(50) NULL,
   updated_at INT8 NULL,
   tenant_id VARCHAR(50) NULL,
+  primary_product_code VARCHAR(50) NULL,
+  first_contact_date INT8 NULL,
   CONSTRAINT deals_pkey PRIMARY KEY (deal_id)
 );
 CREATE INDEX IF NOT EXISTS idx_deals_assigned_to ON public.deals (assigned_to);
@@ -245,5 +248,77 @@ CREATE INDEX IF NOT EXISTS idx_transfer_approval_logs_transfer_request_id ON pub
 CREATE INDEX IF NOT EXISTS idx_transfer_approval_logs_approver_id ON public.transfer_approval_logs (approver_id);
 CREATE INDEX IF NOT EXISTS idx_transfer_approval_logs_created_at ON public.transfer_approval_logs (created_at DESC);
 
+-- ============================================
+-- 13. CBS_CONFIG (add_cbs_revenue_schema.sql)
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.cbs_config (
+  tenant_id VARCHAR(50) NOT NULL,
+  base_url VARCHAR(255) NOT NULL DEFAULT 'https://cbs.mobifone.vn',
+  username VARCHAR(100) NOT NULL,
+  password TEXT NOT NULL,
+  unit INTEGER NOT NULL DEFAULT 880,
+  report_config_code VARCHAR(100) NOT NULL DEFAULT 'REPORT_INVOICING_PREPAID',
+  auto_sync BOOLEAN NOT NULL DEFAULT TRUE,
+  last_synced_at BIGINT NULL,
+  last_sync_status VARCHAR(20) NULL,
+  last_sync_message TEXT NULL,
+  updated_at BIGINT NULL,
+  updated_by VARCHAR(50) NULL,
+  CONSTRAINT cbs_config_pkey PRIMARY KEY (tenant_id)
+);
+
+-- ============================================
+-- 14. CBS_REVENUE_ORDERS (add_cbs_revenue_schema.sql)
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.cbs_revenue_orders (
+  id VARCHAR(50) NOT NULL,
+  tenant_id VARCHAR(50) NOT NULL,
+  fingerprint VARCHAR(255) NOT NULL,
+  period_ym VARCHAR(7) NULL,
+  contract_no VARCHAR(255) NULL,
+  contract_type VARCHAR(50) NULL,
+  product_name VARCHAR(255) NULL,
+  product_code VARCHAR(100) NULL,
+  primary_product_code VARCHAR(100) NULL,
+  masp VARCHAR(50) NULL,
+  external_id1 VARCHAR(100) NULL,
+  serial VARCHAR(100) NULL,
+  customer_name VARCHAR(500) NULL,
+  customer_type VARCHAR(100) NULL,
+  partner VARCHAR(500) NULL,
+  cen_code_dev VARCHAR(255) NULL,
+  cbs_staff VARCHAR(500) NULL,
+  payment_type VARCHAR(50) NULL,
+  price_not_vat NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  price_not_vat_round NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  price_vat NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  vat NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  sub_start_date BIGINT NULL,
+  first_date_revenue BIGINT NULL,
+  active_date BIGINT NULL,
+  payment_date BIGINT NULL,
+  raw JSONB NULL,
+  claimed_by VARCHAR(50) NULL,
+  claimed_at BIGINT NULL,
+  claim_status VARCHAR(20) NULL,
+  approved_by VARCHAR(50) NULL,
+  approved_at BIGINT NULL,
+  customer_id VARCHAR(50) NULL,
+  deal_id VARCHAR(50) NULL,
+  kpi_kind_at_approve VARCHAR(20) NULL,
+  synced_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NULL,
+  CONSTRAINT cbs_revenue_orders_pkey PRIMARY KEY (id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cbs_revenue_orders_tenant_fp ON public.cbs_revenue_orders (tenant_id, fingerprint);
+CREATE INDEX IF NOT EXISTS idx_cbs_revenue_orders_tenant_period ON public.cbs_revenue_orders (tenant_id, period_ym);
+CREATE INDEX IF NOT EXISTS idx_cbs_revenue_orders_claimed_by ON public.cbs_revenue_orders (tenant_id, claimed_by) WHERE claimed_by IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_cbs_revenue_orders_claim_status ON public.cbs_revenue_orders (tenant_id, claim_status) WHERE claim_status IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_cbs_revenue_orders_payment_date ON public.cbs_revenue_orders (tenant_id, payment_date DESC);
+CREATE INDEX IF NOT EXISTS idx_cbs_revenue_orders_customer ON public.cbs_revenue_orders (tenant_id, customer_id) WHERE customer_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_cbs_revenue_orders_deal ON public.cbs_revenue_orders (tenant_id, deal_id) WHERE deal_id IS NOT NULL;
+
 -- (Các bảng: tenants, employees, departments, organization_levels, customers, deals,
---  tasks, interactions, notifications, role_permissions, transfer_requests, transfer_approval_logs)
+--  tasks, interactions, notifications, role_permissions, transfer_requests, transfer_approval_logs,
+--  cbs_config, cbs_revenue_orders)

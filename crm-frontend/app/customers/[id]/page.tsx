@@ -28,6 +28,7 @@ import {
   DollarSign
 } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { inferKpiCustomerKind, labelKpiCustomerKind } from '@/lib/kpiCustomerKind'
 
 interface Customer {
   customer_id: string
@@ -36,6 +37,7 @@ interface Customer {
   phone: string
   address: string
   customer_type: string
+  kpi_customer_kind?: string | null
   company_name: string
   tax_code: string
   source: string
@@ -311,6 +313,10 @@ export default function CustomerDetailPage() {
                   <div>
                     <label className="text-sm font-medium text-gray-500">Loại khách hàng</label>
                     <p className="text-gray-900 font-semibold mt-1">{getCustomerTypeLabel(customer.customer_type)}</p>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium text-gray-500">Phân loại KPI</label>
+                    <p className="text-gray-900 font-semibold mt-1">{labelKpiCustomerKind(inferKpiCustomerKind(customer))}</p>
                   </div>
                   {customer.email && (
                     <div className="flex items-start gap-2">

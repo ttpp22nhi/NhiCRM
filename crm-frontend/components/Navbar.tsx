@@ -4,12 +4,12 @@ import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import Image from 'next/image'
-import { LogOut, Users, LayoutDashboard, User, ChevronDown, UserCircle, Key, CheckSquare, FileText, Menu, X, Building2, Shield, ArrowRightLeft, GitBranch, Settings } from 'lucide-react'
+import { LogOut, Users, LayoutDashboard, User, ChevronDown, UserCircle, Key, CheckSquare, FileText, Menu, X, Building2, Shield, ArrowRightLeft, GitBranch, Settings, Target, Wallet } from 'lucide-react'
 import Link from 'next/link'
 import toast from 'react-hot-toast'
 import { NotificationBell } from './NotificationBell'
 import { SubscriptionBanner } from './SubscriptionBanner'
-import { isTenantAdmin, isExecutive, isTransferApprover, canOpenAdminSection } from '@/lib/rbac'
+import { isTenantAdmin, isExecutive, isTransferApprover, canOpenAdminSection, canAccessKpiPage, canAccessCbsRevenue } from '@/lib/rbac'
 
 export function Navbar() {
   const { user, logout } = useAuth()
@@ -136,6 +136,18 @@ export function Navbar() {
                       <CheckSquare className="w-4 h-4" />
                       Công việc
                     </Link>
+                    {canAccessKpiPage(user?.role) && (
+                      <Link href="/kpi" onClick={() => setShowBizMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                        <Target className="w-4 h-4" />
+                        KPI tháng
+                      </Link>
+                    )}
+                    {canAccessCbsRevenue(user?.role) && (
+                      <Link href="/cbs-revenue" onClick={() => setShowBizMenu(false)} className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                        <Wallet className="w-4 h-4" />
+                        Doanh thu CBS
+                      </Link>
+                    )}
                   </div>
                 )}
               </div>
@@ -324,6 +336,18 @@ export function Navbar() {
                   <CheckSquare className="w-5 h-5" />
                   <span>Công việc</span>
                 </Link>
+                {canAccessKpiPage(user?.role) && (
+                  <Link href="/kpi" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                    <Target className="w-5 h-5" />
+                    <span>KPI tháng</span>
+                  </Link>
+                )}
+                {canAccessCbsRevenue(user?.role) && (
+                  <Link href="/cbs-revenue" onClick={() => setShowMobileMenu(false)} className="flex items-center space-x-2 text-gray-700 hover:bg-gray-100 px-3 py-2 rounded-md ml-2">
+                    <Wallet className="w-5 h-5" />
+                    <span>Doanh thu CBS</span>
+                  </Link>
+                )}
               </div>
                 </>
               )}

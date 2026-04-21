@@ -23,6 +23,7 @@ interface Employee {
   department_name?: string
   title?: string
   rank?: string
+  territory?: string | null
 }
 
 interface EmployeeListProps {
@@ -325,6 +326,9 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
               <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Vai trò
               </th>
+              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider max-w-[140px]">
+                Địa bàn
+              </th>
               <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Trạng thái
               </th>
@@ -365,6 +369,11 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
                     <span className="sm:hidden">
                       {employee.role === 'admin' || employee.role === 'super_admin' ? 'Admin' : employee.role === 'manager' ? 'QL' : employee.role === 'director' ? 'GĐ' : employee.role === 'leader' ? 'TT' : 'Sales'}
                     </span>
+                  </span>
+                </td>
+                <td className="px-3 py-3 text-xs text-gray-700 max-w-[160px]">
+                  <span className="line-clamp-2" title={employee.territory || undefined}>
+                    {employee.territory?.trim() ? employee.territory : '—'}
                   </span>
                 </td>
                 <td className="px-3 py-3">

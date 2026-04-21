@@ -26,9 +26,20 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const { login } = useAuth()
+  const { login, user, loading: authLoading } = useAuth()
   const router = useRouter()
   const formRef = useRef<HTMLFormElement>(null)
+
+  /** Đã đăng nhập mà tự vào /login → đưa về app (không giữ form đăng nhập). */
+  useEffect(() => {
+    if (authLoading) return
+    if (!user) return
+    const targetPath =
+      user.role === 'super_admin' && (user.tenant_id == null || user.tenant_id === '')
+        ? '/system/tenants'
+        : '/dashboard'
+    router.replace(targetPath)
+  }, [authLoading, user, router])
 
   // Khôi phục thông tin đã lưu (localStorage) hoặc session (sessionStorage) khi load trang
   useEffect(() => {
@@ -112,6 +123,14 @@ export default function LoginPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  if (authLoading || user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 to-primary-100 px-4">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600" aria-label="Đang tải" />
+      </div>
+    )
   }
 
   return (

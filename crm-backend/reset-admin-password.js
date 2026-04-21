@@ -9,6 +9,7 @@
 
 import bcrypt from 'bcrypt';
 import pool from './database.js';
+import { SQL_EMPLOYEE_USERNAME_EQUALS } from './utils/usernameSql.js';
 import readline from 'readline';
 
 const rl = readline.createInterface({
@@ -50,7 +51,7 @@ async function resetAdminPassword() {
     let params;
 
     if (username) {
-      query = 'SELECT employee_id, username, full_name, email, role FROM employees WHERE username = $1 AND role = $2';
+      query = `SELECT employee_id, username, full_name, email, role FROM employees WHERE ${SQL_EMPLOYEE_USERNAME_EQUALS} AND role = $2`;
       params = [username, 'admin'];
     } else {
       query = 'SELECT employee_id, username, full_name, email, role FROM employees WHERE role = $1';

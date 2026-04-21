@@ -5,6 +5,7 @@ import pool from '../database.js'
 import { getTenantId } from '../utils/tenantHelper.js'
 import { getAssignableEmployeeIds } from '../services/assignableEmployeesService.js'
 import { CUSTOMER_TYPE_VALUES } from '../constants/customerTypes.js'
+import { parseKpiCustomerKind } from '../constants/kpiCustomerKind.js'
 
 function normalizeCustomerHeader(cell) {
   const raw = String(cell ?? '')
@@ -46,6 +47,12 @@ function normalizeCustomerHeader(cell) {
     ['mã nhân viên', 'assigned_to'],
     ['ma nhan vien', 'assigned_to'],
     ['employee_id', 'assigned_to'],
+    ['kpi_customer_kind', 'kpi_customer_kind'],
+    ['kpi', 'kpi_customer_kind'],
+    ['phân loại kpi', 'kpi_customer_kind'],
+    ['phan loai kpi', 'kpi_customer_kind'],
+    ['loại kpi', 'kpi_customer_kind'],
+    ['loai kpi', 'kpi_customer_kind'],
     ['assigned_username', 'assigned_username'],
     ['username nv', 'assigned_username'],
     ['tên đăng nhập nv', 'assigned_username'],
@@ -62,6 +69,18 @@ function cellStr(v) {
   if (v === null || v === undefined) return ''
   if (typeof v === 'number') return String(v)
   return String(v).trim()
+}
+
+function parseKpiKindFromExcel(raw) {
+  const s = cellStr(raw).trim()
+  if (!s) return parseKpiCustomerKind()
+  const u = s.toUpperCase()
+  if (u === 'EXISTING' || u === 'HIỆN HỮU' || u === 'HIEN HUU') return 'EXISTING'
+  if (u === 'NEW' || u === 'MỚI' || u === 'MOI' || u === 'KHÁCH MỚI') return 'NEW'
+  const low = s.toLowerCase()
+  if (low.includes('hiện hữu') || low.includes('hien huu') || low.includes('hien_huu')) return 'EXISTING'
+  if (low.includes('khách mới') || (low.includes('mới') && !low.includes('hiện'))) return 'NEW'
+  return parseKpiCustomerKind(s)
 }
 
 async function resolveFinalAssignedTo(req, row) {
@@ -123,6 +142,7 @@ export async function downloadCustomerImportTemplate(req, res) {
       'email',
       'address',
       'customer_type',
+      'kpi_customer_kind',
       'company_name',
       'tax_code',
       'source',
@@ -135,6 +155,7 @@ export async function downloadCustomerImportTemplate(req, res) {
       'b@example.com',
       'Hà Nội',
       'individual',
+      'NEW',
       '',
       '',
       'Direct',
@@ -148,6 +169,7 @@ export async function downloadCustomerImportTemplate(req, res) {
       { width: 20 },
       { width: 24 },
       { width: 22 },
+      { width: 18 },
       { width: 22 },
       { width: 14 },
       { width: 12 },
@@ -170,11 +192,26 @@ export async function downloadCustomerImportTemplate(req, res) {
       formulae: [listFormula],
     })
 
+    // Cột F — phân loại KPI (mới / hiện hữu), đồng bộ form Thêm khách hàng
+    ws.dataValidations.add('F2:F5000', {
+      type: 'list',
+      allowBlank: true,
+      showInputMessage: true,
+      promptTitle: 'Phân loại KPI',
+      prompt: 'NEW = khách mới, EXISTING = khách hiện hữu (doanh thu KPI). Để trống = NEW.',
+      showErrorMessage: true,
+      errorStyle: 'error',
+      errorTitle: 'Giá trị không hợp lệ',
+      error: 'Chọn NEW hoặc EXISTING.',
+      formulae: ['"NEW,EXISTING"'],
+    })
+
     const noteWs = workbook.addWorksheet('Hướng dẫn')
     const noteLines = [
       'Ghi chú import khách hàng:',
       '- full_name và phone là bắt buộc.',
       '- customer_type (cột E): bấm mũi tên ô để chọn loại khách — danh mục giống màn hình Thêm khách hàng; để trống = individual.',
+      '- kpi_customer_kind (cột F): NEW hoặc EXISTING — phân loại KPI (khách mới / hiện hữu), độc lập cột E; để trống = NEW.',
       '- assigned_username: tên đăng nhập NV chăm sóc; assigned_to: UUID nhân viên (ưu tiên nếu cả hai có).',
       '- Để trống assigned_* → gán cho chính tài khoản đang import.',
       '- Vai trò Sales: mọi dòng gán cho chính bạn; hai cột assigned_* bị bỏ qua.',
@@ -321,6 +358,8 @@ export async function importCustomersFromExcel(req, res) {
         continue
       }
 
+      const kpi_customer_kind = parseKpiKindFromExcel(obj.kpi_customer_kind)
+
       const assignRes = await resolveFinalAssignedTo(req, obj)
       if (assignRes.error) {
         errors.push({ row: excelRow, message: assignRes.error })
@@ -339,9 +378,9 @@ export async function importCustomersFromExcel(req, res) {
       try {
         await pool.query(
           `INSERT INTO customers (
-            customer_id, full_name, email, phone, address, customer_type, company_name, tax_code, source,
+            customer_id, full_name, email, phone, address, customer_type, kpi_customer_kind, company_name, tax_code, source,
             assigned_to, tenant_id, created_at, updated_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
           [
             customer_id,
             full_name,
@@ -349,6 +388,7 @@ export async function importCustomersFromExcel(req, res) {
             phone,
             address,
             customer_type,
+            kpi_customer_kind,
             company_name,
             tax_code,
             source,

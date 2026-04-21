@@ -189,41 +189,45 @@ export async function getWinRate(tenantId, scopeOptions, dateRange = null) {
 }
 
 /**
- * getKpiProgress(tenantId, scopeOptions, month, year): So sánh target_value với doanh số thực tế
+ * Tiến độ KPI Dashboard: tổng chỉ tiêu & thực đạt của **toàn bộ Sales đang hoạt động** trong tenant,
+ * lấy từ bảng `kpis` (cùng nguồn với trang /kpi). Không lọc theo scopePath/đơn vị.
+ * scopeOptions giữ tham số để tương thích gọi API; không dùng trong truy vấn.
  */
-export async function getKpiProgress(tenantId, scopeOptions, dateRange = null) {
-  const employeeIds = await resolveScopeToEmployeeIds(tenantId, scopeOptions)
-  const { clause, params } = buildDealFilterClause(tenantId, employeeIds)
-  const filtered = addDateRangeClause(clause, params, 'd.updated_at', dateRange)
-
-  const revenueQuery = `
-    SELECT COALESCE(SUM(d.amount), 0) AS actual
-    FROM deals d
-    WHERE ${filtered.clause} AND (d.status = 'won' OR d.stage = 'thanh_cong')
-  `
-  const revResult = await pool.query(revenueQuery, filtered.params)
-  const actualRevenue = parseFloat((revResult.rows || [])[0]?.actual || 0) || 0
-
-  const scopePath = typeof scopeOptions === 'string' ? scopeOptions : scopeOptions?.scopePath
-  const deptId = scopePath && !String(scopePath).includes('/') ? scopePath : null
+export async function getKpiProgress(tenantId, _scopeOptions, dateRange = null) {
   const months = getMonthRange(dateRange)
-  let targetValue = 0
-  if (months.length > 0) {
-    const monthConditions = months.map((_, idx) => `(month = $${idx * 2 + 2} AND year = $${idx * 2 + 3})`).join(' OR ')
-    const monthParams = months.flatMap((item) => [item.month, item.year])
-    const targetResult = await pool.query(
-      `SELECT COALESCE(SUM(target_value), 0) AS target
-       FROM kpi_targets
-       WHERE tenant_id = $1
-         AND (${monthConditions})
-         AND (($${monthParams.length + 2}::text IS NULL AND department_id IS NULL) OR department_id = $${monthParams.length + 2})`,
-      [tenantId, ...monthParams, deptId]
-    )
-    targetValue = parseFloat((targetResult.rows || [])[0]?.target || 0) || 0
+  if (months.length === 0) {
+    return { targetValue: 0, actualRevenue: 0, progressPercent: 0 }
   }
+  const periods = months.map((m) => `${m.year}-${String(m.month).padStart(2, '0')}`)
 
-  const progressPercent = targetValue === 0 ? (actualRevenue > 0 ? 100 : 0) : Math.min(100, Math.round((actualRevenue / targetValue) * 10000) / 100)
-  return { targetValue, actualRevenue, progressPercent }
+  try {
+    const result = await pool.query(
+      `SELECT
+         COALESCE(SUM(k.target_revenue_new + k.target_revenue_existing), 0) AS target,
+         COALESCE(SUM(k.actual_revenue_new + k.actual_revenue_existing), 0) AS actual
+       FROM kpis k
+       INNER JOIN employees e ON e.employee_id = k.user_id AND e.tenant_id = k.tenant_id
+       WHERE k.tenant_id = $1
+         AND LOWER(TRIM(COALESCE(e.role, ''))) = 'sales'
+         AND e.is_active = TRUE
+         AND k.period = ANY($2::text[])`,
+      [tenantId, periods]
+    )
+    const targetValue = parseFloat((result.rows || [])[0]?.target || 0) || 0
+    const actualRevenue = parseFloat((result.rows || [])[0]?.actual || 0) || 0
+    const progressPercent =
+      targetValue === 0
+        ? actualRevenue > 0
+          ? 100
+          : 0
+        : Math.min(100, Math.round((actualRevenue / targetValue) * 10000) / 100)
+    return { targetValue, actualRevenue, progressPercent }
+  } catch (err) {
+    if (err.code === '42P01') {
+      return { targetValue: 0, actualRevenue: 0, progressPercent: 0 }
+    }
+    throw err
+  }
 }
 
 /**

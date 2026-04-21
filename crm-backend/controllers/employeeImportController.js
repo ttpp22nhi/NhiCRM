@@ -3,8 +3,12 @@ import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import pool from '../database.js';
 import { getTenantId } from '../utils/tenantHelper.js';
-
-const VALID_IMPORT_ROLES = ['admin', 'director', 'manager', 'leader', 'sales'];
+import { SQL_EMPLOYEE_USERNAME_EQUALS } from '../utils/usernameSql.js';
+import {
+  isTenantAdminRole,
+  EMPLOYEE_TARGET_ROLES_FOR_TENANT_ADMIN,
+  EMPLOYEE_TARGET_ROLES_FOR_EXECUTIVE,
+} from '../config/rbac.js';
 
 /** Chuẩn hóa tiêu đề cột (hỗ trợ tiếng Việt không dấu / có dấu + tiếng Anh). */
 function normalizeHeader(cell) {
@@ -44,6 +48,10 @@ function normalizeHeader(cell) {
     ['rank', 'rank'],
     ['cấp bậc', 'rank'],
     ['cap bac', 'rank'],
+    ['territory', 'territory'],
+    ['địa bàn', 'territory'],
+    ['dia ban', 'territory'],
+    ['dia_ban', 'territory'],
   ])
   if (map.has(compact)) return map.get(compact)
   return raw.replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '')
@@ -70,6 +78,7 @@ export async function downloadEmployeeImportTemplate(_req, res) {
       'department_name',
       'title',
       'rank',
+      'territory',
     ]
     const sample = [
       'vidu_nv01',
@@ -81,6 +90,7 @@ export async function downloadEmployeeImportTemplate(_req, res) {
       'Tên phòng theo hệ thống (nếu không dùng department_id)',
       'Nhân viên kinh doanh',
       '1',
+      'VD: Miền Bắc — Hà Nội',
     ]
     const note = [
       'Ghi chú:',
@@ -91,6 +101,7 @@ export async function downloadEmployeeImportTemplate(_req, res) {
       '- title (chức danh): tùy chọn, mô tả chức danh hiển thị — VD: Chuyên viên, NVKD.',
       '- rank (cấp bậc): tùy chọn, chuỗi tự quy ước trong công ty (không có danh mục cố định trong hệ thống).',
       '  Có thể ghi mức số (1,2,3), cấp chữ (A,B), hoặc tên cấp (NV1, CVCC…) — để trống nếu không dùng.',
+      '- territory (địa bàn): tùy chọn — mô tả địa bàn phụ trách (VD: Quận 1, Miền Trung…).',
     ]
     const ws = XLSX.utils.aoa_to_sheet([header, sample])
     ws['!cols'] = [
@@ -103,6 +114,7 @@ export async function downloadEmployeeImportTemplate(_req, res) {
       { wch: 28 },
       { wch: 18 },
       { wch: 10 },
+      { wch: 28 },
     ]
     const wsNote = XLSX.utils.aoa_to_sheet(note.map((l) => [l]))
     const wb = XLSX.utils.book_new()
@@ -161,6 +173,7 @@ async function resolveDepartmentId(tenantId, departmentIdRaw, departmentNameRaw)
  */
 export async function importEmployeesFromExcel(req, res) {
   const tenantId = getTenantId(req)
+  const creatorIsTenantAdmin = isTenantAdminRole(req.user?.role)
   if (!req.file?.buffer) {
     return res.status(400).json({
       success: false,
@@ -269,7 +282,7 @@ export async function importEmployeesFromExcel(req, res) {
     const saltRounds = 10
 
     for (const { excelRow, obj } of dataRows) {
-      const username = cellStr(obj.username)
+      const username = cellStr(obj.username).trim()
       const password = cellStr(obj.password)
       const full_name = cellStr(obj.full_name)
       const emailRaw = cellStr(obj.email)
@@ -283,17 +296,22 @@ export async function importEmployeesFromExcel(req, res) {
         continue
       }
 
+      const allowedRoles = creatorIsTenantAdmin
+        ? EMPLOYEE_TARGET_ROLES_FOR_TENANT_ADMIN
+        : EMPLOYEE_TARGET_ROLES_FOR_EXECUTIVE
       let role = (cellStr(obj.role) || 'sales').toLowerCase()
-      if (!VALID_IMPORT_ROLES.includes(role)) {
+      if (!allowedRoles.includes(role)) {
         errors.push({
           row: excelRow,
-          message: `Vai trò không hợp lệ: "${role}". Cho phép: ${VALID_IMPORT_ROLES.join(', ')}.`,
+          message: creatorIsTenantAdmin
+            ? `Vai trò không hợp lệ: "${role}". Cho phép: ${allowedRoles.join(', ')}.`
+            : `Chỉ được import vai trò leader hoặc sales (nhận được: "${role}").`,
         })
         continue
       }
 
       const dupUser = await pool.query(
-        'SELECT 1 FROM employees WHERE username = $1 AND tenant_id = $2',
+        `SELECT 1 FROM employees WHERE ${SQL_EMPLOYEE_USERNAME_EQUALS} AND tenant_id = $2`,
         [username, tenantId]
       )
       if (dupUser.rows.length > 0) {
@@ -333,6 +351,8 @@ export async function importEmployeesFromExcel(req, res) {
 
       const title = cellStr(obj.title) || null
       const rank = cellStr(obj.rank) || null
+      const territoryVal = cellStr(obj.territory)
+      const territory = territoryVal ? territoryVal : null
       const department_id = dept.id
 
       const password_hash = await bcrypt.hash(password, saltRounds)
@@ -341,8 +361,8 @@ export async function importEmployeesFromExcel(req, res) {
 
       try {
         await pool.query(
-          `INSERT INTO employees (employee_id, username, password_hash, full_name, email, role, department_id, title, rank, tenant_id, is_active, created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,$11)`,
+          `INSERT INTO employees (employee_id, username, password_hash, full_name, email, role, department_id, title, rank, territory, tenant_id, is_active, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13)`,
           [
             employee_id,
             username,
@@ -353,6 +373,7 @@ export async function importEmployeesFromExcel(req, res) {
             department_id,
             title,
             rank,
+            territory,
             tenantId,
             created_at,
           ]

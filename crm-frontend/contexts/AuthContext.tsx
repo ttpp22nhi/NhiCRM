@@ -19,6 +19,8 @@ interface RegisterOptions {
   department_id?: string
   title?: string
   rank?: string
+  /** Địa bàn phụ trách (text tự do) */
+  territory?: string
 }
 
 interface AuthContextType {
@@ -54,8 +56,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (username: string, password: string, domain?: string) => {
     try {
+      const usernameTrim = String(username ?? '').trim()
       const response = await apiClient.post('/api/auth/login', {
-        username,
+        username: usernameTrim,
         password,
         ...(domain && domain.trim() ? { domain: domain.trim() } : {}),
       })
@@ -114,14 +117,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   ) => {
     try {
       const response = await apiClient.post('/api/auth/register', {
-        username,
+        username: String(username ?? '').trim(),
         password,
         full_name,
         email,
         role: options?.role || 'sales',
         department_id: options?.department_id || undefined,
         title: options?.title || undefined,
-        rank: options?.rank || undefined
+        rank: options?.rank || undefined,
+        territory: options?.territory || undefined
       })
 
       if (!response.data.success) {

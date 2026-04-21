@@ -1,0 +1,870 @@
+'use client'
+
+import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
+import { ProtectedRoute } from '@/components/ProtectedRoute'
+import { Navbar } from '@/components/Navbar'
+import { apiClient } from '@/lib/api'
+import { useAuth } from '@/contexts/AuthContext'
+import {
+  canAccessCbsRevenue,
+  canSyncCbsRevenue,
+  canManageCbsConfig,
+} from '@/lib/rbac'
+import {
+  Loader2,
+  Wallet,
+  RefreshCcw,
+  Settings,
+  CheckCircle2,
+  Circle,
+  XCircle,
+  Search,
+  Eye,
+  ShieldCheck,
+  Clock,
+  Calculator,
+} from 'lucide-react'
+import toast from 'react-hot-toast'
+import { CbsConfigModal } from '@/components/CbsConfigModal'
+import { CbsOrderDetailModal, CbsOrderDetail } from '@/components/CbsOrderDetailModal'
+
+interface CbsOrder extends CbsOrderDetail {
+  claimed_by_username?: string | null
+  claimed_by_territory?: string | null
+  claimed_by_role?: string | null
+}
+
+interface ListResp {
+  success: boolean
+  period: string
+  data: CbsOrder[]
+  summary: {
+    total: number
+    total_vat: number
+    total_not_vat: number
+    claimed: number
+    unclaimed: number
+    mine: number
+    pending: number
+  }
+  last_sync: {
+    last_synced_at: number | null
+    last_sync_status: string | null
+    last_sync_message: string | null
+  } | null
+}
+
+interface SalesEmployee {
+  employee_id: string
+  username: string
+  full_name: string
+  role?: string
+  is_active?: boolean
+}
+
+function defaultPeriod(): string {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  return `${y}-${m}`
+}
+
+function formatVND(n: number | string | null | undefined): string {
+  const x = Number(n ?? 0)
+  if (Number.isNaN(x)) return '—'
+  try {
+    return new Intl.NumberFormat('vi-VN', {
+      style: 'currency',
+      currency: 'VND',
+      maximumFractionDigits: 0,
+    }).format(x)
+  } catch {
+    return `${x.toLocaleString('vi-VN')} ₫`
+  }
+}
+
+function formatDateVN(ms: string | number | null | undefined): string {
+  if (ms == null || ms === '') return '—'
+  const n = Number(ms)
+  if (!Number.isFinite(n)) return '—'
+  const d = new Date(n)
+  const dd = String(d.getDate()).padStart(2, '0')
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const yyyy = d.getFullYear()
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mi = String(d.getMinutes()).padStart(2, '0')
+  return `${dd}/${mm}/${yyyy} ${hh}:${mi}`
+}
+
+type OwnerFilter = 'all' | 'mine' | 'unclaimed' | 'others' | 'pending'
+
+export default function CbsRevenuePage() {
+  const { user } = useAuth()
+  const router = useRouter()
+  const canAccess = canAccessCbsRevenue(user?.role)
+  const canSync = canSyncCbsRevenue(user?.role)
+  const canManage = canManageCbsConfig(user?.role)
+  const role = String(user?.role || '').toLowerCase()
+  const canAssignSeller = role !== 'sales' // admin/director/manager/leader
+
+  const [period, setPeriod] = useState(defaultPeriod)
+  const [owner, setOwner] = useState<OwnerFilter>('all')
+  const [q, setQ] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [syncing, setSyncing] = useState(false)
+  const [recomputing, setRecomputing] = useState(false)
+  const [resp, setResp] = useState<ListResp | null>(null)
+  const [configOpen, setConfigOpen] = useState(false)
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
+  const [salesList, setSalesList] = useState<SalesEmployee[]>([])
+  const [detailOrder, setDetailOrder] = useState<CbsOrder | null>(null)
+
+  const load = useCallback(async () => {
+    if (!canAccess) return
+    setLoading(true)
+    try {
+      const res = await apiClient.get<ListResp>('/api/cbs/revenue', {
+        params: { period, owner, q: q.trim() || undefined },
+      })
+      setResp(res.data)
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Không tải được doanh thu CBS.')
+    } finally {
+      setLoading(false)
+    }
+  }, [canAccess, period, owner, q])
+
+  // Danh sách Sales để non-sales chọn người bán
+  const loadSalesList = useCallback(async () => {
+    if (!canAssignSeller) return
+    try {
+      const res = await apiClient.get<{ success: boolean; data: SalesEmployee[] }>(
+        '/api/employees/sales'
+      )
+      setSalesList(res.data.data || [])
+    } catch {
+      // Không chặn luồng chính nếu không lấy được danh sách
+      setSalesList([])
+    }
+  }, [canAssignSeller])
+
+  useEffect(() => {
+    if (user && !canAccess) router.replace('/dashboard')
+  }, [user, canAccess, router])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  useEffect(() => {
+    loadSalesList()
+  }, [loadSalesList])
+
+  const sellerOptions = useMemo(
+    () =>
+      salesList
+        .filter((s) => s.is_active !== false)
+        .map((s) => ({
+          id: s.employee_id,
+          label: `${s.full_name} (${s.username})`,
+        })),
+    [salesList]
+  )
+
+  const setBusy = (id: string, on: boolean) => {
+    setBusyIds((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
+  // Sales tự tích đơn của mình (pending)
+  const claimSelf = async (id: string) => {
+    setBusy(id, true)
+    try {
+      const r = await apiClient.post<{ success: boolean; message?: string }>(
+        `/api/cbs/revenue/${id}/claim`
+      )
+      toast.success(r.data.message || 'Đã gửi yêu cầu, chờ duyệt.')
+      await load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Không thể tích đơn.')
+    } finally {
+      setBusy(id, false)
+    }
+  }
+
+  // Non-sales gán người bán (tự động duyệt)
+  const assignSeller = async (id: string, sellerId: string) => {
+    setBusy(id, true)
+    try {
+      const r = await apiClient.post<{ success: boolean; message?: string }>(
+        `/api/cbs/revenue/${id}/claim`,
+        { seller_id: sellerId }
+      )
+      toast.success(r.data.message || 'Đã gán người bán.')
+      await load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Không thể gán người bán.')
+    } finally {
+      setBusy(id, false)
+    }
+  }
+
+  // Non-sales duyệt pending claim
+  const approve = async (id: string) => {
+    setBusy(id, true)
+    try {
+      const r = await apiClient.post<{ success: boolean; message?: string }>(
+        `/api/cbs/revenue/${id}/approve`
+      )
+      toast.success(r.data.message || 'Đã duyệt đơn hàng.')
+      await load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Không thể duyệt đơn.')
+    } finally {
+      setBusy(id, false)
+    }
+  }
+
+  const unclaim = async (id: string) => {
+    setBusy(id, true)
+    try {
+      await apiClient.post(`/api/cbs/revenue/${id}/unclaim`)
+      toast.success('Đã gỡ người bán.')
+      await load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Không thể gỡ.')
+    } finally {
+      setBusy(id, false)
+    }
+  }
+
+  const recomputeKpi = async () => {
+    if (!canAssignSeller) return
+    setRecomputing(true)
+    try {
+      const r = await apiClient.post<{ success: boolean; message: string }>(
+        '/api/cbs/revenue/recompute-kpi'
+      )
+      toast.success(r.data.message || 'Đã tính lại KPI.')
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Không thể tính lại KPI.')
+    } finally {
+      setRecomputing(false)
+    }
+  }
+
+  const syncNow = async () => {
+    if (!canSync) return
+    setSyncing(true)
+    try {
+      const r = await apiClient.post<{ success: boolean; message: string }>(
+        '/api/cbs/sync'
+      )
+      toast.success(r.data.message || 'Đồng bộ CBS thành công.')
+      await load()
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Đồng bộ CBS thất bại.')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  if (!user || !canAccess) return null
+
+  const summary = resp?.summary
+  const lastSync = resp?.last_sync
+
+  const ownerTabs: { id: OwnerFilter; label: string }[] = [
+    { id: 'all', label: 'Tất cả' },
+    { id: 'mine', label: 'Của tôi' },
+    { id: 'unclaimed', label: 'Chưa có người bán' },
+    ...(canAssignSeller
+      ? ([{ id: 'pending', label: 'Chờ duyệt' }] as {
+          id: OwnerFilter
+          label: string
+        }[])
+      : []),
+    { id: 'others', label: 'Người khác' },
+  ]
+
+  return (
+    <ProtectedRoute>
+      <div className="min-h-screen bg-gray-50">
+        <Navbar />
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-primary-100 rounded-lg">
+                <Wallet className="w-7 h-7 text-primary-700" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-gray-900">
+                  Doanh thu CBS
+                </h1>
+                <p className="text-sm text-gray-600">
+                  Đồng bộ định kỳ 06:00 và 18:00 (giờ VN). Sales tích đơn của mình
+                  ở trạng thái <strong>chờ duyệt</strong>; quản lý xác nhận người bán.
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-sm font-medium text-gray-700">Kỳ</label>
+              <input
+                type="month"
+                value={period}
+                onChange={(e) => setPeriod(e.target.value)}
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500"
+              />
+              {canSync && (
+                <button
+                  type="button"
+                  onClick={syncNow}
+                  disabled={syncing}
+                  className="inline-flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-primary-700 disabled:opacity-50"
+                >
+                  {syncing ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RefreshCcw className="w-4 h-4" />
+                  )}
+                  Đồng bộ ngay
+                </button>
+              )}
+              {canAssignSeller && (
+                <button
+                  type="button"
+                  onClick={recomputeKpi}
+                  disabled={recomputing}
+                  className="inline-flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
+                  title="Tính lại Thực hiện KPI tháng từ các đơn CBS đã duyệt"
+                >
+                  {recomputing ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Calculator className="w-4 h-4" />
+                  )}
+                  Tính lại KPI
+                </button>
+              )}
+              {canManage && (
+                <button
+                  type="button"
+                  onClick={() => setConfigOpen(true)}
+                  className="inline-flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50"
+                >
+                  <Settings className="w-4 h-4" />
+                  Cấu hình CBS
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Summary cards */}
+          <div
+            className={`grid grid-cols-2 gap-3 mb-4 ${
+              canAssignSeller ? 'md:grid-cols-6' : 'md:grid-cols-5'
+            }`}
+          >
+            <Card label="Tổng đơn" value={summary?.total ?? 0} />
+            <Card
+              label="Tổng doanh thu (VAT)"
+              value={formatVND(summary?.total_vat ?? 0)}
+              strong
+            />
+            <Card
+              label="Đơn của tôi"
+              value={summary?.mine ?? 0}
+              tone="primary"
+            />
+            <Card
+              label="Đã xác nhận"
+              value={summary?.claimed ?? 0}
+              tone="success"
+            />
+            {canAssignSeller && (
+              <Card
+                label="Chờ duyệt"
+                value={summary?.pending ?? 0}
+                tone="warn"
+              />
+            )}
+            <Card
+              label="Chưa có người bán"
+              value={summary?.unclaimed ?? 0}
+              tone="warn"
+            />
+          </div>
+
+          {lastSync?.last_synced_at && (
+            <div className="text-xs text-gray-500 mb-3">
+              Đồng bộ gần nhất:{' '}
+              <strong className="text-gray-700">
+                {formatDateVN(lastSync.last_synced_at)}
+              </strong>{' '}
+              —{' '}
+              <span
+                className={
+                  lastSync.last_sync_status === 'error'
+                    ? 'text-red-600'
+                    : 'text-green-700'
+                }
+              >
+                {lastSync.last_sync_status === 'error' ? 'Lỗi' : 'OK'}
+              </span>
+              {lastSync.last_sync_message && (
+                <span className="ml-2 text-gray-500">
+                  — {lastSync.last_sync_message}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Filters */}
+          <div className="bg-white rounded-xl shadow border border-gray-200 p-3 mb-3 flex flex-col sm:flex-row gap-3 sm:items-center">
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 flex-wrap">
+              {ownerTabs.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setOwner(t.id)}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
+                    owner === t.id
+                      ? 'bg-white shadow text-primary-700'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="search"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Tìm theo khách hàng, hợp đồng, sản phẩm, mã thuê bao, nhân viên CBS..."
+                className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-primary-500"
+              />
+            </div>
+          </div>
+
+          {/* Table */}
+          <div className="bg-white rounded-xl shadow border border-gray-200 overflow-hidden">
+            {loading ? (
+              <div className="flex justify-center py-16">
+                <Loader2 className="w-10 h-10 animate-spin text-primary-600" />
+              </div>
+            ) : !resp || resp.data.length === 0 ? (
+              <div className="py-16 px-6 text-center text-gray-500">
+                <p className="mb-2">Chưa có dữ liệu CBS cho kỳ này.</p>
+                {canSync && (
+                  <p className="text-xs">
+                    Thử bấm <strong>Đồng bộ ngay</strong> để lấy dữ liệu mới
+                    nhất từ CBS.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div
+                className="overflow-auto"
+                style={{ maxHeight: 'calc(100vh - 340px)', minHeight: '360px' }}
+              >
+                <table className="min-w-[1200px] w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
+                    <tr className="text-xs font-semibold text-gray-600 uppercase">
+                      <th className="px-3 py-3 text-left whitespace-nowrap">Ngày thu</th>
+                      <th className="px-3 py-3 text-left">Khách hàng</th>
+                      <th className="px-3 py-3 text-left">Sản phẩm</th>
+                      <th className="px-3 py-3 text-left">Hợp đồng</th>
+                      <th className="px-3 py-3 text-left">NV CBS</th>
+                      <th className="px-3 py-3 text-right whitespace-nowrap">Giá (VAT)</th>
+                      <th className="px-3 py-3 text-center whitespace-nowrap min-w-[14rem]">
+                        Người bán
+                      </th>
+                      <th className="px-3 py-3 text-center whitespace-nowrap">Xem</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {resp.data.map((o) => {
+                      const busy = busyIds.has(o.id)
+                      return (
+                        <tr
+                          key={o.id}
+                          className="hover:bg-gray-50/80 cursor-pointer"
+                          onClick={() => setDetailOrder(o)}
+                        >
+                          <td className="px-3 py-2 text-xs text-gray-700 whitespace-nowrap">
+                            {formatDateVN(o.payment_date || o.active_date)}
+                          </td>
+                          <td className="px-3 py-2 text-sm">
+                            <div
+                              className="font-medium text-gray-900 truncate max-w-[18rem]"
+                              title={o.customer_name || ''}
+                            >
+                              {o.customer_name || '—'}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {o.customer_type || ''}
+                              {o.external_id1 ? ` · ${o.external_id1}` : ''}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-sm">
+                            <div
+                              className="text-gray-900 truncate max-w-[16rem]"
+                              title={o.product_name || ''}
+                            >
+                              {o.product_name || '—'}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {o.product_code || ''}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-xs text-gray-600">
+                            <div
+                              className="truncate max-w-[14rem]"
+                              title={o.contract_no || ''}
+                            >
+                              {o.contract_no || '—'}
+                            </div>
+                            <div className="text-gray-400">
+                              {o.contract_type || ''}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-xs text-gray-600">
+                            <div
+                              className="truncate max-w-[14rem]"
+                              title={o.cbs_staff || ''}
+                            >
+                              {o.cbs_staff || '—'}
+                            </div>
+                            <div
+                              className="text-gray-400 truncate max-w-[14rem]"
+                              title={o.partner || ''}
+                            >
+                              {o.partner || ''}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-sm text-right tabular-nums font-medium text-gray-900 whitespace-nowrap">
+                            {formatVND(o.price_vat)}
+                          </td>
+                          <td
+                            className="px-3 py-2"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <SellerCell
+                              order={o}
+                              busy={busy}
+                              myId={user.id}
+                              canAssignSeller={canAssignSeller}
+                              sellerOptions={sellerOptions}
+                              onClaimSelf={() => claimSelf(o.id)}
+                              onAssign={(sid) => assignSeller(o.id, sid)}
+                              onApprove={() => approve(o.id)}
+                              onUnclaim={() => unclaim(o.id)}
+                            />
+                          </td>
+                          <td
+                            className="px-3 py-2 text-center"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setDetailOrder(o)}
+                              className="inline-flex items-center gap-1 text-xs text-primary-700 border border-primary-200 bg-primary-50 hover:bg-primary-100 px-2.5 py-1 rounded-full"
+                              title="Xem chi tiết đơn"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              Chi tiết
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <p className="mt-4 text-xs text-gray-500">
+            Sales tự tích đơn thì đơn ở trạng thái <strong>chờ duyệt</strong>.
+            Admin / Giám đốc / Quản lý / Leader có thể gán trực tiếp người bán
+            hoặc duyệt các đơn đang chờ. Dữ liệu được đồng bộ định kỳ bằng tài
+            khoản CBS của công ty (Admin đặt tại <strong>Cấu hình CBS</strong>).
+          </p>
+        </div>
+
+        {canManage && (
+          <CbsConfigModal
+            open={configOpen}
+            onClose={() => setConfigOpen(false)}
+            onSaved={() => {
+              setConfigOpen(false)
+              load()
+            }}
+          />
+        )}
+
+        <CbsOrderDetailModal
+          open={!!detailOrder}
+          order={detailOrder}
+          onClose={() => setDetailOrder(null)}
+        />
+      </div>
+    </ProtectedRoute>
+  )
+}
+
+// ------ Seller cell: dropdown cho non-sales; chip + nút cho sales ------
+
+function SellerCell({
+  order,
+  busy,
+  myId,
+  canAssignSeller,
+  sellerOptions,
+  onClaimSelf,
+  onAssign,
+  onApprove,
+  onUnclaim,
+}: {
+  order: CbsOrder
+  busy: boolean
+  myId: string
+  canAssignSeller: boolean
+  sellerOptions: { id: string; label: string }[]
+  onClaimSelf: () => void
+  onAssign: (sellerId: string) => void
+  onApprove: () => void
+  onUnclaim: () => void
+}) {
+  const mine = order.claimed_by && order.claimed_by === myId
+  const isPending = order.claim_status === 'pending'
+  const isApproved = order.claim_status === 'approved'
+
+  if (canAssignSeller) {
+    // Nếu người bán hiện tại là Sales thuộc danh sách option → đã có trong dropdown.
+    // Nếu không (ví dụ admin khác / nhân viên cũ), thêm option tạm thời.
+    const currentId = order.claimed_by || ''
+    const currentInList = currentId
+      ? sellerOptions.some((o) => o.id === currentId)
+      : true
+    const extendedOptions =
+      currentInList || !currentId
+        ? sellerOptions
+        : [
+            ...sellerOptions,
+            {
+              id: currentId,
+              label: `${order.claimed_by_name || currentId} (ngoài DS Sales)`,
+            },
+          ]
+
+    return (
+      <div className="flex flex-col items-stretch gap-1 min-w-[12rem]">
+        <select
+          disabled={busy}
+          value={currentId}
+          onChange={(e) => {
+            const v = e.target.value
+            if (v === currentId) return
+            if (!v) {
+              onUnclaim()
+            } else {
+              onAssign(v)
+            }
+          }}
+          className={`w-full text-xs rounded-md border px-2 py-1.5 bg-white disabled:opacity-60 ${
+            isPending
+              ? 'border-amber-300 ring-1 ring-amber-200'
+              : 'border-gray-300'
+          }`}
+          title={
+            isPending
+              ? 'Đơn đang chờ duyệt — đổi người bán sẽ tự động duyệt.'
+              : 'Chọn người bán cho đơn này'
+          }
+        >
+          <option value="">— Chưa có người bán —</option>
+          {extendedOptions.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <div className="flex items-center justify-between gap-2 text-[11px]">
+          <span
+            className={`inline-flex items-center gap-1 ${
+              isPending
+                ? 'text-amber-700'
+                : isApproved
+                ? 'text-green-700'
+                : 'text-gray-400'
+            }`}
+          >
+            {isPending ? (
+              <>
+                <Clock className="w-3 h-3" />
+                Chờ duyệt
+              </>
+            ) : isApproved ? (
+              <>
+                <ShieldCheck className="w-3 h-3" />
+                Đã duyệt
+              </>
+            ) : (
+              'Chưa xác nhận'
+            )}
+          </span>
+          <div className="flex items-center gap-2">
+            {isPending && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onApprove}
+                className="text-[11px] font-semibold text-green-700 hover:underline disabled:opacity-50 inline-flex items-center gap-0.5"
+                title="Duyệt yêu cầu của Sales"
+              >
+                <CheckCircle2 className="w-3 h-3" />
+                Duyệt
+              </button>
+            )}
+            {order.claimed_by && (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onUnclaim}
+                className="text-[11px] text-red-600 hover:underline disabled:opacity-50 inline-flex items-center gap-0.5"
+                title="Gỡ người bán"
+              >
+                <XCircle className="w-3 h-3" />
+                Gỡ
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ------ Sales ------
+  if (!order.claimed_by) {
+    return (
+      <div className="flex justify-center">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onClaimSelf}
+          className="inline-flex items-center gap-1 text-xs font-semibold text-gray-700 border border-gray-300 bg-white px-2.5 py-1 rounded-full hover:bg-primary-50 hover:text-primary-700 hover:border-primary-300 disabled:opacity-50"
+        >
+          {busy ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <Circle className="w-3.5 h-3.5" />
+          )}
+          Tích là của tôi
+        </button>
+      </div>
+    )
+  }
+
+  if (mine) {
+    return (
+      <div className="flex flex-col items-center gap-1">
+        {isPending ? (
+          <>
+            <span className="inline-flex items-center gap-1 text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 px-2.5 py-1 rounded-full">
+              <Clock className="w-3.5 h-3.5" />
+              Chờ duyệt
+            </span>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onUnclaim}
+              className="text-[11px] text-red-600 hover:underline disabled:opacity-50 inline-flex items-center gap-0.5"
+              title="Huỷ yêu cầu của mình"
+            >
+              <XCircle className="w-3 h-3" />
+              Huỷ
+            </button>
+          </>
+        ) : (
+          <span
+            className="inline-flex items-center gap-1 text-xs font-semibold bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded-full"
+            title="Đã được quản lý duyệt"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Của tôi — đã duyệt
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  // Người khác đang claim
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <span
+        className="inline-flex items-center gap-1 text-xs font-medium text-gray-700 bg-gray-100 px-2 py-1 rounded-full max-w-[12rem] truncate"
+        title={`${order.claimed_by_name || order.claimed_by}${
+          order.claimed_by_territory ? ' · ' + order.claimed_by_territory : ''
+        }`}
+      >
+        {order.claimed_by_name || order.claimed_by}
+      </span>
+      {isPending && (
+        <span className="text-[10px] text-amber-700 inline-flex items-center gap-0.5">
+          <Clock className="w-3 h-3" />
+          đang chờ duyệt
+        </span>
+      )}
+    </div>
+  )
+}
+
+function Card({
+  label,
+  value,
+  tone,
+  strong,
+}: {
+  label: string
+  value: number | string
+  tone?: 'primary' | 'success' | 'warn'
+  strong?: boolean
+}) {
+  const toneClass =
+    tone === 'primary'
+      ? 'text-primary-700'
+      : tone === 'success'
+      ? 'text-green-700'
+      : tone === 'warn'
+      ? 'text-amber-700'
+      : 'text-gray-900'
+  return (
+    <div className="bg-white rounded-xl shadow border border-gray-200 p-3">
+      <div className="text-[11px] uppercase tracking-wider text-gray-500">
+        {label}
+      </div>
+      <div
+        className={`mt-1 ${
+          strong ? 'text-lg md:text-xl' : 'text-xl'
+        } font-bold tabular-nums ${toneClass}`}
+      >
+        {value}
+      </div>
+    </div>
+  )
+}

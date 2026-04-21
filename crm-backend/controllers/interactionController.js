@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import pool from '../database.js'
 import { getTenantId } from '../utils/tenantHelper.js'
+import { syncKpiForInteraction } from '../services/kpiFromDealsSyncService.js'
 
 /**
  * @swagger
@@ -99,6 +100,13 @@ export const createInteraction = async (req, res) => {
     ]
 
     const result = await pool.query(query, values)
+
+    // Fire-and-forget: cập nhật actual_approach_count cho kỳ tương ứng.
+    syncKpiForInteraction(tenantId, employeeId, finalInteractionDate).catch((e) => {
+      if (e?.code !== '42P01' && e?.code !== '42703') {
+        console.error('syncKpiForInteraction (createInteraction):', e)
+      }
+    })
 
     res.status(201).json({
       success: true,

@@ -22,6 +22,7 @@ interface Employee {
   department_id?: string
   title?: string
   rank?: string
+  territory?: string | null
 }
 
 interface EditEmployeeFormProps {
@@ -48,7 +49,8 @@ export function EditEmployeeForm({ employee, onSuccess, onCancel }: EditEmployee
     is_active: employee.is_active,
     department_id: (employee.department_id || '') as string,
     title: employee.title || '',
-    rank: employee.rank || ''
+    rank: employee.rank || '',
+    territory: employee.territory || ''
   })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -73,7 +75,8 @@ export function EditEmployeeForm({ employee, onSuccess, onCancel }: EditEmployee
       is_active: employee.is_active,
       department_id: employee.department_id || '',
       title: employee.title || '',
-      rank: employee.rank || ''
+      rank: employee.rank || '',
+      territory: employee.territory || ''
     })
   }, [employee])
 
@@ -103,7 +106,8 @@ export function EditEmployeeForm({ employee, onSuccess, onCancel }: EditEmployee
         is_active: formData.is_active,
         department_id: formData.department_id || undefined,
         title: formData.title || undefined,
-        rank: formData.rank || undefined
+        rank: formData.rank || undefined,
+        territory: formData.territory.trim()
       }
       const response = await apiClient.put(`/api/employees/${employee.employee_id}`, payload)
       
@@ -244,6 +248,22 @@ export function EditEmployeeForm({ employee, onSuccess, onCancel }: EditEmployee
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
             placeholder="VD: 1, 2, 3"
           />
+        </div>
+
+        <div className="md:col-span-2">
+          <label htmlFor="territory" className="block text-sm font-medium text-gray-700 mb-2">
+            Địa bàn
+          </label>
+          <input
+            id="territory"
+            name="territory"
+            type="text"
+            value={formData.territory}
+            onChange={handleChange}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
+            placeholder="VD: Miền Bắc — Hà Nội…"
+          />
+          <p className="text-xs text-gray-500 mt-1">Địa bàn / khu vực phụ trách (tùy chọn).</p>
         </div>
 
         <div>

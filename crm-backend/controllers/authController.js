@@ -4,17 +4,29 @@ import { v4 as uuidv4 } from 'uuid';
 import pool from '../database.js';
 import { getTenantId } from '../utils/tenantHelper.js';
 import { getAssignableEmployees } from '../services/assignableEmployeesService.js';
+import { SQL_EMPLOYEE_USERNAME_EQUALS } from '../utils/usernameSql.js';
+import {
+  hasRole,
+  isTenantAdminRole,
+  EMPLOYEE_CREATOR_ROLES,
+  EMPLOYEE_TARGET_ROLES_FOR_EXECUTIVE,
+  EMPLOYEE_TARGET_ROLES_FOR_TENANT_ADMIN,
+} from '../config/rbac.js';
+
+const VALID_ROLES_FOR_UPDATE = ['super_admin', 'admin', 'director', 'manager', 'leader', 'sales'];
 
 /**
- * Đăng ký nhân viên mới (Chỉ Admin mới có quyền)
+ * Đăng ký nhân viên mới (Admin / Super Admin / Giám đốc / Quản lý — giới hạn vai trò theo rbac).
  */
-const VALID_ROLES = ['super_admin', 'admin', 'director', 'manager', 'leader', 'sales'];
-
 export const register = async (req, res) => {
-  const { username, password, full_name, email, role, department_id, title, rank } = req.body;
+  const { username, password, full_name, email, role, department_id, title, rank, territory } = req.body;
 
   try {
     const tenantId = getTenantId(req);
+    const usernameTrim = username != null ? String(username).trim() : '';
+    if (!usernameTrim) {
+      return res.status(400).json({ success: false, message: 'Tên đăng nhập không được để trống.' });
+    }
 
     const tenantRow = await pool.query(
       'SELECT max_users FROM tenants WHERE id = $1 AND is_active = TRUE',
@@ -36,16 +48,29 @@ export const register = async (req, res) => {
     }
 
     const checkUser = await pool.query(
-      'SELECT username FROM employees WHERE username = $1 AND tenant_id = $2',
-      [username, tenantId]
+      `SELECT username FROM employees WHERE ${SQL_EMPLOYEE_USERNAME_EQUALS} AND tenant_id = $2`,
+      [usernameTrim, tenantId]
     );
     if (checkUser.rows.length > 0) {
       return res.status(400).json({ success: false, message: 'Tên đăng nhập đã tồn tại trong tenant này.' });
     }
 
-    const finalRole = role || 'sales';
-    if (!VALID_ROLES.includes(finalRole)) {
-      return res.status(400).json({ success: false, message: 'Vai trò không hợp lệ.' });
+    if (!hasRole(req.user?.role, EMPLOYEE_CREATOR_ROLES)) {
+      return res.status(403).json({ success: false, message: 'Không có quyền tạo nhân viên.' });
+    }
+
+    const finalRole = String(role || 'sales')
+      .toLowerCase()
+      .trim();
+    if (isTenantAdminRole(req.user?.role)) {
+      if (!EMPLOYEE_TARGET_ROLES_FOR_TENANT_ADMIN.includes(finalRole)) {
+        return res.status(400).json({ success: false, message: 'Vai trò không hợp lệ.' });
+      }
+    } else if (!EMPLOYEE_TARGET_ROLES_FOR_EXECUTIVE.includes(finalRole)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Bạn chỉ được tạo nhân viên với vai trò Tổ trưởng hoặc Nhân viên bán hàng.',
+      });
     }
 
     // 2. Kiểm tra department_id nếu có (phải thuộc cùng tenant)
@@ -68,14 +93,15 @@ export const register = async (req, res) => {
     const created_at = Date.now();
 
     // 5. Lưu vào Database (gán tenant_id để Data Isolation)
+    const territoryTrim = territory != null && String(territory).trim() !== '' ? String(territory).trim() : null;
     const query = `
-      INSERT INTO employees (employee_id, username, password_hash, full_name, email, role, department_id, title, rank, tenant_id, is_active, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-      RETURNING employee_id, username, full_name, email, role, department_id, title, rank;
+      INSERT INTO employees (employee_id, username, password_hash, full_name, email, role, department_id, title, rank, territory, tenant_id, is_active, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      RETURNING employee_id, username, full_name, email, role, department_id, title, rank, territory;
     `;
     const values = [
-      employee_id, username, password_hash, full_name, email, finalRole,
-      department_id || null, title || null, rank || null, tenantId, true, created_at
+      employee_id, usernameTrim, password_hash, full_name, email, finalRole,
+      department_id || null, title || null, rank || null, territoryTrim, tenantId, true, created_at
     ];
 
     const result = await pool.query(query, values);
@@ -108,8 +134,16 @@ export const register = async (req, res) => {
  */
 export const login = async (req, res) => {
   const { username, password, domain: bodyDomain } = req.body;
+  const usernameTrim = username != null ? String(username).trim() : '';
 
   try {
+    if (!usernameTrim || password === undefined || password === null || String(password) === '') {
+      return res.status(400).json({
+        success: false,
+        message: 'Vui lòng nhập đủ tên đăng nhập và mật khẩu.',
+      });
+    }
+
     let domainRaw = (bodyDomain && String(bodyDomain).trim()) || '';
     if (!domainRaw && req.headers.host) {
       const host = String(req.headers.host).split(':')[0];
@@ -123,9 +157,9 @@ export const login = async (req, res) => {
     /** Super Admin cấp hệ thống: tenant_id NULL (đăng nhập không gắn công ty cụ thể). */
     const selectSuperAdminSystem = () =>
       pool.query(
-        `SELECT * FROM employees WHERE username = $1 AND is_active = TRUE
+        `SELECT * FROM employees WHERE ${SQL_EMPLOYEE_USERNAME_EQUALS} AND is_active = TRUE
          AND LOWER(TRIM(role)) = 'super_admin' AND tenant_id IS NULL`,
-        [username]
+        [usernameTrim]
       );
 
     let result;
@@ -145,8 +179,8 @@ export const login = async (req, res) => {
       } else {
         const tenantId = tenantRow.rows[0].id;
         result = await pool.query(
-          'SELECT * FROM employees WHERE username = $1 AND tenant_id = $2 AND is_active = TRUE',
-          [username, tenantId]
+          `SELECT * FROM employees WHERE ${SQL_EMPLOYEE_USERNAME_EQUALS} AND tenant_id = $2 AND is_active = TRUE`,
+          [usernameTrim, tenantId]
         );
         if (result.rows.length === 0) {
           const sa = await selectSuperAdminSystem();
@@ -160,8 +194,8 @@ export const login = async (req, res) => {
       // - Chỉ cho phép đăng nhập không domain nếu username thuộc role super_admin (cấp hệ thống).
       // - Các role khác bắt buộc có domain để xác định tenant.
       result = await pool.query(
-        'SELECT * FROM employees WHERE username = $1 AND is_active = TRUE',
-        [username]
+        `SELECT * FROM employees WHERE ${SQL_EMPLOYEE_USERNAME_EQUALS} AND is_active = TRUE`,
+        [usernameTrim]
       );
       if (result.rows.length === 0) {
         return res.status(401).json({ success: false, message: 'Tài khoản không tồn tại hoặc bị khóa.' });
@@ -240,6 +274,7 @@ export const getEmployees = async (req, res) => {
         e.department_id,
         e.title,
         e.rank,
+        e.territory,
         e.is_active,
         e.created_at,
         d.name as department_name,
@@ -331,6 +366,7 @@ export const getEmployeeById = async (req, res) => {
         e.department_id,
         e.title,
         e.rank,
+        e.territory,
         e.is_active,
         e.created_at,
         d.name as department_name,
@@ -547,7 +583,7 @@ export const changePassword = async (req, res) => {
  */
 export const updateEmployee = async (req, res) => {
   const { id } = req.params;
-  const { full_name, email, role, is_active, department_id, title, rank } = req.body;
+  const { full_name, email, role, is_active, department_id, title, rank, territory } = req.body;
   const tenantId = getTenantId(req);
 
   try {
@@ -569,7 +605,7 @@ export const updateEmployee = async (req, res) => {
       });
     }
 
-    if (role && !VALID_ROLES.includes(role)) {
+    if (role && !VALID_ROLES_FOR_UPDATE.includes(role)) {
       return res.status(400).json({
         success: false,
         message: 'Vai trò không hợp lệ. (super_admin, admin, director, manager, leader, sales)'
@@ -612,12 +648,17 @@ export const updateEmployee = async (req, res) => {
       updates.push(`rank = $${idx++}`);
       values.push(rank || null);
     }
+    if (territory !== undefined) {
+      updates.push(`territory = $${idx++}`);
+      const t = territory != null && String(territory).trim() !== '' ? String(territory).trim() : null;
+      values.push(t);
+    }
     values.push(id, tenantId);
     const updateQuery = `
       UPDATE employees 
       SET ${updates.join(', ')}
       WHERE employee_id = $${idx++} AND tenant_id = $${idx}
-      RETURNING employee_id, username, full_name, email, role, department_id, title, rank, is_active, created_at;
+      RETURNING employee_id, username, full_name, email, role, department_id, title, rank, territory, is_active, created_at;
     `;
     const result = await pool.query(updateQuery, values);
 

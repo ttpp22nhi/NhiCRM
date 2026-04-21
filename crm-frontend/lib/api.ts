@@ -51,35 +51,50 @@ apiClient.interceptors.request.use((config) => {
   return config
 })
 
+/** Khớp middleware verifyToken khi jwt.verify thất bại (hết hạn / sai ký). */
+const JWT_INVALID_MESSAGE = 'Mã xác thực không hợp lệ hoặc đã hết hạn.'
+
 // Interceptor xử lý auth:
-// - 401: token hết hạn/không hợp lệ -> đăng xuất về login
-// - 403: không đủ quyền -> không tự logout (tránh đá văng sai ngữ cảnh)
+// - 401: thiếu token / từ chối -> về login (trừ POST /api/auth/login)
+// - 403: backend dùng cho JWT hết hạn trong verifyToken — cũng về login; 403 khác (quyền, tenant…) không logout
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401 || error.response?.status === 403) {
+    const status = error.response?.status
+    const reqUrl = String(error.config?.url || '')
+    const isLoginApiCall = reqUrl.includes('/api/auth/login')
+
+    if (isLoginApiCall) {
+      return Promise.reject(error)
+    }
+
+    if (status === 401 || status === 403) {
       if (typeof window !== 'undefined') {
         const isLoginPage = window.location.pathname === '/login'
         const message = error.response?.data?.message || ''
+        const isJwtExpiredOrInvalid =
+          status === 403 && (message === JWT_INVALID_MESSAGE || message.includes('Mã xác thực không hợp lệ'))
+
         const isRequireTenant = /Yêu cầu đăng nhập trong phạm vi một công ty|tenant/i.test(message)
-        const status = error.response?.status
         const storedUser = localStorage.getItem('user')
         let userRole: string | null = null
         try {
           if (storedUser) userRole = JSON.parse(storedUser)?.role ?? null
         } catch (_) {}
         const isSuperAdminNoTenant = userRole === 'super_admin' && isRequireTenant
-        const isAlreadyOnTenantsPage = typeof window !== 'undefined' && window.location.pathname.startsWith('/system/tenants')
+        const isAlreadyOnTenantsPage = window.location.pathname.startsWith('/system/tenants')
 
         if (!isLoginPage) {
-          if (isSuperAdminNoTenant && !isAlreadyOnTenantsPage) {
-            // Super Admin không có tenant: chuyển sang trang Hệ thống, không xóa token
-            // Tránh redirect nếu đang ở /system/tenants để không gây vòng lặp reload (vd. NotificationBell gọi API cần tenant)
-            window.location.href = '/system/tenants'
-          } else if (!isSuperAdminNoTenant && status === 401) {
+          if (isJwtExpiredOrInvalid || status === 401) {
             localStorage.removeItem('token')
             localStorage.removeItem('user')
+            delete apiClient.defaults.headers.common['Authorization']
             window.location.href = '/login'
+            return Promise.reject(error)
+          }
+
+          if (isSuperAdminNoTenant && !isAlreadyOnTenantsPage) {
+            window.location.href = '/system/tenants'
           }
         }
       }

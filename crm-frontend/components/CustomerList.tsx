@@ -14,6 +14,7 @@ import { TransferRequestModal } from './TransferRequestModal'
 import { AlertModal } from './AlertModal'
 import { DealModal } from './DealModal'
 import toast from 'react-hot-toast'
+import { inferKpiCustomerKind, labelKpiCustomerKind } from '@/lib/kpiCustomerKind'
 
 interface Customer {
   customer_id: string
@@ -22,6 +23,7 @@ interface Customer {
   phone: string
   address: string
   customer_type: string
+  kpi_customer_kind?: string | null
   company_name: string
   tax_code: string
   source: string
@@ -395,6 +397,7 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
       'Số điện thoại': customer.phone,
       'Địa chỉ': customer.address || '',
       'Loại khách hàng': getCustomerTypeLabel(customer.customer_type),
+      'Phân loại KPI': labelKpiCustomerKind(inferKpiCustomerKind(customer)),
       'Tên công ty/Đơn vị': customer.company_name || '',
       'Mã số thuế': customer.tax_code || '',
       'Nguồn': customer.source || '',
@@ -420,6 +423,7 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
       { wch: 15 }, // Số điện thoại
       { wch: 40 }, // Địa chỉ
       { wch: 20 }, // Loại khách hàng
+      { wch: 18 }, // Phân loại KPI
       { wch: 30 }, // Tên công ty
       { wch: 15 }, // Mã số thuế
       { wch: 15 }, // Nguồn
@@ -837,6 +841,9 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
                   <div className="space-y-1">
                     <span className="px-1.5 py-0.5 inline-flex text-xs leading-4 font-semibold rounded bg-blue-100 text-blue-800">
                       {getCustomerTypeLabel(customer.customer_type)}
+                    </span>
+                    <span className="ml-0 block sm:inline sm:ml-1 px-1.5 py-0.5 text-xs font-medium rounded bg-emerald-50 text-emerald-800">
+                      {labelKpiCustomerKind(inferKpiCustomerKind(customer))}
                     </span>
                     <div className="text-xs text-gray-500">{customer.source}</div>
                   </div>

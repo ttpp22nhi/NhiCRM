@@ -3,7 +3,12 @@ import { getTenantId } from '../utils/tenantHelper.js'
 import * as analytics from '../services/analyticsService.js'
 import * as reports from '../services/reportService.js'
 import { getAccessScope } from '../services/permissionService.js'
-import { buildDateRangeCacheKey, buildScopeCacheKey, getOrSetJson } from '../services/cacheService.js'
+import {
+  buildDashboardKpiCacheKey,
+  buildDateRangeCacheKey,
+  buildScopeCacheKey,
+  getOrSetJson
+} from '../services/cacheService.js'
 
 function forbid(res, message) {
   return res.status(403).json({ success: false, message: message || 'Bạn không có quyền thực hiện thao tác này.' })
@@ -343,6 +348,7 @@ export const getDashboardStats = async (req, res) => {
  * - Manager/Leader/Director: data theo scope (current_node / sub_tree). Có thể chọn thêm đơn vị nếu admin.
  * - Admin/Super_admin: toàn tenant; có thể lọc theo scopePath (đơn vị).
  * Query: period, scopePath (chỉ admin/super_admin), month, year.
+ * Cache: phần KPI (kpiProgress) cache riêng theo tenant + khoảng ngày — không gắn scopePath để khớp logic tổng Sales toàn tenant.
  */
 export const getDashboardAnalytics = async (req, res) => {
   const tenantId = getTenantId(req)
@@ -355,7 +361,8 @@ export const getDashboardAnalytics = async (req, res) => {
   const { scopeOptions, canUseScopePath, queryScopePath } = await resolveDashboardScopeOptions(tenantId, userId, role, scopePath)
 
   try {
-    const cacheKey = [
+    const kpiCacheKey = buildDashboardKpiCacheKey(tenantId, dateRange)
+    const analyticsCacheKey = [
       'dashboard:analytics',
       `tenant=${tenantId}`,
       buildScopeCacheKey(scopeOptions),
@@ -363,58 +370,64 @@ export const getDashboardAnalytics = async (req, res) => {
       `dealCategory=${businessType || 'all'}`
     ].join('|')
 
-    const { value } = await getOrSetJson(cacheKey, 60, async () => {
-      const baseCalls = [
-        analytics.getRevenueStats(tenantId, scopeOptions, dateRange),
-        analytics.getWinRate(tenantId, scopeOptions, dateRange),
-        analytics.getKpiProgress(tenantId, scopeOptions, dateRange).catch(() => ({ targetValue: 0, actualRevenue: 0, progressPercent: 0 })),
-        analytics.getFunnelData(tenantId, scopeOptions, dateRange),
-        analytics.getMonthlyTrend(tenantId, scopeOptions, dateRange),
-        analytics.getTopSales(tenantId, scopeOptions, 5, dateRange),
-        analytics.getActiveDealsCount(tenantId, scopeOptions, dateRange),
-        analytics.getDealsNeedingAttention(tenantId, scopeOptions, 10, dateRange),
-        analytics.getPipelineHealthByConfidence(tenantId, scopeOptions, dateRange)
-      ]
-      const massProjectCalls = [
-        analytics.getMassDealCountTrend(tenantId, scopeOptions, dateRange),
-        analytics.getMassGrowthRate(tenantId, scopeOptions, dateRange),
-        analytics.getProjectWeightValue(tenantId, scopeOptions, dateRange),
-        analytics.getTopOpportunities(tenantId, scopeOptions, 10, dateRange)
-      ]
-      const [
-        revenueStats,
-        winRateData,
-        kpiProgress,
-        funnelData,
-        monthlyTrend,
-        topSales,
-        activeDealsCount,
-        dealsNeedingAttention,
-        pipelineHealth,
-        massDealCountTrend,
-        massGrowthRate,
-        projectWeightValue,
-        topOpportunities
-      ] = await Promise.all([...baseCalls, ...massProjectCalls])
+    const [kpiRes, bundleRes] = await Promise.all([
+      getOrSetJson(kpiCacheKey, 60, async () =>
+        analytics.getKpiProgress(tenantId, null, dateRange).catch(() => ({
+          targetValue: 0,
+          actualRevenue: 0,
+          progressPercent: 0
+        }))
+      ),
+      getOrSetJson(analyticsCacheKey, 60, async () => {
+        const baseCalls = [
+          analytics.getRevenueStats(tenantId, scopeOptions, dateRange),
+          analytics.getWinRate(tenantId, scopeOptions, dateRange),
+          analytics.getFunnelData(tenantId, scopeOptions, dateRange),
+          analytics.getMonthlyTrend(tenantId, scopeOptions, dateRange),
+          analytics.getTopSales(tenantId, scopeOptions, 5, dateRange),
+          analytics.getActiveDealsCount(tenantId, scopeOptions, dateRange),
+          analytics.getDealsNeedingAttention(tenantId, scopeOptions, 10, dateRange),
+          analytics.getPipelineHealthByConfidence(tenantId, scopeOptions, dateRange)
+        ]
+        const massProjectCalls = [
+          analytics.getMassDealCountTrend(tenantId, scopeOptions, dateRange),
+          analytics.getMassGrowthRate(tenantId, scopeOptions, dateRange),
+          analytics.getProjectWeightValue(tenantId, scopeOptions, dateRange),
+          analytics.getTopOpportunities(tenantId, scopeOptions, 10, dateRange)
+        ]
+        const [
+          revenueStats,
+          winRateData,
+          funnelData,
+          monthlyTrend,
+          topSales,
+          activeDealsCount,
+          dealsNeedingAttention,
+          pipelineHealth,
+          massDealCountTrend,
+          massGrowthRate,
+          projectWeightValue,
+          topOpportunities
+        ] = await Promise.all([...baseCalls, ...massProjectCalls])
 
-      return {
-        revenue: revenueStats,
-        winRate: winRateData,
-        kpiProgress,
-        funnel: funnelData,
-        monthlyTrend,
-        topSales,
-        activeDealsCount,
-        staleDeals: dealsNeedingAttention,
-        pipelineHealth,
-        scopeLabel: getScopeLabel(scopeOptions, queryScopePath, canUseScopePath, role),
-        dateRange,
-        massStats: { dealCountTrend: massDealCountTrend, growthRate: massGrowthRate },
-        projectStats: { totalWeightValue: projectWeightValue, topOpportunities }
-      }
-    })
+        return {
+          revenue: revenueStats,
+          winRate: winRateData,
+          funnel: funnelData,
+          monthlyTrend,
+          topSales,
+          activeDealsCount,
+          staleDeals: dealsNeedingAttention,
+          pipelineHealth,
+          scopeLabel: getScopeLabel(scopeOptions, queryScopePath, canUseScopePath, role),
+          dateRange,
+          massStats: { dealCountTrend: massDealCountTrend, growthRate: massGrowthRate },
+          projectStats: { totalWeightValue: projectWeightValue, topOpportunities }
+        }
+      })
+    ])
 
-    res.json({ success: true, data: value })
+    res.json({ success: true, data: { ...bundleRes.value, kpiProgress: kpiRes.value } })
   } catch (error) {
     console.error('Lỗi getDashboardAnalytics:', error)
     res.status(500).json({

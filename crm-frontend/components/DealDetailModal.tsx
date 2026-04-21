@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
-import { X, Edit2, DollarSign, User, Calendar, Package, FileText, StickyNote, Briefcase, CheckSquare, ChevronDown } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { X, Edit2, DollarSign, User, Calendar, Package, FileText, StickyNote, Briefcase, CheckSquare, ChevronDown, Receipt } from 'lucide-react'
 import type { Deal } from './KanbanBoard'
 import { DealTimeline } from './DealTimeline'
+import { apiClient } from '@/lib/api'
 
 const STAGE_LABELS: Record<string, string> = {
   tiep_can: 'Tiếp cận',
@@ -41,9 +42,55 @@ interface DealDetailModalProps {
   canApprove?: boolean
 }
 
+interface LinkedCbsOrder {
+  id: string
+  period_ym: string | null
+  contract_no: string | null
+  product_name: string | null
+  customer_name: string | null
+  price_not_vat_round: string | number | null
+  price_not_vat: string | number | null
+  price_vat: string | number | null
+  payment_date: string | number | null
+  claim_status: string | null
+  claimed_by_name: string | null
+  approved_by_name: string | null
+  approved_at: string | number | null
+  kpi_kind_at_approve: string | null
+}
+
 export function DealDetailModal({ deal, onClose, onEdit, onApprove, canApprove }: DealDetailModalProps) {
   const showApprove = deal.status === 'pending_approval' && canApprove && onApprove
   const [showSuccessDetails, setShowSuccessDetails] = useState(false)
+  const [cbsOrders, setCbsOrders] = useState<LinkedCbsOrder[]>([])
+  const [loadingCbs, setLoadingCbs] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoadingCbs(true)
+    apiClient
+      .get(`/api/deals/${deal.deal_id}/cbs-orders`)
+      .then((res) => {
+        if (cancelled) return
+        if (res.data?.success && Array.isArray(res.data.data)) {
+          setCbsOrders(res.data.data)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCbsOrders([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingCbs(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [deal.deal_id])
+
+  const totalCbs = cbsOrders.reduce(
+    (sum, o) => sum + Number(o.price_not_vat_round ?? o.price_not_vat ?? 0),
+    0
+  )
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -235,6 +282,77 @@ export function DealDetailModal({ deal, onClose, onEdit, onApprove, canApprove }
                 </div>
               </div>
             )}
+
+          {/* Đơn CBS liên kết */}
+          {(loadingCbs || cbsOrders.length > 0) && (
+            <div className="border-t border-gray-200 pt-4 mt-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Receipt className="w-4 h-4 text-emerald-600" />
+                <h3 className="text-sm font-semibold text-gray-900">Đơn CBS liên kết</h3>
+                {cbsOrders.length > 0 && (
+                  <span className="text-xs text-gray-500">
+                    ({cbsOrders.length} đơn · tổng {formatCurrency(totalCbs)} chưa VAT)
+                  </span>
+                )}
+              </div>
+              {loadingCbs ? (
+                <div className="text-xs text-gray-400">Đang tải...</div>
+              ) : (
+                <div className="space-y-2">
+                  {cbsOrders.map((o) => {
+                    const amt = Number(o.price_not_vat_round ?? o.price_not_vat ?? 0)
+                    return (
+                      <div
+                        key={o.id}
+                        className="text-sm bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="font-medium text-gray-900 truncate">
+                            {o.contract_no || o.id}
+                            {o.period_ym && (
+                              <span className="ml-2 text-xs text-gray-500">Kỳ {o.period_ym}</span>
+                            )}
+                          </div>
+                          <div className="text-emerald-700 font-semibold flex-shrink-0">
+                            {formatCurrency(amt)}
+                          </div>
+                        </div>
+                        {o.product_name && (
+                          <div className="text-xs text-gray-600 truncate">{o.product_name}</div>
+                        )}
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-500 mt-1">
+                          {o.claim_status === 'approved' ? (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">
+                              Đã duyệt
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-700">
+                              {o.claim_status || '—'}
+                            </span>
+                          )}
+                          {o.kpi_kind_at_approve && (
+                            <span
+                              className={`px-1.5 py-0.5 rounded ${
+                                o.kpi_kind_at_approve === 'NEW'
+                                  ? 'bg-blue-100 text-blue-700'
+                                  : 'bg-gray-100 text-gray-700'
+                              }`}
+                            >
+                              {o.kpi_kind_at_approve === 'NEW' ? 'KH Mới' : 'KH Cũ'}
+                            </span>
+                          )}
+                          {o.claimed_by_name && <span>Bán: {o.claimed_by_name}</span>}
+                          {o.payment_date && (
+                            <span>TT: {formatDate(o.payment_date as number)}</span>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Workflow (timeline) + File đính kèm */}
           <div className="border-t border-gray-200 pt-4 mt-4">

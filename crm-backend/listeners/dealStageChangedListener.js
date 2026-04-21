@@ -25,12 +25,19 @@ async function resolveTaskAssigneeForDepartment(tenantId, departmentId) {
 /**
  * Listener: MASS chuyển Báo giá → task Sales; PROJECT chuyển Khảo sát → task Kỹ thuật/Giải pháp (nếu cấu hình)
  */
-async function onDealStageChanged ({ deal, tenantId, userId, newStage }) {
+async function onDealStageChanged ({ deal, tenantId, userId, newStage, source }) {
   const dealId = deal?.deal_id
   if (!dealId || !tenantId) return
 
   const category = deal?.deal_category || 'MASS'
   const stage = newStage || deal?.stage
+
+  // Không tạo task tự động khi:
+  // - deal đã chuyển sang "Thành công" (không còn action follow-up)
+  // - sự kiện đến từ luồng auto-promote CBS (đã có log CBS riêng)
+  if (stage === 'thanh_cong' || source === 'cbs_auto_promote') {
+    return
+  }
 
   let taskTitle = TASK_TITLE_MASS
   let activityMessage = ACTIVITY_MESSAGE_MASS

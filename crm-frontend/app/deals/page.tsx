@@ -1,13 +1,13 @@
 'use client'
 
-import { Suspense, useState, useEffect } from 'react'
+import { Suspense, useState, useEffect, useRef, useMemo } from 'react'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
 import { apiClient } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { Plus, Loader2, Trash2 } from 'lucide-react'
+import { Plus, Loader2, Trash2, X, Search } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { DealModal } from '@/components/DealModal'
 import { DealDetailModal } from '@/components/DealDetailModal'
@@ -57,6 +57,11 @@ function ClosedDealsList({
                 {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(deal.amount || 0)}
                 {deal.customer_full_name && ` · ${deal.customer_full_name}`}
               </p>
+              {(deal.assigned_employee_name || deal.assigned_employee_username) && (
+                <p className="text-xs text-indigo-700 mt-0.5">
+                  Người phụ trách: <span className="font-medium">{deal.assigned_employee_name || deal.assigned_employee_username}</span>
+                </p>
+              )}
               {(deal.created_at != null || deal.time_create != null) && (
                 <p className="text-xs text-gray-400 mt-0.5">
                   Ngày tạo: {formatDealDate(deal.created_at ?? deal.time_create)}
@@ -84,6 +89,182 @@ function ClosedDealsList({
   )
 }
 
+interface AssigneeOption {
+  employee_id: string
+  full_name?: string
+  username?: string
+}
+
+function normalizeVN(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .trim()
+}
+
+function AssigneePicker({
+  employees,
+  value,
+  onChange,
+}: {
+  employees: AssigneeOption[]
+  value: string
+  onChange: (id: string) => void
+}) {
+  const [query, setQuery] = useState('')
+  const [open, setOpen] = useState(false)
+  const [activeIdx, setActiveIdx] = useState(0)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  const selected = useMemo(
+    () => employees.find((e) => e.employee_id === value) || null,
+    [employees, value]
+  )
+
+  const filtered = useMemo(() => {
+    const q = normalizeVN(query)
+    if (!q) return employees.slice(0, 100)
+    return employees
+      .filter((e) => {
+        const hay = normalizeVN(`${e.full_name || ''} ${e.username || ''} ${e.employee_id}`)
+        return hay.includes(q)
+      })
+      .slice(0, 50)
+  }, [employees, query])
+
+  useEffect(() => {
+    setActiveIdx(0)
+  }, [query, open])
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    if (open) document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [open])
+
+  const pick = (emp: AssigneeOption) => {
+    onChange(emp.employee_id)
+    setQuery('')
+    setOpen(false)
+  }
+
+  const clear = () => {
+    onChange('')
+    setQuery('')
+    setOpen(false)
+    inputRef.current?.blur()
+  }
+
+  const displayText = selected
+    ? selected.full_name || selected.username || selected.employee_id
+    : ''
+
+  return (
+    <div ref={wrapperRef} className="relative min-w-[240px]">
+      <div className="flex items-center gap-1.5 px-3 py-2 bg-white border border-gray-300 rounded-lg focus-within:ring-2 focus-within:ring-[#0074BD] focus-within:border-transparent">
+        <Search className="w-4 h-4 text-gray-400 flex-shrink-0" />
+        {selected && !open ? (
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(true)
+              setTimeout(() => inputRef.current?.focus(), 0)
+            }}
+            className="flex-1 text-left text-sm text-gray-900 font-medium truncate"
+          >
+            {displayText}
+          </button>
+        ) : (
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setOpen(true)
+            }}
+            onFocus={() => setOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setOpen(true)
+                setActiveIdx((i) => Math.min(i + 1, filtered.length - 1))
+              } else if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setActiveIdx((i) => Math.max(i - 1, 0))
+              } else if (e.key === 'Enter') {
+                e.preventDefault()
+                if (filtered[activeIdx]) pick(filtered[activeIdx])
+              } else if (e.key === 'Escape') {
+                setOpen(false)
+              }
+            }}
+            placeholder={selected ? displayText : 'Gõ tên hoặc username để tìm...'}
+            className="flex-1 outline-none text-sm bg-transparent min-w-0"
+          />
+        )}
+        {selected && (
+          <button
+            type="button"
+            onClick={clear}
+            className="p-0.5 text-gray-400 hover:text-gray-700 flex-shrink-0"
+            title="Xóa bộ lọc"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div className="absolute z-20 mt-1 w-full max-h-72 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg">
+          {filtered.length === 0 ? (
+            <div className="px-3 py-2 text-sm text-gray-500">Không tìm thấy nhân viên phù hợp.</div>
+          ) : (
+            <ul className="py-1">
+              {filtered.map((emp, idx) => {
+                const isActive = idx === activeIdx
+                const isSelected = emp.employee_id === value
+                return (
+                  <li key={emp.employee_id}>
+                    <button
+                      type="button"
+                      onMouseEnter={() => setActiveIdx(idx)}
+                      onClick={() => pick(emp)}
+                      className={`w-full text-left px-3 py-1.5 text-sm flex items-center justify-between ${
+                        isActive ? 'bg-[#0074BD]/10' : 'hover:bg-gray-50'
+                      } ${isSelected ? 'font-semibold text-[#0074BD]' : 'text-gray-800'}`}
+                    >
+                      <span className="truncate">
+                        {emp.full_name || emp.username || emp.employee_id}
+                        {emp.username && emp.full_name && (
+                          <span className="text-xs text-gray-400 ml-1.5">@{emp.username}</span>
+                        )}
+                      </span>
+                      {isSelected && <span className="text-xs text-[#0074BD]">Đang chọn</span>}
+                    </button>
+                  </li>
+                )
+              })}
+              {filtered.length >= 50 && (
+                <li className="px-3 py-1.5 text-xs text-gray-400 border-t">
+                  Hiển thị 50 kết quả đầu · tiếp tục gõ để thu hẹp
+                </li>
+              )}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function DealsPageContent() {
   const { user } = useAuth()
   const searchParams = useSearchParams()
@@ -101,10 +282,35 @@ function DealsPageContent() {
   const [cancelVariant, setCancelVariant] = useState<'cancelled' | 'lost'>('cancelled')
   const [dealCategoryFilter, setDealCategoryFilter] = useState<DealCategoryFilter>('')
   const [pipelineStages, setPipelineStages] = useState<Stage[]>([])
+  const [assigneeFilter, setAssigneeFilter] = useState<string>('')
+  const [assignableEmployees, setAssignableEmployees] = useState<
+    { employee_id: string; full_name?: string; username?: string }[]
+  >([])
+
+  const canFilterByAssignee = user?.role !== 'sales'
 
   useEffect(() => {
     fetchDeals()
-  }, [statusFilter, dateFrom, dateTo, createdDateFrom, createdDateTo, dealCategoryFilter])
+  }, [statusFilter, dateFrom, dateTo, createdDateFrom, createdDateTo, dealCategoryFilter, assigneeFilter])
+
+  useEffect(() => {
+    if (!canFilterByAssignee) return
+    let cancelled = false
+    apiClient
+      .get('/api/employees/assignable')
+      .then((res) => {
+        if (cancelled) return
+        if (res.data?.success && Array.isArray(res.data.data)) {
+          setAssignableEmployees(res.data.data)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setAssignableEmployees([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [canFilterByAssignee])
 
   useEffect(() => {
     const category = dealCategoryFilter || 'MASS'
@@ -127,7 +333,7 @@ function DealsPageContent() {
   const fetchDeals = async () => {
     try {
       setLoading(true)
-      const params: { status?: string; from_date?: string; to_date?: string; created_from?: string; created_to?: string; deal_category?: string } = {}
+      const params: { status?: string; from_date?: string; to_date?: string; created_from?: string; created_to?: string; deal_category?: string; assigned_to?: string } = {}
       if (statusFilter === 'active') params.status = 'active'
       else if (statusFilter === 'won') params.status = 'won'
       else if (statusFilter === 'cancelled_lost') params.status = 'cancelled,lost'
@@ -136,6 +342,7 @@ function DealsPageContent() {
       if (createdDateFrom) params.created_from = createdDateFrom
       if (createdDateTo) params.created_to = createdDateTo
       if (dealCategoryFilter) params.deal_category = dealCategoryFilter
+      if (canFilterByAssignee && assigneeFilter) params.assigned_to = assigneeFilter
       const response = await apiClient.get('/api/deals', { params })
       if (response.data.success) {
         const list = response.data.data || []
@@ -280,6 +487,16 @@ function DealsPageContent() {
               </button>
             ))}
             </div>
+            {canFilterByAssignee && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-gray-700">Người phụ trách:</span>
+                <AssigneePicker
+                  employees={assignableEmployees}
+                  value={assigneeFilter}
+                  onChange={setAssigneeFilter}
+                />
+              </div>
+            )}
           </div>
 
           {/* Bộ lọc theo ngày: 1 row - Dự kiến + Ngày tạo */}

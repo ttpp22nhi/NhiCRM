@@ -635,7 +635,8 @@ export default function DashboardPage() {
           {/* KPI progress (chỉ hiện khi có chỉ tiêu) */}
           {data.kpiProgress.targetValue > 0 && (
             <div className="mb-8 bg-white rounded-xl shadow p-6 border border-gray-100">
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">Tiến độ KPI (tháng/năm hiện tại)</h3>
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Tiến độ KPI — tổng toàn Sales (tenant)</h3>
+              <p className="text-xs text-gray-500 mb-3">Gộp chỉ tiêu & thực đạt từ mục KPI tháng (theo kỳ lọc ngày).</p>
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <p className="text-sm text-gray-500">Chỉ tiêu: {formatCurrency(data.kpiProgress.targetValue)}</p>

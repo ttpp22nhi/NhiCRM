@@ -1,6 +1,6 @@
 'use client'
 
-import { Mail, Shield, UserCheck, Calendar, User, CheckCircle, XCircle } from 'lucide-react'
+import { Mail, Shield, UserCheck, Calendar, User, CheckCircle, XCircle, MapPin } from 'lucide-react'
 
 interface Employee {
   employee_id: string
@@ -14,6 +14,7 @@ interface Employee {
   department_name?: string
   title?: string
   rank?: string
+  territory?: string | null
 }
 
 interface EmployeeDetailViewProps {
@@ -173,6 +174,17 @@ export function EmployeeDetailView({ employee, onClose }: EmployeeDetailViewProp
                   <p className="text-lg font-semibold text-gray-900">{employee.rank}</p>
                 </div>
               )}
+
+              {/* Địa bàn */}
+              {(employee.territory && String(employee.territory).trim()) ? (
+                <div className="bg-gray-50 rounded-lg p-4 md:col-span-2">
+                  <div className="flex items-center gap-2 mb-2">
+                    <MapPin className="w-5 h-5 text-gray-400" />
+                    <label className="text-sm font-medium text-gray-500">Địa bàn</label>
+                  </div>
+                  <p className="text-lg font-semibold text-gray-900 whitespace-pre-wrap">{String(employee.territory).trim()}</p>
+                </div>
+              ) : null}
 
               {/* Trạng thái */}
               <div className="bg-gray-50 rounded-lg p-4">

@@ -10,7 +10,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useSubscription } from '@/contexts/SubscriptionContext'
 import { useRouter } from 'next/navigation'
 import { Plus, X, Shield, FileSpreadsheet } from 'lucide-react'
-import { isExecutive, isTenantAdmin } from '@/lib/rbac'
+import { isExecutive, canCreateEmployees } from '@/lib/rbac'
 
 export default function EmployeesPage() {
   const { user } = useAuth()
@@ -19,7 +19,7 @@ export default function EmployeesPage() {
   const [showForm, setShowForm] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
-  const canManageEmployees = isTenantAdmin(user?.role)
+  const canManageEmployees = canCreateEmployees(user?.role)
   const canViewEmployees = isExecutive(user?.role)
 
   if (user && !canViewEmployees) {
@@ -45,7 +45,7 @@ export default function EmployeesPage() {
               </div>
               <p className="text-xs sm:text-sm text-gray-600 mt-1">
                 {canManageEmployees
-                  ? 'Tạo và quản lý tài khoản nhân viên'
+                  ? 'Thêm nhân viên (Giám đốc/Quản lý: Tổ trưởng hoặc Sales); chỉnh sửa chi tiết: Admin'
                   : 'Xem danh sách nhân viên (theo phạm vi tenant)'}
               </p>
             </div>

@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useAuth } from '@/contexts/AuthContext'
+import { isTenantAdmin } from '@/lib/rbac'
 import { apiClient } from '@/lib/api'
 import { AlertCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -28,7 +29,11 @@ const ROLE_OPTIONS = [
 ]
 
 export function EmployeeForm({ onSuccess, onCancel }: EmployeeFormProps) {
-  const { register } = useAuth()
+  const { register, user } = useAuth()
+  const roleOptions = useMemo(() => {
+    if (isTenantAdmin(user?.role)) return ROLE_OPTIONS
+    return ROLE_OPTIONS.filter((o) => o.value === 'leader' || o.value === 'sales')
+  }, [user?.role])
   const [departments, setDepartments] = useState<Department[]>([])
   const [formData, setFormData] = useState({
     username: '',
@@ -38,7 +43,8 @@ export function EmployeeForm({ onSuccess, onCancel }: EmployeeFormProps) {
     role: 'sales',
     department_id: '' as string,
     title: '',
-    rank: ''
+    rank: '',
+    territory: ''
   })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -54,6 +60,14 @@ export function EmployeeForm({ onSuccess, onCancel }: EmployeeFormProps) {
     }
     fetch()
   }, [])
+
+  useEffect(() => {
+    if (!user) return
+    const allowed = roleOptions.map((o) => o.value)
+    setFormData((prev) =>
+      allowed.includes(prev.role) ? prev : { ...prev, role: 'sales' }
+    )
+  }, [user?.role, roleOptions])
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
@@ -79,7 +93,8 @@ export function EmployeeForm({ onSuccess, onCancel }: EmployeeFormProps) {
           role: formData.role,
           department_id: formData.department_id || undefined,
           title: formData.title || undefined,
-          rank: formData.rank || undefined
+          rank: formData.rank || undefined,
+          territory: formData.territory?.trim() || undefined
         }
       )
       toast.success('Tạo tài khoản nhân viên thành công!')
@@ -147,7 +162,7 @@ export function EmployeeForm({ onSuccess, onCancel }: EmployeeFormProps) {
             onChange={handleChange}
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
           >
-            {ROLE_OPTIONS.map((o) => (
+            {roleOptions.map((o) => (
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
           </select>
@@ -201,6 +216,22 @@ export function EmployeeForm({ onSuccess, onCancel }: EmployeeFormProps) {
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
             placeholder="VD: 1, 2, 3"
           />
+        </div>
+
+        <div className="md:col-span-2">
+          <label htmlFor="territory" className="block text-sm font-medium text-gray-700 mb-2">
+            Địa bàn
+          </label>
+          <input
+            id="territory"
+            name="territory"
+            type="text"
+            value={formData.territory}
+            onChange={handleChange}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
+            placeholder="VD: Miền Nam — TP.HCM, Quận 1…"
+          />
+          <p className="text-xs text-gray-500 mt-1">Ghi chú địa bàn / khu vực phụ trách (tùy chọn).</p>
         </div>
 
         <div className="md:col-span-2">

@@ -5,7 +5,7 @@ import cors from 'cors';
 import { register, login, changePassword, getEmployees, getSalesEmployees, getAssignableEmployeesList, getEmployeeById, resetPassword, updateEmployee, transferCustomers, getTransferStats } from './controllers/authController.js';
 import { downloadEmployeeImportTemplate, importEmployeesFromExcel } from './controllers/employeeImportController.js';
 import { uploadEmployeeImportExcel } from './middleware/uploadEmployeeImport.js';
-import { verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, verifyExecutive, verifyStrictAdmin, verifySuperAdmin } from './middleware/auth.js';
+import { verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, verifyExecutive, verifyStrictAdmin, verifySuperAdmin, verifyEmployeeCreator } from './middleware/auth.js';
 import { createCustomer, getCustomers, updateCustomer, deleteCustomer, checkDuplicateCustomer, bulkTransferCustomers, getCustomerOwnershipHistory } from './controllers/customerController.js';
 import { downloadCustomerImportTemplate, importCustomersFromExcel } from './controllers/customerImportController.js';
 import { createInteraction, getInteractionsByCustomer } from './controllers/interactionController.js';
@@ -32,6 +32,19 @@ import { getDepartments, getDepartmentsFlat, getDepartmentById, createDepartment
 import { getRolePermissions, getPermissionMatrix, upsertRolePermission } from './controllers/permissionController.js';
 import { getOrganizationLevels, updateOrganizationLevel, createOrganizationLevel, deleteOrganizationLevel, moveOrganizationLevel } from './controllers/organizationLevelController.js';
 import { getTenants, getTenantById, createTenant, updateTenant, getMySubscription } from './controllers/tenantController.js';
+import { getKpis, upsertKpis } from './controllers/kpiController.js';
+import {
+  getCbsConfig,
+  upsertCbsConfig,
+  listCbsOrders,
+  listCbsOrdersByDeal,
+  claimCbsOrder,
+  approveCbsOrder,
+  unclaimCbsOrder,
+  recomputeKpiFromApprovedOrders,
+  syncNow as cbsSyncNow,
+} from './controllers/cbsRevenueController.js';
+import { startCbsScheduler } from './scheduler/cbsRevenueScheduler.js';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger.js';
 import './listeners/dealStageChangedListener.js'; // Đăng ký listener event-driven (deal stage → auto task)
 
@@ -148,7 +161,7 @@ app.post('/api/auth/login', login);
  *       403:
  *         description: Không có quyền (chỉ Admin)
  */
-app.post('/api/auth/register', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, register);
+app.post('/api/auth/register', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyEmployeeCreator, register);
 
 /**
  * @swagger
@@ -223,7 +236,7 @@ app.get(
   extractTenant,
   requireTenant,
   checkTenantSubscription,
-  verifyTenantAdmin,
+  verifyEmployeeCreator,
   downloadEmployeeImportTemplate
 )
 app.post(
@@ -232,7 +245,7 @@ app.post(
   extractTenant,
   requireTenant,
   checkTenantSubscription,
-  verifyTenantAdmin,
+  verifyEmployeeCreator,
   (req, res, next) => {
     uploadEmployeeImportExcel.single('file')(req, res, (err) => {
       if (err) {
@@ -801,6 +814,28 @@ app.get('/api/reports/task-activity-log', verifyToken, extractTenant, requireTen
 /** Thông tin gói dịch vụ tenant (end_date, expired, days_remaining) cho UI banner/disable nút */
 app.get('/api/tenant/subscription', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getMySubscription);
 
+/** KPI hàng tháng: xem (Sales: của mình; Giám đốc/Quản lý/Admin: toàn bộ Sales) — giao chỉ tiêu qua PUT */
+app.get('/api/kpis', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getKpis);
+app.put('/api/kpis', verifyToken, extractTenant, requireTenant, checkTenantSubscription, upsertKpis);
+
+/**
+ * CBS (Mobifone) — đồng bộ doanh thu tháng; nhân viên tích đơn của mình.
+ *  - GET  /api/cbs/config     (executive xem, admin sửa)
+ *  - PUT  /api/cbs/config
+ *  - POST /api/cbs/sync       (executive tự chạy đồng bộ thủ công)
+ *  - GET  /api/cbs/revenue    (mọi nhân viên trong tenant)
+ *  - POST /api/cbs/revenue/:id/claim
+ *  - POST /api/cbs/revenue/:id/unclaim
+ */
+app.get('/api/cbs/config', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getCbsConfig);
+app.put('/api/cbs/config', verifyToken, extractTenant, requireTenant, checkTenantSubscription, upsertCbsConfig);
+app.post('/api/cbs/sync', verifyToken, extractTenant, requireTenant, checkTenantSubscription, cbsSyncNow);
+app.get('/api/cbs/revenue', verifyToken, extractTenant, requireTenant, checkTenantSubscription, listCbsOrders);
+app.post('/api/cbs/revenue/:id/claim', verifyToken, extractTenant, requireTenant, checkTenantSubscription, claimCbsOrder);
+app.post('/api/cbs/revenue/:id/approve', verifyToken, extractTenant, requireTenant, checkTenantSubscription, approveCbsOrder);
+app.post('/api/cbs/revenue/:id/unclaim', verifyToken, extractTenant, requireTenant, checkTenantSubscription, unclaimCbsOrder);
+app.post('/api/cbs/revenue/recompute-kpi', verifyToken, extractTenant, requireTenant, checkTenantSubscription, recomputeKpiFromApprovedOrders);
+
 /**
  * @swagger
  * /api/tasks:
@@ -885,6 +920,7 @@ app.post('/api/deals/:id/approve', verifyToken, extractTenant, requireTenant, ch
 app.delete('/api/deals/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, deleteDeal);
 app.post('/api/deals/:id/restore', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, restoreDeal);
 app.get('/api/deals/:id/activities', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDealActivities);
+app.get('/api/deals/:id/cbs-orders', verifyToken, extractTenant, requireTenant, checkTenantSubscription, listCbsOrdersByDeal);
 app.post('/api/deals/:id/activities', verifyToken, extractTenant, requireTenant, checkTenantSubscription, addDealNote);
 app.get('/api/deals/:id/attachments', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getDealAttachments);
 app.post('/api/deals/:id/upload', verifyToken, extractTenant, requireTenant, checkTenantSubscription, uploadDealFile, uploadDealAttachment);
@@ -1162,4 +1198,15 @@ app.listen(PORT, () => {
   console.log('🔒 Authentication: JWT (Bearer Token)');
   console.log('📦 Database: PostgreSQL (UUID & Unix Timestamp)');
   console.log('-------------------------------------------------------');
+
+  // Bật scheduler đồng bộ CBS (06:00 & 18:00 giờ VN)
+  if (process.env.DISABLE_CBS_SCHEDULER !== '1') {
+    try {
+      startCbsScheduler();
+    } catch (e) {
+      console.error('[CBS scheduler] Không khởi động được:', e);
+    }
+  } else {
+    console.log('[CBS scheduler] Bị tắt bằng DISABLE_CBS_SCHEDULER=1');
+  }
 });

@@ -25,6 +25,8 @@ interface Deal {
   deal_category?: 'MASS' | 'PROJECT' | string | null
   confidence_level?: 'high' | 'medium' | 'low' | string | null
   confidence_note?: string | null
+  primary_product_code?: string | null
+  first_contact_date?: number | string | null
 }
 
 const STATUS_OPTIONS = [
@@ -86,7 +88,9 @@ export function DealModal({ deal, customerId, onClose, onSuccess }: DealModalPro
     notes: deal?.notes ?? '',
     deal_category: (deal?.deal_category as 'MASS' | 'PROJECT') || 'MASS',
     confidence_level: (deal?.confidence_level as 'high' | 'medium' | 'low') || 'medium',
-    confidence_note: deal?.confidence_note ?? ''
+    confidence_note: deal?.confidence_note ?? '',
+    primary_product_code: deal?.primary_product_code ?? '',
+    first_contact_date: parseExpectedClosingDate(deal?.first_contact_date)
   })
   const [customers, setCustomers] = useState<any[]>([])
   const [assignableEmployees, setAssignableEmployees] = useState<{ employee_id: string; full_name?: string; username?: string }[]>([])
@@ -127,7 +131,9 @@ export function DealModal({ deal, customerId, onClose, onSuccess }: DealModalPro
         notes: deal.notes ?? '',
         deal_category: category,
         confidence_level: (deal.confidence_level as 'high' | 'medium' | 'low') || 'medium',
-        confidence_note: deal.confidence_note ?? ''
+        confidence_note: deal.confidence_note ?? '',
+        primary_product_code: deal.primary_product_code ?? '',
+        first_contact_date: parseExpectedClosingDate(deal.first_contact_date)
       }))
       setStageOptions(category === 'PROJECT' ? STAGES_PROJECT : STAGES_MASS)
     }
@@ -170,7 +176,11 @@ export function DealModal({ deal, customerId, onClose, onSuccess }: DealModalPro
         invoice_info: formData.invoice_info?.trim() || null,
         notes: formData.notes?.trim() || null,
         confidence_level: formData.confidence_level || 'medium',
-        confidence_note: formData.confidence_level === 'low' ? (formData.confidence_note?.trim() || null) : (formData.confidence_note?.trim() || null)
+        confidence_note: formData.confidence_level === 'low' ? (formData.confidence_note?.trim() || null) : (formData.confidence_note?.trim() || null),
+        primary_product_code: formData.primary_product_code?.trim() ? formData.primary_product_code.trim().toUpperCase() : null,
+        first_contact_date: formData.first_contact_date
+          ? new Date(formData.first_contact_date).getTime()
+          : null
       }
       if (deal) {
         payload.status = formData.status
@@ -356,6 +366,16 @@ export function DealModal({ deal, customerId, onClose, onSuccess }: DealModalPro
               </div>
             )}
             <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Ngày tiếp cận lần đầu</label>
+              <input
+                type="date"
+                value={formData.first_contact_date}
+                onChange={(e) => setFormData({ ...formData, first_contact_date: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0074BD] focus:border-transparent"
+              />
+              <p className="text-xs text-gray-400 mt-1">Bỏ trống nếu trùng ngày tạo deal.</p>
+            </div>
+            <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Ngày dự kiến đóng deal</label>
               <input
                 type="date"
@@ -363,6 +383,17 @@ export function DealModal({ deal, customerId, onClose, onSuccess }: DealModalPro
                 onChange={(e) => setFormData({ ...formData, expected_closing_date: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0074BD] focus:border-transparent"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Mã dịch vụ chính</label>
+              <input
+                type="text"
+                value={formData.primary_product_code}
+                onChange={(e) => setFormData({ ...formData, primary_product_code: e.target.value })}
+                placeholder="VD: INTERNET_DN, TMQT123…"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0074BD] focus:border-transparent uppercase"
+              />
+              <p className="text-xs text-gray-400 mt-1">Khớp với mã dịch vụ CBS để tự link khi có doanh thu.</p>
             </div>
             {user?.role !== 'sales' && assignableEmployees.length > 0 && (
               <div>

@@ -5,6 +5,7 @@ import { updateDealTaskMetadata } from '../services/dealMetadataService.js'
 import { generateDisplayCode } from '../services/displayCodeService.js'
 import { getAssignableEmployeeIds } from '../services/assignableEmployeesService.js'
 import { buildScopeCondition } from '../services/scopeService.js'
+import { syncKpiForInteraction } from '../services/kpiFromDealsSyncService.js'
 
 /**
  * Lấy danh sách tasks — theo phân cấp (tenant + director/manager/leader/sales)
@@ -393,6 +394,12 @@ export const updateTask = async (req, res) => {
           interactionId, task.customer_id, 'other', `[Hoàn thành Task] ${completion_content}`,
           now, userId, 'success', tenantId, now
         ])
+        // Cập nhật actual_approach_count cho kỳ tương ứng (fire-and-forget).
+        syncKpiForInteraction(tenantId, userId, now).catch((e) => {
+          if (e?.code !== '42P01' && e?.code !== '42703') {
+            console.error('syncKpiForInteraction (taskComplete):', e)
+          }
+        })
       } catch (interactionError) {
         console.error('Lỗi khi tạo interaction:', interactionError)
         return res.status(500).json({

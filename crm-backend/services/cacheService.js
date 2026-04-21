@@ -25,6 +25,11 @@ export function buildDateRangeCacheKey(dateRange) {
   return `from=${Number(dateRange.fromTs) || 0}&to=${Number(dateRange.toTs) || 0}`
 }
 
+/** KPI Dashboard: tenant-wide (không phụ thuộc scopePath / deal category) — chỉ tenant + khoảng ngày. */
+export function buildDashboardKpiCacheKey(tenantId, dateRange) {
+  return ['dashboard:analytics:kpi', `tenant=${tenantId}`, buildDateRangeCacheKey(dateRange)].join('|')
+}
+
 export async function getJson(key) {
   const redis = await getRedisClient()
   if (!redis) return null

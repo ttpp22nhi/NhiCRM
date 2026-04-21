@@ -8,6 +8,7 @@ import { syncDealTasksWithDeal } from '../services/dealMetadataService.js'
 import { generateDisplayCode } from '../services/displayCodeService.js'
 import * as pipelineStagesService from '../services/pipelineStagesService.js'
 import { getAssignableEmployeeIds } from '../services/assignableEmployeesService.js'
+import { syncKpiForDealsChange } from '../services/kpiFromDealsSyncService.js'
 
 /**
  * Lấy danh sách Leader/Manager có quyền phê duyệt deal của nhân viên (cùng phòng hoặc cấp trên theo path)
@@ -88,7 +89,7 @@ const APPROVAL_THRESHOLD_AMOUNT = 500_000_000
 
 export const createDeal = async (req, res) => {
   const { role, id: userId } = req.user
-  const { customer_id, title, amount, stage, expected_closing_date, assigned_to, product_name, quantity, invoice_info, notes, deal_category: bodyCategory, confidence_level: bodyConfidence, confidence_note: bodyConfidenceNote } = req.body
+  const { customer_id, title, amount, stage, expected_closing_date, assigned_to, product_name, quantity, invoice_info, notes, deal_category: bodyCategory, confidence_level: bodyConfidence, confidence_note: bodyConfidenceNote, primary_product_code, first_contact_date } = req.body
   const tenantId = getTenantId(req)
   const dealCategory = DEAL_CATEGORIES.includes(bodyCategory) ? bodyCategory : 'MASS'
   const confidenceLevel = CONFIDENCE_LEVELS.includes(bodyConfidence) ? bodyConfidence : 'medium'
@@ -174,6 +175,14 @@ export const createDeal = async (req, res) => {
     const productName = product_name && String(product_name).trim() ? String(product_name).trim() : null
     const invoiceInfo = invoice_info && String(invoice_info).trim() ? String(invoice_info).trim() : null
     const notesVal = notes && String(notes).trim() ? String(notes).trim() : null
+    const primaryProductCode = primary_product_code && String(primary_product_code).trim()
+      ? String(primary_product_code).trim().toUpperCase()
+      : null
+    let firstContactMs = null
+    if (first_contact_date != null && first_contact_date !== '') {
+      const fc = parseInt(first_contact_date, 10)
+      if (!Number.isNaN(fc) && fc > 0) firstContactMs = fc
+    }
 
     const displayCode = await generateDisplayCode('DEAL', tenantId)
 
@@ -188,15 +197,15 @@ export const createDeal = async (req, res) => {
         deal_id, customer_id, title, amount, stage, status,
         expected_closing_date, assigned_to, tenant_id, created_at, updated_at,
         product_name, quantity, invoice_info, notes, display_code, deal_category,
-        confidence_level, confidence_note
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+        confidence_level, confidence_note, primary_product_code, first_contact_date
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
       RETURNING *
     `
     await pool.query(insertQuery, [
       dealId, customer_id || null, title.trim(), finalAmount, finalStage, initialStatus,
       finalExpectedClosingDate, finalAssignedTo, tenantId, now, now,
       productName, qty, invoiceInfo, notesVal, displayCode, dealCategory,
-      confidenceLevel, confidenceNote
+      confidenceLevel, confidenceNote, primaryProductCode, firstContactMs
     ])
 
     if (initialStatus === 'pending_approval') {
@@ -240,6 +249,10 @@ export const createDeal = async (req, res) => {
     const fullResult = await pool.query(fullQuery, [dealId])
     const createdDeal = fullResult.rows[0]
 
+    syncKpiForDealsChange(tenantId, null, createdDeal).catch((e) =>
+      console.error('syncKpiForDealsChange (createDeal):', e)
+    )
+
     res.status(201).json({
       success: true,
       message: initialStatus === 'pending_approval'
@@ -263,7 +276,7 @@ export const createDeal = async (req, res) => {
 export const updateDeal = async (req, res) => {
   const { role, id: userId } = req.user
   const { id } = req.params
-  const { title, amount, stage, status, expected_closing_date, assigned_to, customer_id, product_name, quantity, invoice_info, notes, loss_reason, stage_change_note, deal_category: bodyCategory, confidence_level: bodyConfidence, confidence_note: bodyConfidenceNote } = req.body
+  const { title, amount, stage, status, expected_closing_date, assigned_to, customer_id, product_name, quantity, invoice_info, notes, loss_reason, stage_change_note, deal_category: bodyCategory, confidence_level: bodyConfidence, confidence_note: bodyConfidenceNote, primary_product_code, first_contact_date } = req.body
 
   const tenantId = getTenantId(req)
 
@@ -479,6 +492,24 @@ export const updateDeal = async (req, res) => {
       updateValues.push(confidenceNoteVal)
     }
 
+    if (primary_product_code !== undefined) {
+      const ppc = primary_product_code && String(primary_product_code).trim()
+        ? String(primary_product_code).trim().toUpperCase()
+        : null
+      updateFields.push(`primary_product_code = $${paramIndex++}`)
+      updateValues.push(ppc)
+    }
+
+    if (first_contact_date !== undefined) {
+      let fcMs = null
+      if (first_contact_date != null && first_contact_date !== '') {
+        const fc = parseInt(first_contact_date, 10)
+        if (!Number.isNaN(fc) && fc > 0) fcMs = fc
+      }
+      updateFields.push(`first_contact_date = $${paramIndex++}`)
+      updateValues.push(fcMs)
+    }
+
     if (updateFields.length === 0) {
       return res.status(400).json({
         success: false,
@@ -558,6 +589,10 @@ export const updateDeal = async (req, res) => {
         newStage: stage
       })
     }
+
+    syncKpiForDealsChange(tenantId, deal, updatedDeal).catch((e) =>
+      console.error('syncKpiForDealsChange (updateDeal):', e)
+    )
 
     res.json({
       success: true,
@@ -675,7 +710,7 @@ export const deleteDeal = async (req, res) => {
 
   try {
     const dealCheck = await pool.query(
-      'SELECT deal_id, assigned_to, is_deleted FROM deals WHERE deal_id = $1 AND tenant_id = $2',
+      'SELECT * FROM deals WHERE deal_id = $1 AND tenant_id = $2',
       [id, tenantId]
     )
     if (dealCheck.rows.length === 0) {
@@ -699,6 +734,10 @@ export const deleteDeal = async (req, res) => {
     await pool.query(
       'UPDATE deals SET is_deleted = true, deleted_at = $1, updated_at = $1 WHERE deal_id = $2 AND tenant_id = $3',
       [now, id, tenantId]
+    )
+
+    syncKpiForDealsChange(tenantId, deal, null).catch((e) =>
+      console.error('syncKpiForDealsChange (deleteDeal):', e)
     )
 
     res.json({
@@ -746,13 +785,18 @@ export const restoreDeal = async (req, res) => {
   const { id } = req.params
   const tenantId = getTenantId(req)
   try {
+    const now = Date.now()
     const r = await pool.query(
-      'UPDATE deals SET is_deleted = false, deleted_at = NULL, updated_at = $1 WHERE deal_id = $2 AND tenant_id = $3 AND is_deleted = true RETURNING deal_id',
-      [Date.now(), id, tenantId]
+      'UPDATE deals SET is_deleted = false, deleted_at = NULL, updated_at = $1 WHERE deal_id = $2 AND tenant_id = $3 AND is_deleted = true RETURNING *',
+      [now, id, tenantId]
     )
     if (r.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Deal không tồn tại trong thùng rác hoặc đã được khôi phục.' })
     }
+    const restored = r.rows[0]
+    syncKpiForDealsChange(tenantId, null, restored).catch((e) =>
+      console.error('syncKpiForDealsChange (restoreDeal):', e)
+    )
     res.json({ success: true, message: 'Đã khôi phục deal.' })
   } catch (error) {
     console.error('Lỗi restoreDeal:', error)

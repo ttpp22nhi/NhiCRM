@@ -95,8 +95,9 @@ export function CustomerImportModal({ onClose, onSuccess }: CustomerImportModalP
         <div className="p-5 space-y-4">
           <ol className="text-sm text-gray-600 list-decimal list-inside space-y-1">
             <li>
-              Tải file mẫu; sheet &quot;Khách hàng&quot;: cột <strong>customer_type</strong> (E) có{' '}
-              <strong>danh sách chọn</strong> giống màn hình Thêm khách hàng; sheet &quot;Hướng dẫn&quot; có quy tắc.
+              Tải file mẫu; sheet &quot;Khách hàng&quot;: cột <strong>customer_type</strong> (E) và{' '}
+              <strong>kpi_customer_kind</strong> (F, NEW/EXISTING) có danh sách chọn — đồng bộ form Thêm khách hàng; sheet
+              &quot;Hướng dẫn&quot; có quy tắc.
             </li>
             <li>
               <strong>Sales:</strong> mọi dòng được gán <strong>Nhân viên chăm sóc</strong> = chính bạn; cột{' '}

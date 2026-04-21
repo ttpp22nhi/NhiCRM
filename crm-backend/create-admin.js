@@ -2,6 +2,7 @@
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
 import pool from './database.js';
+import { SQL_EMPLOYEE_USERNAME_EQUALS } from './utils/usernameSql.js';
 
 /**
  * Script khởi tạo tài khoản Admin mẫu
@@ -21,7 +22,7 @@ async function createAdmin() {
     console.log('⏳ Đang kiểm tra dữ liệu hệ thống...');
 
     // 1. Kiểm tra xem tài khoản admin đã tồn tại chưa để tránh lỗi trùng lặp
-    const checkQuery = 'SELECT employee_id FROM employees WHERE username = $1';
+    const checkQuery = `SELECT employee_id FROM employees WHERE ${SQL_EMPLOYEE_USERNAME_EQUALS}`;
     const checkResult = await pool.query(checkQuery, [username]);
 
     if (checkResult.rows.length > 0) {
