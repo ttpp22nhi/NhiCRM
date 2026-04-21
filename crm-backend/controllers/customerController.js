@@ -199,7 +199,7 @@ export const createCustomer = async (req, res) => {
  */
 export const getCustomers = async (req, res) => {
   const { id } = req.user;
-  const { search, type, page, limit, assigned_to: assignedToQuery } = req.query;
+  const { search, type, page, limit, assigned_to: assignedToQuery, kind: kindQuery } = req.query;
 
   const currentPage = parseInt(page) || 1;
   const pageSize = parseInt(limit) || 10;
@@ -210,6 +210,13 @@ export const getCustomers = async (req, res) => {
     types = Array.isArray(type) ? type : [type];
     types = types.filter(t => t && t.trim() !== '' && t !== 'all');
   }
+
+  // Lọc theo phân loại KPI (khách mới / hiện hữu). Giữ đúng logic
+  // inferKpiCustomerKind: ưu tiên kpi_customer_kind; fallback nếu
+  // customer_type vô tình là 'NEW'/'EXISTING'; mặc định 'NEW'.
+  const kindRaw = String(kindQuery || '').trim().toUpperCase();
+  const kpiKindFilter =
+    kindRaw === 'EXISTING' ? 'EXISTING' : kindRaw === 'NEW' ? 'NEW' : null;
 
   try {
     const tenantId = getTenantId(req);
@@ -270,6 +277,18 @@ export const getCustomers = async (req, res) => {
       conditions.push(`c.assigned_to = $${paramIndex}`);
       values.push(aid);
       paramIndex++;
+    }
+
+    if (kpiKindFilter === 'EXISTING') {
+      conditions.push(
+        `(UPPER(COALESCE(c.kpi_customer_kind, '')) = 'EXISTING'
+          OR UPPER(COALESCE(c.customer_type, '')) = 'EXISTING')`
+      );
+    } else if (kpiKindFilter === 'NEW') {
+      conditions.push(
+        `(UPPER(COALESCE(c.kpi_customer_kind, 'NEW')) <> 'EXISTING'
+          AND UPPER(COALESCE(c.customer_type, '')) <> 'EXISTING')`
+      );
     }
 
     // Query để đếm tổng số bản ghi (cho pagination)

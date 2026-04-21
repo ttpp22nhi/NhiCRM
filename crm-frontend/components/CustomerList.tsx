@@ -65,6 +65,7 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
   const [showTypeFilter, setShowTypeFilter] = useState(false)
+  const [kpiKindFilter, setKpiKindFilter] = useState<'all' | 'new' | 'existing'>('all')
   const [assignableEmployees, setAssignableEmployees] = useState<AssignableEmployee[]>([])
   const [assignedToFilter, setAssignedToFilter] = useState('')
   const [assignSearch, setAssignSearch] = useState('')
@@ -131,7 +132,7 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
   // Reset về trang 1 khi search hoặc filter thay đổi
   useEffect(() => {
     setCurrentPage(1)
-  }, [debouncedSearchQuery, selectedTypes, assignedToFilter])
+  }, [debouncedSearchQuery, selectedTypes, assignedToFilter, kpiKindFilter])
 
   useEffect(() => {
     const loadAssignable = async () => {
@@ -148,10 +149,10 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
     loadAssignable()
   }, [user])
 
-  // Chỉ gọi API khi debouncedSearchQuery, selectedTypes, assignedToFilter, currentPage, pageSize hoặc refreshKey thay đổi
+  // Chỉ gọi API khi debouncedSearchQuery, selectedTypes, assignedToFilter, kpiKindFilter, currentPage, pageSize hoặc refreshKey thay đổi
   useEffect(() => {
     fetchCustomers()
-  }, [debouncedSearchQuery, selectedTypes, assignedToFilter, currentPage, pageSize, refreshKey])
+  }, [debouncedSearchQuery, selectedTypes, assignedToFilter, kpiKindFilter, currentPage, pageSize, refreshKey])
 
   // Kiểm tra trạng thái pending transfer cho các khách hàng (chỉ cho Sales)
   useEffect(() => {
@@ -222,6 +223,9 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
       })
       if (assignedToFilter.trim()) {
         params.append('assigned_to', assignedToFilter.trim())
+      }
+      if (kpiKindFilter !== 'all') {
+        params.append('kind', kpiKindFilter.toUpperCase())
       }
       // Thêm pagination parameters
       params.append('page', currentPage.toString())
@@ -577,6 +581,46 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
             )}
           </div>
 
+          {/* Phân loại KPI: Khách mới / Khách hiện hữu */}
+          <div className="inline-flex items-center bg-gray-100 rounded-lg p-0.5 text-xs font-medium whitespace-nowrap">
+            <button
+              type="button"
+              onClick={() => setKpiKindFilter('all')}
+              className={`px-2.5 py-1 rounded-md transition ${
+                kpiKindFilter === 'all'
+                  ? 'bg-white shadow text-primary-700'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+              title="Hiện tất cả khách hàng"
+            >
+              Tất cả
+            </button>
+            <button
+              type="button"
+              onClick={() => setKpiKindFilter('new')}
+              className={`px-2.5 py-1 rounded-md transition ${
+                kpiKindFilter === 'new'
+                  ? 'bg-white shadow text-blue-700'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+              title="Chỉ khách phát triển mới (KPI)"
+            >
+              KH Mới
+            </button>
+            <button
+              type="button"
+              onClick={() => setKpiKindFilter('existing')}
+              className={`px-2.5 py-1 rounded-md transition ${
+                kpiKindFilter === 'existing'
+                  ? 'bg-white shadow text-emerald-700'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+              title="Chỉ khách hiện hữu (KPI) — đã có hoá đơn CBS duyệt hoặc Deal won"
+            >
+              KH Hiện hữu
+            </button>
+          </div>
+
           {assignableEmployees.length > 0 && (
             <div
               ref={caretakerFilterRef}
@@ -728,10 +772,10 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
         <div className="bg-white rounded-lg shadow p-6 text-center">
           <Users className="w-12 h-12 text-gray-400 mx-auto mb-2" />
           <h3 className="text-sm font-semibold text-gray-900 mb-1">
-            {searchQuery || selectedTypes.length > 0 || assignedToFilter ? 'Không tìm thấy khách hàng' : 'Chưa có khách hàng'}
+            {searchQuery || selectedTypes.length > 0 || assignedToFilter || kpiKindFilter !== 'all' ? 'Không tìm thấy khách hàng' : 'Chưa có khách hàng'}
           </h3>
           <p className="text-xs text-gray-600">
-            {searchQuery || selectedTypes.length > 0 || assignedToFilter
+            {searchQuery || selectedTypes.length > 0 || assignedToFilter || kpiKindFilter !== 'all'
               ? 'Thử thay đổi từ khóa tìm kiếm hoặc bộ lọc' 
               : 'Bắt đầu bằng cách thêm khách hàng đầu tiên của bạn'}
           </p>

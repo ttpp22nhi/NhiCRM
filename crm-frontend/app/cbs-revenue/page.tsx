@@ -24,6 +24,7 @@ import {
   ShieldCheck,
   Clock,
   Calculator,
+  FilterX,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { CbsConfigModal } from '@/components/CbsConfigModal'
@@ -97,7 +98,63 @@ function formatDateVN(ms: string | number | null | undefined): string {
   return `${dd}/${mm}/${yyyy} ${hh}:${mi}`
 }
 
+function normalizeVN(s: string): string {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .trim()
+}
+
+function toDayMs(ms: string | number | null | undefined): number | null {
+  if (ms == null || ms === '') return null
+  const n = Number(ms)
+  if (!Number.isFinite(n)) return null
+  const d = new Date(n)
+  d.setHours(0, 0, 0, 0)
+  return d.getTime()
+}
+
+function dateInputToMs(v: string, endOfDay = false): number | null {
+  if (!v) return null
+  const [y, m, day] = v.split('-').map((x) => parseInt(x, 10))
+  if (!y || !m || !day) return null
+  const d = new Date(y, m - 1, day)
+  if (endOfDay) d.setHours(23, 59, 59, 999)
+  else d.setHours(0, 0, 0, 0)
+  return d.getTime()
+}
+
 type OwnerFilter = 'all' | 'mine' | 'unclaimed' | 'others' | 'pending'
+
+type SellerStatusFilter = 'all' | 'unclaimed' | 'pending' | 'approved'
+
+interface ColumnFilters {
+  dateFrom: string // yyyy-mm-dd
+  dateTo: string
+  customer: string
+  product: string
+  contract: string
+  cbsStaff: string
+  priceMin: string
+  priceMax: string
+  seller: string
+  sellerStatus: SellerStatusFilter
+}
+
+const EMPTY_COL_FILTERS: ColumnFilters = {
+  dateFrom: '',
+  dateTo: '',
+  customer: '',
+  product: '',
+  contract: '',
+  cbsStaff: '',
+  priceMin: '',
+  priceMax: '',
+  seller: '',
+  sellerStatus: 'all',
+}
 
 export default function CbsRevenuePage() {
   const { user } = useAuth()
@@ -111,6 +168,7 @@ export default function CbsRevenuePage() {
   const [period, setPeriod] = useState(defaultPeriod)
   const [owner, setOwner] = useState<OwnerFilter>('all')
   const [q, setQ] = useState('')
+  const [columnFilters, setColumnFilters] = useState<ColumnFilters>(EMPTY_COL_FILTERS)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [recomputing, setRecomputing] = useState(false)
@@ -172,6 +230,96 @@ export default function CbsRevenuePage() {
         })),
     [salesList]
   )
+
+  const filteredData = useMemo(() => {
+    const rows = resp?.data || []
+    const f = columnFilters
+    const fromMs = dateInputToMs(f.dateFrom, false)
+    const toMs = dateInputToMs(f.dateTo, true)
+    const minPrice = f.priceMin ? Number(f.priceMin.replace(/[^\d.-]/g, '')) : null
+    const maxPrice = f.priceMax ? Number(f.priceMax.replace(/[^\d.-]/g, '')) : null
+    const nCustomer = normalizeVN(f.customer)
+    const nProduct = normalizeVN(f.product)
+    const nContract = normalizeVN(f.contract)
+    const nCbsStaff = normalizeVN(f.cbsStaff)
+    const nSeller = normalizeVN(f.seller)
+
+    return rows.filter((o) => {
+      // Ngày thu
+      if (fromMs != null || toMs != null) {
+        const dayMs = toDayMs(o.payment_date || o.active_date)
+        if (dayMs == null) return false
+        if (fromMs != null && dayMs < fromMs) return false
+        if (toMs != null && dayMs > toMs) return false
+      }
+
+      if (nCustomer) {
+        const hay = normalizeVN(
+          `${o.customer_name || ''} ${o.customer_type || ''} ${o.external_id1 || ''}`
+        )
+        if (!hay.includes(nCustomer)) return false
+      }
+      if (nProduct) {
+        const hay = normalizeVN(`${o.product_name || ''} ${o.product_code || ''} ${o.masp || ''}`)
+        if (!hay.includes(nProduct)) return false
+      }
+      if (nContract) {
+        const hay = normalizeVN(`${o.contract_no || ''} ${o.contract_type || ''}`)
+        if (!hay.includes(nContract)) return false
+      }
+      if (nCbsStaff) {
+        const hay = normalizeVN(`${o.cbs_staff || ''} ${o.partner || ''}`)
+        if (!hay.includes(nCbsStaff)) return false
+      }
+
+      if (minPrice != null && Number.isFinite(minPrice)) {
+        if (Number(o.price_vat || 0) < minPrice) return false
+      }
+      if (maxPrice != null && Number.isFinite(maxPrice)) {
+        if (Number(o.price_vat || 0) > maxPrice) return false
+      }
+
+      if (nSeller) {
+        const hay = normalizeVN(
+          `${o.claimed_by_name || ''} ${o.claimed_by_username || ''} ${o.claimed_by_territory || ''}`
+        )
+        if (!hay.includes(nSeller)) return false
+      }
+
+      if (f.sellerStatus !== 'all') {
+        if (f.sellerStatus === 'unclaimed') {
+          if (o.claimed_by) return false
+        } else if (f.sellerStatus === 'pending') {
+          if (o.claim_status !== 'pending') return false
+        } else if (f.sellerStatus === 'approved') {
+          if (o.claim_status !== 'approved') return false
+        }
+      }
+
+      return true
+    })
+  }, [resp, columnFilters])
+
+  const hasActiveColumnFilter = useMemo(() => {
+    const f = columnFilters
+    return !!(
+      f.dateFrom ||
+      f.dateTo ||
+      f.customer ||
+      f.product ||
+      f.contract ||
+      f.cbsStaff ||
+      f.priceMin ||
+      f.priceMax ||
+      f.seller ||
+      f.sellerStatus !== 'all'
+    )
+  }, [columnFilters])
+
+  const updateFilter = <K extends keyof ColumnFilters>(key: K, value: ColumnFilters[K]) => {
+    setColumnFilters((prev) => ({ ...prev, [key]: value }))
+  }
+  const clearColumnFilters = () => setColumnFilters(EMPTY_COL_FILTERS)
 
   const setBusy = (id: string, on: boolean) => {
     setBusyIds((prev) => {
@@ -458,6 +606,17 @@ export default function CbsRevenuePage() {
                 className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-primary-500"
               />
             </div>
+            {hasActiveColumnFilter && (
+              <button
+                type="button"
+                onClick={clearColumnFilters}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 border border-gray-300 bg-white hover:bg-gray-50 px-3 py-2 rounded-lg whitespace-nowrap"
+                title="Xoá tất cả bộ lọc theo cột"
+              >
+                <FilterX className="w-3.5 h-3.5" />
+                Xoá bộ lọc cột
+              </button>
+            )}
           </div>
 
           {/* Table */}
@@ -477,9 +636,19 @@ export default function CbsRevenuePage() {
                 )}
               </div>
             ) : (
+              <>
+                {hasActiveColumnFilter && (
+                  <div className="px-3 py-2 text-xs text-gray-600 border-b border-gray-100 bg-amber-50/60">
+                    Đang lọc <strong className="text-gray-900">{filteredData.length}</strong>/
+                    {resp.data.length} đơn theo cột.
+                    {filteredData.length === 0 && (
+                      <span className="ml-2 text-red-600">Không có dòng nào khớp bộ lọc.</span>
+                    )}
+                  </div>
+                )}
               <div
                 className="overflow-auto"
-                style={{ maxHeight: 'calc(100vh - 340px)', minHeight: '360px' }}
+                style={{ maxHeight: 'calc(100vh - 380px)', minHeight: '320px' }}
               >
                 <table className="min-w-[1200px] w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
@@ -495,9 +664,112 @@ export default function CbsRevenuePage() {
                       </th>
                       <th className="px-3 py-3 text-center whitespace-nowrap">Xem</th>
                     </tr>
+                    {/* Hàng filter theo cột (client-side) */}
+                    <tr className="bg-white border-t border-gray-100">
+                      <th className="px-2 py-1.5 align-top">
+                        <div className="flex flex-col gap-1">
+                          <input
+                            type="date"
+                            value={columnFilters.dateFrom}
+                            onChange={(e) => updateFilter('dateFrom', e.target.value)}
+                            title="Từ ngày"
+                            className="w-full text-[11px] border border-gray-200 rounded px-1.5 py-1 focus:ring-1 focus:ring-primary-500 font-normal normal-case"
+                          />
+                          <input
+                            type="date"
+                            value={columnFilters.dateTo}
+                            onChange={(e) => updateFilter('dateTo', e.target.value)}
+                            title="Đến ngày"
+                            className="w-full text-[11px] border border-gray-200 rounded px-1.5 py-1 focus:ring-1 focus:ring-primary-500 font-normal normal-case"
+                          />
+                        </div>
+                      </th>
+                      <th className="px-2 py-1.5 align-top">
+                        <input
+                          type="search"
+                          value={columnFilters.customer}
+                          onChange={(e) => updateFilter('customer', e.target.value)}
+                          placeholder="Tên / TCCN / Mã KH..."
+                          className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-primary-500 font-normal normal-case"
+                        />
+                      </th>
+                      <th className="px-2 py-1.5 align-top">
+                        <input
+                          type="search"
+                          value={columnFilters.product}
+                          onChange={(e) => updateFilter('product', e.target.value)}
+                          placeholder="Tên / mã sản phẩm..."
+                          className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-primary-500 font-normal normal-case"
+                        />
+                      </th>
+                      <th className="px-2 py-1.5 align-top">
+                        <input
+                          type="search"
+                          value={columnFilters.contract}
+                          onChange={(e) => updateFilter('contract', e.target.value)}
+                          placeholder="Số / loại HĐ..."
+                          className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-primary-500 font-normal normal-case"
+                        />
+                      </th>
+                      <th className="px-2 py-1.5 align-top">
+                        <input
+                          type="search"
+                          value={columnFilters.cbsStaff}
+                          onChange={(e) => updateFilter('cbsStaff', e.target.value)}
+                          placeholder="NV CBS / partner..."
+                          className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-primary-500 font-normal normal-case"
+                        />
+                      </th>
+                      <th className="px-2 py-1.5 align-top">
+                        <div className="flex flex-col gap-1">
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            min={0}
+                            value={columnFilters.priceMin}
+                            onChange={(e) => updateFilter('priceMin', e.target.value)}
+                            placeholder="≥ min"
+                            className="w-full text-[11px] text-right tabular-nums border border-gray-200 rounded px-1.5 py-1 focus:ring-1 focus:ring-primary-500 font-normal normal-case"
+                          />
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            min={0}
+                            value={columnFilters.priceMax}
+                            onChange={(e) => updateFilter('priceMax', e.target.value)}
+                            placeholder="≤ max"
+                            className="w-full text-[11px] text-right tabular-nums border border-gray-200 rounded px-1.5 py-1 focus:ring-1 focus:ring-primary-500 font-normal normal-case"
+                          />
+                        </div>
+                      </th>
+                      <th className="px-2 py-1.5 align-top">
+                        <div className="flex flex-col gap-1">
+                          <input
+                            type="search"
+                            value={columnFilters.seller}
+                            onChange={(e) => updateFilter('seller', e.target.value)}
+                            placeholder="Tên người bán..."
+                            className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-primary-500 font-normal normal-case"
+                          />
+                          <select
+                            value={columnFilters.sellerStatus}
+                            onChange={(e) =>
+                              updateFilter('sellerStatus', e.target.value as SellerStatusFilter)
+                            }
+                            className="w-full text-xs border border-gray-200 rounded px-1.5 py-1 bg-white focus:ring-1 focus:ring-primary-500 font-normal normal-case"
+                          >
+                            <option value="all">Trạng thái: tất cả</option>
+                            <option value="unclaimed">Chưa có người bán</option>
+                            <option value="pending">Chờ duyệt</option>
+                            <option value="approved">Đã duyệt</option>
+                          </select>
+                        </div>
+                      </th>
+                      <th className="px-2 py-1.5" />
+                    </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {resp.data.map((o) => {
+                    {filteredData.map((o) => {
                       const busy = busyIds.has(o.id)
                       return (
                         <tr
@@ -595,6 +867,7 @@ export default function CbsRevenuePage() {
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </div>
 
