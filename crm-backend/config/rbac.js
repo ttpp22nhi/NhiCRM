@@ -27,7 +27,7 @@ export const TRANSFER_APPROVER_ROLES = ['manager', 'director', 'admin', 'super_a
 /** Ai được tạo nhân viên mới (đăng ký / import Excel) — không gồm Leader/Sales */
 export const EMPLOYEE_CREATOR_ROLES = ['admin', 'super_admin', 'director', 'manager']
 
-/** Vai trò được gán khi người tạo là Giám đốc / Quản lý (không phải Admin tenant) */
+/** Vai trò được gán khi người tạo là Lãnh đạo / Quản lý (không phải Admin tenant) */
 export const EMPLOYEE_TARGET_ROLES_FOR_EXECUTIVE = ['leader', 'sales']
 
 /** Vai trò được gán khi người tạo là Admin / Super Admin trong tenant */

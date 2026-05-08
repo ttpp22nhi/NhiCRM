@@ -45,7 +45,7 @@ export default function EmployeesPage() {
               </div>
               <p className="text-xs sm:text-sm text-gray-600 mt-1">
                 {canManageEmployees
-                  ? 'Thêm nhân viên (Giám đốc/Quản lý: Tổ trưởng hoặc Sales); chỉnh sửa chi tiết: Admin'
+                  ? 'Thêm nhân viên (Lãnh đạo/Quản lý: Tổ trưởng hoặc Sales); chỉnh sửa chi tiết: Admin'
                   : 'Xem danh sách nhân viên (theo phạm vi tenant)'}
               </p>
             </div>

@@ -180,6 +180,23 @@ function afterPromoteSideEffects(tenantId, orderPeriod, promotionInfo, actorUser
 
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/
 
+/**
+ * Parse last_sync_message từ cbsRevenueSyncService:
+ * "Đồng bộ CBS (kỳ YYYY-MM): nhận X, thêm A, cập nhật U."
+ */
+function parseCbsLastSyncBatch(message) {
+  if (!message || typeof message !== 'string') return null
+  const periodMatch = message.match(/kỳ\s+(\d{4}-(?:0[1-9]|1[0-2]))/i)
+  const numsMatch = message.match(/nhận\s+(\d+)\s*,\s*thêm\s+(\d+)\s*,\s*cập nhật\s+(\d+)/i)
+  if (!numsMatch) return null
+  return {
+    period_ym: periodMatch ? periodMatch[1] : null,
+    received: parseInt(numsMatch[1], 10),
+    inserted: parseInt(numsMatch[2], 10),
+    updated: parseInt(numsMatch[3], 10),
+  }
+}
+
 // Sales chỉ được tự claim (pending). Các role khác (admin/director/manager/leader)
 // có quyền gán người bán và duyệt claim.
 function canApproveClaim(role) {
@@ -454,6 +471,7 @@ export async function listCbsOrders(req, res) {
       data: r.rows,
       summary: agg,
       last_sync: cfg.rows[0] || null,
+      last_sync_batch: parseCbsLastSyncBatch(cfg.rows[0]?.last_sync_message),
     })
   } catch (err) {
     console.error('listCbsOrders:', err)
@@ -792,13 +810,19 @@ export async function syncNow(req, res) {
   try {
     const role = String(req.user?.role || '').toLowerCase()
     if (!isExecutiveRole(role)) {
-      return res.status(403).json({ success: false, message: 'Chỉ Admin / Giám đốc / Quản lý mới chạy đồng bộ.' })
+      return res.status(403).json({ success: false, message: 'Chỉ Admin / Lãnh đạo / Quản lý mới chạy đồng bộ.' })
     }
     const tenantId = getTenantId(req)
-    const result = await syncTenant(tenantId)
+    const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/
+    const raw = req.body?.period ?? req.query?.period
+    const period =
+      raw != null && PERIOD_RE.test(String(raw).trim()) ? String(raw).trim() : undefined
+    const result = await syncTenant(tenantId, period ? { period } : {})
+    const rm = Number(result.removed_orphans) || 0
+    const extra = rm > 0 ? ` Đã gỡ ${rm} đơn thừa (chưa duyệt, không còn trong CBS).` : ''
     return res.json({
       success: true,
-      message: `Đồng bộ CBS xong: nhận ${result.total} đơn, thêm ${result.inserted}, cập nhật ${result.updated}.`,
+      message: `Đồng bộ CBS xong: kỳ ${result.synced_for_period ?? period ?? 'hiện tại'}, nhận ${result.total} đơn, thêm ${result.inserted}, cập nhật ${result.updated}.${extra}`,
       data: result,
     })
   } catch (err) {

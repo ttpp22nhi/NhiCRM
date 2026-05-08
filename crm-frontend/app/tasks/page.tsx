@@ -35,6 +35,7 @@ import Link from 'next/link'
 interface Task {
   task_id: string
   title: string
+  description?: string | null
   display_code?: string
   parent_display_code?: string
   related_type?: string
@@ -61,6 +62,7 @@ export default function TasksPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('list')
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
   const [assignedToFilter, setAssignedToFilter] = useState<string>('')
+  const [relatedFilter, setRelatedFilter] = useState<string>('') // '' | 'DEAL' | 'CUSTOMER' | 'CBS_ORDER' | 'NONE'
   const [employees, setEmployees] = useState<any[]>([])
   const [completingTaskId, setCompletingTaskId] = useState<string | null>(null)
   const [showCreateTaskModal, setShowCreateTaskModal] = useState(false)
@@ -71,7 +73,7 @@ export default function TasksPage() {
   useEffect(() => {
     fetchTasks()
     if (user) fetchEmployees()
-  }, [user, assignedToFilter, refreshKey])
+  }, [user, assignedToFilter, relatedFilter, refreshKey])
 
   useEffect(() => {
     // Kiểm tra task sắp đến hạn (trong 30 phút)
@@ -110,6 +112,9 @@ export default function TasksPage() {
       if (assignedToFilter) {
         params.assigned_to = assignedToFilter
       }
+      if (relatedFilter) {
+        params.related_type = relatedFilter
+      }
 
       const response = await apiClient.get('/api/tasks', { params })
 
@@ -138,10 +143,8 @@ export default function TasksPage() {
   }
 
   const handleCompleteTask = (task: Task) => {
-    if (!task.customer_id) {
-      toast.error('Task này không liên kết với khách hàng, không thể hoàn thành.')
-      return
-    }
+    // Cho phép hoàn thành mọi loại task: task có khách (DEAL/CUSTOMER) sẽ tạo interaction;
+    // task CBS_ORDER hoặc task độc lập sẽ chỉ ghi note (backend xử lý nhánh phù hợp).
     setCompletingTaskId(task.task_id)
   }
 
@@ -272,7 +275,7 @@ export default function TasksPage() {
           {/* Filters and View Toggle */}
           <div className="bg-white rounded-lg shadow p-4 mb-6">
             <div className="flex flex-col sm:flex-row gap-4 items-center justify-between">
-              <div className="flex items-center gap-4 flex-1">
+              <div className="flex items-center gap-4 flex-1 flex-wrap">
                 {(user?.role === 'admin' || user?.role === 'manager') && (
                   <div className="flex items-center gap-2">
                     <Filter className="w-5 h-5 text-gray-400" />
@@ -290,6 +293,21 @@ export default function TasksPage() {
                     </select>
                   </div>
                 )}
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-gray-500">Nguồn:</span>
+                  <select
+                    value={relatedFilter}
+                    onChange={(e) => setRelatedFilter(e.target.value)}
+                    className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500 bg-white"
+                    title="Lọc theo nguồn gốc của công việc"
+                  >
+                    <option value="">Tất cả nguồn</option>
+                    <option value="DEAL">Việc của Cơ hội</option>
+                    <option value="CBS_ORDER">Việc của Đơn CBS</option>
+                    <option value="CUSTOMER">Việc của Khách hàng</option>
+                    <option value="NONE">Việc độc lập</option>
+                  </select>
+                </div>
               </div>
 
               <div className="flex items-center gap-2">
@@ -344,9 +362,31 @@ export default function TasksPage() {
                     >
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex-1">
-                          {task.display_code && (
-                            <span className="text-xs font-medium text-gray-500 block mb-1">{task.display_code}</span>
-                          )}
+                          <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+                            {task.display_code && (
+                              <span className="text-xs font-medium text-gray-500">{task.display_code}</span>
+                            )}
+                            {task.related_type === 'DEAL' && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-700">
+                                Cơ hội
+                              </span>
+                            )}
+                            {task.related_type === 'CBS_ORDER' && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 text-emerald-700">
+                                Đơn CBS
+                              </span>
+                            )}
+                            {task.related_type === 'CUSTOMER' && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700">
+                                Khách hàng
+                              </span>
+                            )}
+                            {!task.related_type && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-600">
+                                Độc lập
+                              </span>
+                            )}
+                          </div>
                           <h3
                             className={`font-semibold text-gray-900 mb-2 ${
                               task.is_completed ? 'line-through' : ''
@@ -354,6 +394,11 @@ export default function TasksPage() {
                           >
                             {task.title}
                           </h3>
+                          {task.description && String(task.description).trim() && (
+                            <p className="text-xs text-gray-600 mb-2 line-clamp-3 whitespace-pre-wrap break-words">
+                              {String(task.description).trim()}
+                            </p>
+                          )}
                           {task.customer_full_name && (
                             <div className="flex items-center gap-2 text-sm text-gray-600 mb-1">
                               <User className="w-4 h-4" />

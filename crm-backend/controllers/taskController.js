@@ -7,12 +7,62 @@ import { getAssignableEmployeeIds } from '../services/assignableEmployeesService
 import { buildScopeCondition } from '../services/scopeService.js'
 import { syncKpiForInteraction } from '../services/kpiFromDealsSyncService.js'
 
+const MAX_TASK_DESCRIPTION_LEN = 4000
+
+function normalizeTaskDescription(v) {
+  if (v == null || v === '') return null
+  const s = String(v).trim()
+  if (!s) return null
+  return s.length > MAX_TASK_DESCRIPTION_LEN ? s.slice(0, MAX_TASK_DESCRIPTION_LEN) : s
+}
+
+/**
+ * Ghi nhật ký vào timeline của Deal khi user thao tác task gắn deal.
+ * (Không chặn luồng nếu lỗi.)
+ */
+async function logDealActivityForTask({ tenantId, userId, dealId, dealStage, taskId, content }) {
+  if (!tenantId || !dealId || !taskId || !content) return
+  try {
+    await pool.query(
+      `INSERT INTO deal_activities (id, deal_id, stage, content, type, created_by, tenant_id, created_at, task_id)
+       VALUES ($1, $2, $3, $4, 'system', $5, $6, $7, $8)`,
+      [uuidv4(), dealId, dealStage || null, content, userId || null, tenantId, Date.now(), taskId]
+    )
+  } catch (err) {
+    if (err?.code !== '42P01' && err?.code !== '42703') {
+      console.error('logDealActivityForTask:', err)
+    }
+  }
+}
+
+/**
+ * Ghi 1 activity vào timeline của Task (đối với mọi task, không chỉ task của deal).
+ */
+async function logTaskActivity({ tenantId, taskId, userId, content, type = 'system' }) {
+  if (!tenantId || !taskId || !content) return
+  try {
+    await pool.query(
+      `INSERT INTO task_activities (id, task_id, content, type, created_by, tenant_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [uuidv4(), taskId, content, type, userId || null, tenantId, Date.now()]
+    )
+  } catch (err) {
+    if (err?.code !== '42P01' && err?.code !== '42703') {
+      console.error('logTaskActivity:', err)
+    }
+  }
+}
+
 /**
  * Lấy danh sách tasks — theo phân cấp (tenant + director/manager/leader/sales)
+ * Hỗ trợ filter:
+ *   - assigned_to: lọc theo nhân viên được giao
+ *   - related_type: 'DEAL' | 'CUSTOMER' | 'CBS_ORDER' | 'NONE' (NONE = task độc lập)
+ *   - related_id:   khi cần lọc đúng 1 thực thể
  */
 export const getTasks = async (req, res) => {
   const { role, id: userId } = req.user
-  const { assigned_to: assignedToFilter } = req.query
+  const { assigned_to: assignedToFilter, related_type: relatedTypeFilter, related_id: relatedIdFilter } = req.query
   const tenantId = getTenantId(req)
 
   try {
@@ -27,16 +77,36 @@ export const getTasks = async (req, res) => {
         c.phone as customer_phone,
         c.customer_id,
         e.full_name as assigned_employee_name,
-        e.username as assigned_employee_username
+        e.username as assigned_employee_username,
+        d.deal_id  as linked_deal_id,
+        d.title    as linked_deal_title,
+        d.display_code as linked_deal_display_code,
+        d.is_deleted   as linked_deal_is_deleted
       FROM tasks t
       LEFT JOIN customers c ON t.customer_id = c.customer_id AND c.deleted_at IS NULL AND c.tenant_id = t.tenant_id
       LEFT JOIN employees e ON t.assigned_to = e.employee_id
+      LEFT JOIN deals     d ON t.related_type = 'DEAL' AND t.related_id = d.deal_id AND d.tenant_id = t.tenant_id
       WHERE t.tenant_id = $1 AND (${scopeClause})
     `
 
     if (assignedToFilter) {
       query += ` AND t.assigned_to = $${paramIndex++}`
       params.push(assignedToFilter)
+    }
+
+    if (relatedTypeFilter) {
+      const rt = String(relatedTypeFilter).toUpperCase()
+      if (rt === 'NONE') {
+        query += ` AND t.related_type IS NULL`
+      } else if (['DEAL', 'CUSTOMER', 'CBS_ORDER'].includes(rt)) {
+        query += ` AND t.related_type = $${paramIndex++}`
+        params.push(rt)
+      }
+    }
+
+    if (relatedIdFilter) {
+      query += ` AND t.related_id = $${paramIndex++}`
+      params.push(String(relatedIdFilter))
     }
 
     query += ' ORDER BY t.due_date ASC NULLS LAST, t.created_at DESC'
@@ -63,7 +133,18 @@ const taskSelectFields = `
   c.phone as customer_phone,
   c.customer_id,
   e.full_name as assigned_employee_name,
-  e.username as assigned_employee_username
+  e.username as assigned_employee_username,
+  d.deal_id  as linked_deal_id,
+  d.title    as linked_deal_title,
+  d.display_code as linked_deal_display_code,
+  d.is_deleted   as linked_deal_is_deleted
+`
+
+const taskSelectFromJoin = `
+  FROM tasks t
+  LEFT JOIN customers c ON t.customer_id = c.customer_id AND c.deleted_at IS NULL AND c.tenant_id = t.tenant_id
+  LEFT JOIN employees e ON t.assigned_to = e.employee_id
+  LEFT JOIN deals     d ON t.related_type = 'DEAL' AND t.related_id = d.deal_id AND d.tenant_id = t.tenant_id
 `
 
 /**
@@ -81,9 +162,7 @@ export const getTaskById = async (req, res) => {
 
     const query = `
       SELECT ${taskSelectFields}
-      FROM tasks t
-      LEFT JOIN customers c ON t.customer_id = c.customer_id AND c.deleted_at IS NULL AND c.tenant_id = t.tenant_id
-      LEFT JOIN employees e ON t.assigned_to = e.employee_id
+      ${taskSelectFromJoin}
       WHERE t.tenant_id = $1 AND (${scopeClause}) AND t.task_id = $${taskIdParamIndex}
     `
     const result = await pool.query(query, params)
@@ -121,9 +200,7 @@ export const getTaskByDisplayCode = async (req, res) => {
 
     const query = `
       SELECT ${taskSelectFields}
-      FROM tasks t
-      LEFT JOIN customers c ON t.customer_id = c.customer_id AND c.deleted_at IS NULL AND c.tenant_id = t.tenant_id
-      LEFT JOIN employees e ON t.assigned_to = e.employee_id
+      ${taskSelectFromJoin}
       WHERE t.tenant_id = $1 AND (${scopeClause}) AND t.display_code = $${codeParamIndex}
     `
     const result = await pool.query(query, params)
@@ -142,7 +219,7 @@ export const getTaskByDisplayCode = async (req, res) => {
  */
 export const createTask = async (req, res) => {
   const { role, id: userId } = req.user
-  const { customer_id, title, due_date, priority, assigned_to, related_type, related_id } = req.body
+  const { customer_id, title, due_date, priority, assigned_to, related_type, related_id, description } = req.body
   const tenantId = getTenantId(req)
 
   try {
@@ -184,30 +261,43 @@ export const createTask = async (req, res) => {
     const task_id = uuidv4()
     const now = Date.now()
     const finalDueDate = due_date ? parseInt(due_date) : null
-    const finalRelatedType = (related_type === 'DEAL' || related_type === 'CUSTOMER') ? related_type : null
+    const allowedTypes = ['DEAL', 'CUSTOMER', 'CBS_ORDER']
+    const finalRelatedType = allowedTypes.includes(related_type) ? related_type : null
     const finalRelatedId = (finalRelatedType && related_id) ? String(related_id).trim() : null
 
     let parentDisplayCode = null
+    let dealRow = null
     if (finalRelatedType === 'DEAL' && finalRelatedId) {
-      const dealRow = await pool.query(
-        'SELECT display_code FROM deals WHERE deal_id = $1 AND tenant_id = $2',
+      const r = await pool.query(
+        'SELECT deal_id, display_code, customer_id, stage, is_deleted FROM deals WHERE deal_id = $1 AND tenant_id = $2',
         [finalRelatedId, tenantId]
       )
-      if (dealRow.rows.length > 0 && dealRow.rows[0].display_code) {
-        parentDisplayCode = dealRow.rows[0].display_code
+      if (r.rows.length === 0 || r.rows[0].is_deleted) {
+        return res.status(404).json({ success: false, message: 'Cơ hội (Deal) không tồn tại hoặc đã bị xoá.' })
       }
+      dealRow = r.rows[0]
+      parentDisplayCode = dealRow.display_code || null
     }
 
     const displayCode = await generateDisplayCode('TSK', tenantId)
 
+    // Khi task gắn DEAL: nếu request không truyền customer_id → tự lấy customer_id của deal
+    // (đảm bảo task luôn khớp khách hàng của deal).
+    let finalCustomerId = customer_id || null
+    if (finalRelatedType === 'DEAL' && dealRow && !finalCustomerId) {
+      finalCustomerId = dealRow.customer_id || null
+    }
+
+    const finalDescription = normalizeTaskDescription(description)
+
     const insertQuery = `
       INSERT INTO tasks (
-        task_id, customer_id, title, due_date, priority, is_completed, created_at, assigned_to, tenant_id, related_type, related_id, display_code, parent_display_code
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        task_id, customer_id, title, description, due_date, priority, is_completed, created_at, assigned_to, tenant_id, related_type, related_id, display_code, parent_display_code
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING *
     `
     const values = [
-      task_id, customer_id || null, title, finalDueDate, priority || 'medium', false, now, finalAssignedTo, tenantId,
+      task_id, finalCustomerId, title, finalDescription, finalDueDate, priority || 'medium', false, now, finalAssignedTo, tenantId,
       finalRelatedType, finalRelatedId, displayCode, parentDisplayCode
     ]
 
@@ -215,6 +305,15 @@ export const createTask = async (req, res) => {
 
     if (finalRelatedType === 'DEAL' && finalRelatedId) {
       updateDealTaskMetadata(finalRelatedId, tenantId).catch((e) => console.error('updateDealTaskMetadata:', e))
+      // Ghi vào timeline cơ hội: ai tạo task, mã, tiêu đề.
+      logDealActivityForTask({
+        tenantId,
+        userId,
+        dealId: finalRelatedId,
+        dealStage: dealRow?.stage,
+        taskId: task_id,
+        content: `[${displayCode}] Đã tạo công việc mới: "${title}".`,
+      })
     }
 
     if (finalAssignedTo && finalAssignedTo !== userId) {
@@ -237,7 +336,6 @@ export const createTask = async (req, res) => {
         )
       } catch (notifError) {
         console.error('Lỗi tạo thông báo:', notifError)
-        // Không throw error, chỉ log
       }
     }
 
@@ -258,22 +356,20 @@ export const createTask = async (req, res) => {
 
 /**
  * Cập nhật task (chủ yếu để đánh dấu hoàn thành)
- * Khi hoàn thành, tự động tạo interaction
+ *
+ * Quy tắc khi `is_completed=true`:
+ *  - Task gắn DEAL/CUSTOMER có customer_id → tạo interaction + cộng `actual_approach_count`.
+ *  - Task gắn CBS_ORDER (không có customer_id): KHÔNG tạo interaction, chỉ ghi task_activity
+ *    để đồng bộ trạng thái (vì đơn CBS đã có duyệt riêng).
+ *  - Task độc lập không có khách hàng: cho phép hoàn thành (không ghi interaction).
  */
 export const updateTask = async (req, res) => {
-  // Log request để debug
-  console.log('=== updateTask Request ===')
-  console.log('Params:', req.params)
-  console.log('Body:', req.body)
-  console.log('User:', req.user)
-  
   const { id } = req.params
   const { role, id: userId } = req.user || {}
-  const { is_completed, completion_content, title, due_date, priority, assigned_to, customer_id: bodyCustomerId } = req.body || {}
+  const { is_completed, completion_content, title, due_date, priority, assigned_to, customer_id: bodyCustomerId, description: bodyDescription } = req.body || {}
   const tenantId = getTenantId(req)
 
   if (!req.user || !userId) {
-    console.error('Lỗi: req.user không tồn tại hoặc không có userId')
     return res.status(401).json({
       success: false,
       message: 'Không xác thực được người dùng.',
@@ -295,12 +391,11 @@ export const updateTask = async (req, res) => {
 
     const task = taskResult.rows[0]
 
-    // Kiểm tra quyền: Sales chỉ sửa task của mình
+    // Sales chỉ sửa task của mình
     if (role === 'sales' && task.assigned_to !== userId) {
       return res.status(403).json({
         success: false,
-        message: 'Bạn không có quyền sửa task này.',
-        error: `Sales chỉ có thể sửa task được gán cho mình. Task này được gán cho employee_id: ${task.assigned_to}, nhưng bạn là: ${userId}`
+        message: 'Bạn không có quyền sửa task này.'
       })
     }
 
@@ -321,8 +416,10 @@ export const updateTask = async (req, res) => {
       }
     }
 
-    // Rule: Task từ Deal — không cho đổi khách hàng trên task; phải đổi trên Deal.
     const isFromDeal = task.related_type === 'DEAL' && task.related_id
+    const isFromCbs  = task.related_type === 'CBS_ORDER' && task.related_id
+
+    // Task từ DEAL không cho đổi customer trên task; phải đổi tại Deal.
     if (isFromDeal && bodyCustomerId !== undefined) {
       const normalizedBody = bodyCustomerId == null ? null : String(bodyCustomerId).trim() || null
       const currentCustomer = task.customer_id || null
@@ -330,13 +427,12 @@ export const updateTask = async (req, res) => {
         return res.status(400).json({
           success: false,
           message: 'Task này thuộc cơ hội (Deal). Để đổi khách hàng, vui lòng chỉnh tại Cơ hội tương ứng.',
-          error: 'customer_id cannot be changed on a task linked to a deal'
         })
       }
     }
 
-    // Rule: Task độc lập — cho phép cập nhật customer_id (validate tồn tại, cùng tenant, chưa xóa).
-    if (!isFromDeal && bodyCustomerId !== undefined) {
+    // Task độc lập (không gắn deal/cbs) — cho phép cập nhật customer_id (validate tồn tại).
+    if (!isFromDeal && !isFromCbs && bodyCustomerId !== undefined) {
       const newCustomerId = bodyCustomerId == null || bodyCustomerId === '' ? null : String(bodyCustomerId).trim()
       if (newCustomerId) {
         const customerCheck = await pool.query(
@@ -347,71 +443,74 @@ export const updateTask = async (req, res) => {
           return res.status(400).json({
             success: false,
             message: 'Khách hàng không tồn tại hoặc đã bị xóa.',
-            error: 'customer_id invalid or deleted'
           })
         }
       }
     }
 
-    // Nếu đánh dấu hoàn thành và có completion_content
+    // Đánh dấu hoàn thành + có nội dung kết quả
     if (is_completed === true && completion_content) {
-      // Kiểm tra customer_id có tồn tại không
-      if (!task.customer_id) {
-        return res.status(400).json({
-          success: false,
-          message: 'Task này không liên kết với khách hàng, không thể tạo interaction.',
-          error: `Task ${id} không có customer_id. Để hoàn thành task với kết quả, task phải được liên kết với một khách hàng.`
+      if (isFromCbs) {
+        // CBS task: không tạo interaction, không cộng KPI, chỉ ghi task_activity và để
+        // người duyệt CBS đối chiếu thủ công.
+        await logTaskActivity({
+          tenantId,
+          taskId: id,
+          userId,
+          content: `Hoàn thành: ${completion_content}`,
+          type: 'note',
         })
-      }
+      } else if (task.customer_id) {
+        const customerCheck = await pool.query(
+          'SELECT customer_id FROM public.customers WHERE customer_id = $1 AND tenant_id = $2 AND deleted_at IS NULL',
+          [task.customer_id, tenantId]
+        )
+        if (customerCheck.rows.length === 0) {
+          return res.status(400).json({
+            success: false,
+            message: 'Khách hàng liên kết với task này không tồn tại hoặc đã bị xóa.',
+          })
+        }
 
-      // Kiểm tra customer có tồn tại và chưa bị xóa không
-      const customerCheck = await pool.query(
-        'SELECT customer_id FROM public.customers WHERE customer_id = $1 AND tenant_id = $2 AND deleted_at IS NULL',
-        [task.customer_id, tenantId]
-      )
-      
-      if (customerCheck.rows.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'Khách hàng liên kết với task này không tồn tại hoặc đã bị xóa.',
-          error: `Customer với ID ${task.customer_id} không tồn tại hoặc đã bị xóa (soft delete).`
-        })
-      }
-
-      // Tạo interaction từ completion_content
-      try {
-        const interactionId = uuidv4()
-        const now = Date.now()
-
-        const interactionQuery = `
-          INSERT INTO public.interactions (
-            interaction_id, customer_id, interaction_type, content,
-            interaction_date, employee_id, status, tenant_id, created_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-          RETURNING *
-        `
-        await pool.query(interactionQuery, [
-          interactionId, task.customer_id, 'other', `[Hoàn thành Task] ${completion_content}`,
-          now, userId, 'success', tenantId, now
-        ])
-        // Cập nhật actual_approach_count cho kỳ tương ứng (fire-and-forget).
-        syncKpiForInteraction(tenantId, userId, now).catch((e) => {
-          if (e?.code !== '42P01' && e?.code !== '42703') {
-            console.error('syncKpiForInteraction (taskComplete):', e)
-          }
-        })
-      } catch (interactionError) {
-        console.error('Lỗi khi tạo interaction:', interactionError)
-        return res.status(500).json({
-          success: false,
-          message: 'Lỗi khi tạo interaction từ kết quả công việc.',
-          error: interactionError.message,
-          details: 'Không thể lưu kết quả công việc vào lịch sử tương tác. Vui lòng thử lại.'
+        try {
+          const interactionId = uuidv4()
+          const now = Date.now()
+          await pool.query(
+            `INSERT INTO public.interactions (
+              interaction_id, customer_id, interaction_type, content,
+              interaction_date, employee_id, status, tenant_id, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [
+              interactionId, task.customer_id, 'other', `[Hoàn thành Task] ${completion_content}`,
+              now, userId, 'success', tenantId, now
+            ]
+          )
+          syncKpiForInteraction(tenantId, userId, now).catch((e) => {
+            if (e?.code !== '42P01' && e?.code !== '42703') {
+              console.error('syncKpiForInteraction (taskComplete):', e)
+            }
+          })
+        } catch (interactionError) {
+          console.error('Lỗi khi tạo interaction:', interactionError)
+          return res.status(500).json({
+            success: false,
+            message: 'Lỗi khi tạo interaction từ kết quả công việc.',
+            error: interactionError.message,
+          })
+        }
+      } else {
+        // Task độc lập, không có khách → chỉ ghi note vào timeline task.
+        await logTaskActivity({
+          tenantId,
+          taskId: id,
+          userId,
+          content: `Hoàn thành: ${completion_content}`,
+          type: 'note',
         })
       }
     }
 
-    // Cập nhật task
+    // Cập nhật các trường
     const updateFields = []
     const updateValues = []
     let paramIndex = 1
@@ -441,28 +540,22 @@ export const updateTask = async (req, res) => {
       updateValues.push(assigned_to)
     }
 
-    // Chỉ task không từ Deal mới được cập nhật customer_id (đã validate ở trên).
-    if (!isFromDeal && bodyCustomerId !== undefined) {
+    if (bodyDescription !== undefined) {
+      updateFields.push(`description = $${paramIndex++}`)
+      updateValues.push(normalizeTaskDescription(bodyDescription))
+    }
+
+    // Chỉ task không từ Deal/CBS mới được cập nhật customer_id (đã validate ở trên).
+    if (!isFromDeal && !isFromCbs && bodyCustomerId !== undefined) {
       const newCustomerId = bodyCustomerId == null || bodyCustomerId === '' ? null : String(bodyCustomerId).trim()
       updateFields.push(`customer_id = $${paramIndex++}`)
       updateValues.push(newCustomerId)
     }
 
     if (updateFields.length === 0) {
-      console.log('Không có trường nào để cập nhật. Body:', req.body)
       return res.status(400).json({
         success: false,
         message: 'Không có trường nào để cập nhật.',
-        error: 'Tất cả các trường trong request đều undefined hoặc null.',
-        receivedBody: req.body,
-        debug: {
-          is_completed,
-          completion_content,
-          title,
-          due_date,
-          priority,
-          customer_id: bodyCustomerId
-        }
       })
     }
 
@@ -473,26 +566,41 @@ export const updateTask = async (req, res) => {
       WHERE task_id = $${paramIndex} AND tenant_id = $${paramIndex + 1}
       RETURNING *
     `
-
-    console.log('Update query:', updateQuery)
-    console.log('Update values:', updateValues)
-    console.log('Task ID:', id)
-
     const result = await pool.query(updateQuery, updateValues)
-    
-    console.log('Update result:', result.rows.length > 0 ? 'Success' : 'No rows updated')
-
     if (result.rows.length === 0) {
       return res.status(500).json({
         success: false,
         message: 'Cập nhật task thất bại.',
-        error: 'Không có dòng nào được cập nhật. Có thể task đã bị xóa hoặc có lỗi trong quá trình cập nhật.'
       })
     }
 
     const updated = result.rows[0]
     if (updated.related_type === 'DEAL' && updated.related_id) {
       updateDealTaskMetadata(updated.related_id, tenantId).catch((e) => console.error('updateDealTaskMetadata:', e))
+
+      // Ghi vào timeline deal khi task chuyển trạng thái hoàn thành.
+      if (is_completed === true && task.is_completed !== true) {
+        const summary = completion_content
+          ? `[${updated.display_code}] Đã hoàn thành: ${completion_content}`
+          : `[${updated.display_code}] Đã hoàn thành công việc "${updated.title}".`
+        logDealActivityForTask({
+          tenantId,
+          userId,
+          dealId: updated.related_id,
+          dealStage: null,
+          taskId: updated.task_id,
+          content: summary,
+        })
+      } else if (is_completed === false && task.is_completed === true) {
+        logDealActivityForTask({
+          tenantId,
+          userId,
+          dealId: updated.related_id,
+          dealStage: null,
+          taskId: updated.task_id,
+          content: `[${updated.display_code}] Đã mở lại công việc "${updated.title}".`,
+        })
+      }
     }
 
     res.json({
@@ -502,35 +610,16 @@ export const updateTask = async (req, res) => {
     })
   } catch (error) {
     console.error('Lỗi updateTask:', error)
-    console.error('Chi tiết lỗi:', {
-      taskId: id,
-      userId,
-      role,
-      body: req.body,
-      stack: error.stack
-    })
-    
-    // Kiểm tra loại lỗi cụ thể
     let errorMessage = 'Lỗi hệ thống khi cập nhật task.'
     let statusCode = 500
-    
-    if (error.code === '23505') { // Unique violation
-      errorMessage = 'Dữ liệu trùng lặp. Vui lòng kiểm tra lại.'
-      statusCode = 400
-    } else if (error.code === '23503') { // Foreign key violation
-      errorMessage = 'Dữ liệu tham chiếu không hợp lệ.'
-      statusCode = 400
-    } else if (error.code === '42P01') { // Table does not exist
-      errorMessage = 'Bảng không tồn tại trong database.'
-      statusCode = 500
-    }
-    
+    if (error.code === '23505') { errorMessage = 'Dữ liệu trùng lặp. Vui lòng kiểm tra lại.'; statusCode = 400 }
+    else if (error.code === '23503') { errorMessage = 'Dữ liệu tham chiếu không hợp lệ.'; statusCode = 400 }
+    else if (error.code === '42P01') { errorMessage = 'Bảng không tồn tại trong database.'; statusCode = 500 }
     res.status(statusCode).json({
       success: false,
       message: errorMessage,
       error: error.message,
       errorCode: error.code,
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     })
   }
 }
@@ -554,11 +643,21 @@ export const deleteTask = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền xóa task này.' })
     }
     const dealIdForMeta = task.related_type === 'DEAL' && task.related_id ? task.related_id : null
+    const taskDisplayCode = task.display_code
+    const taskTitle = task.title
 
     await pool.query('DELETE FROM tasks WHERE task_id = $1 AND tenant_id = $2', [id, tenantId])
 
     if (dealIdForMeta) {
       updateDealTaskMetadata(dealIdForMeta, tenantId).catch((e) => console.error('updateDealTaskMetadata:', e))
+      logDealActivityForTask({
+        tenantId,
+        userId,
+        dealId: dealIdForMeta,
+        dealStage: null,
+        taskId: id,
+        content: `[${taskDisplayCode || id}] Đã xoá công việc "${taskTitle}".`,
+      })
     }
 
     res.json({
@@ -574,4 +673,3 @@ export const deleteTask = async (req, res) => {
     })
   }
 }
-

@@ -124,7 +124,7 @@ export default function PermissionsPage() {
     const map: Record<string, string> = {
       super_admin: 'Super Admin',
       admin: 'Admin',
-      director: 'Giám đốc',
+      director: 'Lãnh đạo',
       manager: 'Quản lý',
       leader: 'Tổ trưởng',
       sales: 'Sales'

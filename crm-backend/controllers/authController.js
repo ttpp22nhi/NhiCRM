@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
 import pool from '../database.js';
 import { getTenantId } from '../utils/tenantHelper.js';
-import { getAssignableEmployees } from '../services/assignableEmployeesService.js';
+import { getAssignableEmployees, getManagerSubtreeDepartmentIds } from '../services/assignableEmployeesService.js';
 import { SQL_EMPLOYEE_USERNAME_EQUALS } from '../utils/usernameSql.js';
 import {
   hasRole,
@@ -16,10 +16,10 @@ import {
 const VALID_ROLES_FOR_UPDATE = ['super_admin', 'admin', 'director', 'manager', 'leader', 'sales'];
 
 /**
- * Đăng ký nhân viên mới (Admin / Super Admin / Giám đốc / Quản lý — giới hạn vai trò theo rbac).
+ * Đăng ký nhân viên mới (Admin / Super Admin / Lãnh đạo / Quản lý — giới hạn vai trò theo rbac).
  */
 export const register = async (req, res) => {
-  const { username, password, full_name, email, role, department_id, title, rank, territory } = req.body;
+  const { username, password, full_name, email, phone, role, department_id, title, rank, territory } = req.body;
 
   try {
     const tenantId = getTenantId(req);
@@ -94,13 +94,15 @@ export const register = async (req, res) => {
 
     // 5. Lưu vào Database (gán tenant_id để Data Isolation)
     const territoryTrim = territory != null && String(territory).trim() !== '' ? String(territory).trim() : null;
+    const phoneTrim =
+      phone != null && String(phone).trim() !== '' ? String(phone).trim().slice(0, 30) : null;
     const query = `
-      INSERT INTO employees (employee_id, username, password_hash, full_name, email, role, department_id, title, rank, territory, tenant_id, is_active, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-      RETURNING employee_id, username, full_name, email, role, department_id, title, rank, territory;
+      INSERT INTO employees (employee_id, username, password_hash, full_name, email, phone, role, department_id, title, rank, territory, tenant_id, is_active, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      RETURNING employee_id, username, full_name, email, phone, role, department_id, title, rank, territory;
     `;
     const values = [
-      employee_id, usernameTrim, password_hash, full_name, email, finalRole,
+      employee_id, usernameTrim, password_hash, full_name, email, phoneTrim, finalRole,
       department_id || null, title || null, rank || null, territoryTrim, tenantId, true, created_at
     ];
 
@@ -259,17 +261,21 @@ export const login = async (req, res) => {
 };
 
 /**
- * Lấy danh sách nhân viên (Chỉ Admin; chỉ nhân viên cùng tenant)
+ * Lấy danh sách nhân viên (executive). Admin / Lãnh đạo: toàn tenant; Quản lý: chỉ nhánh đơn vị.
  */
 export const getEmployees = async (req, res) => {
   const tenantId = getTenantId(req);
+  const userId = req.user?.id;
+  const roleNorm = String(req.user?.role || '').toLowerCase();
+
   try {
-    const query = `
+    let query = `
       SELECT 
         e.employee_id,
         e.username,
         e.full_name,
         e.email,
+        e.phone,
         e.role,
         e.department_id,
         e.title,
@@ -282,9 +288,23 @@ export const getEmployees = async (req, res) => {
       FROM employees e
       LEFT JOIN departments d ON e.department_id = d.id AND d.tenant_id = e.tenant_id
       WHERE e.tenant_id = $1
-      ORDER BY e.created_at DESC
     `;
-    const result = await pool.query(query, [tenantId]);
+    const params = [tenantId];
+
+    if (roleNorm === 'manager') {
+      const deptIds = await getManagerSubtreeDepartmentIds(tenantId, userId);
+      if (deptIds.length === 0) {
+        query += ` AND e.employee_id = $2`;
+        params.push(userId);
+      } else {
+        query += ` AND (e.department_id = ANY($2::varchar[]) OR e.employee_id = $3)`;
+        params.push(deptIds, userId);
+      }
+    }
+
+    query += ` ORDER BY e.created_at DESC`;
+
+    const result = await pool.query(query, params);
 
     res.json({
       success: true,
@@ -307,15 +327,16 @@ export const getSalesEmployees = async (req, res) => {
   const { id: userId } = req.user;
 
   try {
-    console.log('getSalesEmployees - userId:', userId);
-    
     const tenantId = getTenantId(req);
-    const query = `
+    const roleNorm = String(req.user?.role || '').toLowerCase();
+
+    let query = `
       SELECT 
         employee_id,
         username,
         full_name,
         email,
+        phone,
         role,
         is_active
       FROM employees
@@ -323,9 +344,25 @@ export const getSalesEmployees = async (req, res) => {
         AND role = 'sales'
         AND is_active = true
         AND employee_id != $2
-      ORDER BY full_name ASC
     `;
-    const result = await pool.query(query, [tenantId, userId]);
+    const params = [tenantId, userId];
+
+    if (roleNorm === 'manager') {
+      const deptIds = await getManagerSubtreeDepartmentIds(tenantId, userId);
+      if (deptIds.length === 0) {
+        return res.json({
+          success: true,
+          data: [],
+          count: 0
+        });
+      }
+      query += ` AND department_id = ANY($3::varchar[])`;
+      params.push(deptIds);
+    }
+
+    query += ` ORDER BY full_name ASC`;
+
+    const result = await pool.query(query, params);
     console.log('getSalesEmployees - result:', result.rows.length, 'employees found');
 
     res.json({
@@ -338,7 +375,7 @@ export const getSalesEmployees = async (req, res) => {
     console.error('Error details:', {
       message: error.message,
       stack: error.stack,
-      userId
+      userId: req.user?.id
     });
     res.status(500).json({ 
       success: false, 
@@ -354,6 +391,8 @@ export const getSalesEmployees = async (req, res) => {
 export const getEmployeeById = async (req, res) => {
   const { id } = req.params;
   const tenantId = getTenantId(req);
+  const userId = req.user?.id;
+  const roleNorm = String(req.user?.role || '').toLowerCase();
 
   try {
     const query = `
@@ -362,6 +401,7 @@ export const getEmployeeById = async (req, res) => {
         e.username,
         e.full_name,
         e.email,
+        e.phone,
         e.role,
         e.department_id,
         e.title,
@@ -384,9 +424,24 @@ export const getEmployeeById = async (req, res) => {
       });
     }
 
+    const row = result.rows[0];
+    if (roleNorm === 'manager' && row.employee_id !== userId) {
+      const deptIds = await getManagerSubtreeDepartmentIds(tenantId, userId);
+      const ok =
+        deptIds.length > 0 &&
+        row.department_id &&
+        deptIds.includes(row.department_id);
+      if (!ok) {
+        return res.status(404).json({
+          success: false,
+          message: 'Không tìm thấy nhân viên.'
+        });
+      }
+    }
+
     res.json({
       success: true,
-      data: result.rows[0]
+      data: row
     });
   } catch (error) {
     console.error('Lỗi getEmployeeById:', error);
@@ -583,7 +638,7 @@ export const changePassword = async (req, res) => {
  */
 export const updateEmployee = async (req, res) => {
   const { id } = req.params;
-  const { full_name, email, role, is_active, department_id, title, rank, territory } = req.body;
+  const { full_name, email, phone, role, is_active, department_id, title, rank, territory } = req.body;
   const tenantId = getTenantId(req);
 
   try {
@@ -653,12 +708,17 @@ export const updateEmployee = async (req, res) => {
       const t = territory != null && String(territory).trim() !== '' ? String(territory).trim() : null;
       values.push(t);
     }
+    if (phone !== undefined) {
+      updates.push(`phone = $${idx++}`);
+      const p = phone != null && String(phone).trim() !== '' ? String(phone).trim().slice(0, 30) : null;
+      values.push(p);
+    }
     values.push(id, tenantId);
     const updateQuery = `
       UPDATE employees 
       SET ${updates.join(', ')}
       WHERE employee_id = $${idx++} AND tenant_id = $${idx}
-      RETURNING employee_id, username, full_name, email, role, department_id, title, rank, territory, is_active, created_at;
+      RETURNING employee_id, username, full_name, email, phone, role, department_id, title, rank, territory, is_active, created_at;
     `;
     const result = await pool.query(updateQuery, values);
 
@@ -673,6 +733,142 @@ export const updateEmployee = async (req, res) => {
       success: false, 
       message: 'Lỗi hệ thống khi cập nhật thông tin nhân viên.' 
     });
+  }
+};
+
+/**
+ * Xóa vĩnh viễn nhân viên trong tenant (chỉ Super Admin).
+ * Gỡ tham chiếu trước khi xóa bản ghi employees (không có FK cứng nhưng giữ dữ liệu nhất quán).
+ */
+export const deleteEmployee = async (req, res) => {
+  const { id } = req.params;
+  const tenantId = getTenantId(req);
+  const callerId = req.user?.id;
+
+  if (req.user?.role !== 'super_admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Chỉ Super Admin mới có quyền xóa nhân viên.',
+    });
+  }
+
+  if (!id || String(id).trim() === '' || id === callerId) {
+    return res.status(400).json({
+      success: false,
+      message: 'Không thể xóa tài khoản của chính bạn hoặc mã nhân viên không hợp lệ.',
+    });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const empRes = await client.query(
+      `SELECT employee_id, username, full_name, role FROM employees WHERE employee_id = $1 AND tenant_id = $2`,
+      [id, tenantId]
+    );
+    if (empRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Không tìm thấy nhân viên.' });
+    }
+    const targetRole = String(empRes.rows[0].role || '').toLowerCase();
+    if (targetRole === 'super_admin') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        message: 'Không được xóa tài khoản Super Admin.',
+      });
+    }
+
+    await client.query(`DELETE FROM notifications WHERE tenant_id = $1 AND employee_id = $2`, [
+      tenantId,
+      id,
+    ]);
+    await client.query(`DELETE FROM kpis WHERE tenant_id = $1 AND user_id = $2`, [tenantId, id]);
+    await client.query(`DELETE FROM activities WHERE tenant_id = $1 AND employee_id = $2`, [
+      tenantId,
+      id,
+    ]);
+
+    await client.query(
+      `DELETE FROM transfer_approval_logs tal
+       USING transfer_requests tr
+       WHERE tal.transfer_request_id = tr.transfer_request_id
+         AND tr.tenant_id = $1
+         AND (tr.sender_id = $2 OR tr.receiver_id = $2 OR tr.approved_by = $2 OR tal.approver_id = $2)`,
+      [tenantId, id]
+    );
+    await client.query(
+      `DELETE FROM transfer_requests WHERE tenant_id = $1 AND (sender_id = $2 OR receiver_id = $2 OR approved_by = $2)`,
+      [tenantId, id]
+    );
+
+    await client.query(
+      `UPDATE customers SET assigned_to = NULL WHERE tenant_id = $1 AND assigned_to = $2`,
+      [tenantId, id]
+    );
+    await client.query(
+      `UPDATE deals SET assigned_to = NULL WHERE tenant_id = $1 AND assigned_to = $2`,
+      [tenantId, id]
+    );
+    await client.query(
+      `UPDATE tasks SET assigned_to = NULL WHERE tenant_id = $1 AND assigned_to = $2`,
+      [tenantId, id]
+    );
+    await client.query(
+      `UPDATE interactions SET employee_id = NULL WHERE tenant_id = $1 AND employee_id = $2`,
+      [tenantId, id]
+    );
+
+    await client.query(
+      `UPDATE deal_activities SET created_by = NULL WHERE tenant_id = $1 AND created_by = $2`,
+      [tenantId, id]
+    );
+    await client.query(
+      `UPDATE deal_attachments SET uploaded_by = NULL WHERE tenant_id = $1 AND uploaded_by = $2`,
+      [tenantId, id]
+    );
+    await client.query(
+      `UPDATE task_activities SET created_by = NULL WHERE tenant_id = $1 AND created_by = $2`,
+      [tenantId, id]
+    );
+
+    await client.query(
+      `UPDATE cbs_revenue_orders
+       SET claimed_by = NULL, approved_by = NULL
+       WHERE tenant_id = $1 AND (claimed_by = $2 OR approved_by = $2)`,
+      [tenantId, id]
+    );
+    await client.query(
+      `UPDATE cbs_config SET updated_by = NULL WHERE tenant_id = $1 AND updated_by = $2`,
+      [tenantId, id]
+    );
+
+    const del = await client.query(
+      `DELETE FROM employees WHERE employee_id = $1 AND tenant_id = $2
+       RETURNING employee_id, username, full_name`,
+      [id, tenantId]
+    );
+
+    await client.query('COMMIT');
+    return res.json({
+      success: true,
+      message: 'Đã xóa nhân viên.',
+      data: del.rows[0],
+    });
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch (_) {
+      /* ignore */
+    }
+    console.error('Lỗi deleteEmployee:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Lỗi hệ thống khi xóa nhân viên.',
+    });
+  } finally {
+    client.release();
   }
 };
 

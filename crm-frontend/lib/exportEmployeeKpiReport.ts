@@ -48,7 +48,7 @@ function formatRole(role: string) {
     case 'super_admin':
       return 'Super Admin'
     case 'director':
-      return 'Giám đốc'
+      return 'Lãnh đạo'
     case 'manager':
       return 'Quản lý'
     case 'leader':

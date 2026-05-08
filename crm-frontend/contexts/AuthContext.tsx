@@ -21,6 +21,8 @@ interface RegisterOptions {
   rank?: string
   /** Địa bàn phụ trách (text tự do) */
   territory?: string
+  /** Số điện thoại (tùy chọn) */
+  phone?: string
 }
 
 interface AuthContextType {
@@ -125,7 +127,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         department_id: options?.department_id || undefined,
         title: options?.title || undefined,
         rank: options?.rank || undefined,
-        territory: options?.territory || undefined
+        territory: options?.territory || undefined,
+        phone: options?.phone || undefined
       })
 
       if (!response.data.success) {

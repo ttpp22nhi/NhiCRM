@@ -8,6 +8,8 @@ import toast from 'react-hot-toast'
 export interface TaskForForm {
   task_id: string
   title: string
+  /** Nội dung chi tiết / ghi chú (khác kết quả khi hoàn thành) */
+  description?: string | null
   display_code?: string
   customer_id?: string
   due_date?: number
@@ -26,6 +28,14 @@ interface CreateTaskModalProps {
   userRole?: string
   /** Khi có task = chế độ sửa (PATCH), không có = tạo mới (POST) */
   task?: TaskForForm | null
+  /** Khi mở từ trang Cơ hội: prefill related_type=DEAL + related_id, ẩn ô khách (dùng KH của deal) */
+  presetDeal?: {
+    deal_id: string
+    display_code?: string
+    customer_id?: string | null
+    customer_name?: string | null
+    assigned_to?: string | null
+  } | null
 }
 
 const PRIORITY_OPTIONS = [
@@ -47,23 +57,26 @@ function toDatetimeLocal(ts?: number | null): string {
   return `${y}-${m}-${day}T${h}:${min}`
 }
 
-export function CreateTaskModal({ onClose, onSuccess, employees, userRole, task }: CreateTaskModalProps) {
+export function CreateTaskModal({ onClose, onSuccess, employees, userRole, task, presetDeal }: CreateTaskModalProps) {
   const isEdit = !!task
   const isFromDeal = !!(task?.related_type === 'DEAL' && task?.related_id)
+  const isCreateForDeal = !isEdit && !!presetDeal?.deal_id
   const [loading, setLoading] = useState(false)
   const [customers, setCustomers] = useState<{ customer_id: string; full_name?: string; phone?: string }[]>([])
   const [formData, setFormData] = useState({
     title: task?.title ?? '',
-    customer_id: task?.customer_id ?? '',
+    description: task?.description ?? '',
+    customer_id: task?.customer_id ?? presetDeal?.customer_id ?? '',
     due_date: toDatetimeLocal(task?.due_date),
     priority: task?.priority ?? 'medium',
-    assigned_to: task?.assigned_to ?? ''
+    assigned_to: task?.assigned_to ?? presetDeal?.assigned_to ?? ''
   })
 
   useEffect(() => {
     if (task) {
       setFormData({
         title: task.title ?? '',
+        description: task.description ?? '',
         customer_id: task.customer_id ?? '',
         due_date: toDatetimeLocal(task.due_date),
         priority: task.priority ?? 'medium',
@@ -96,8 +109,10 @@ export function CreateTaskModal({ onClose, onSuccess, employees, userRole, task 
 
     setLoading(true)
     try {
+      const descTrim = formData.description.trim()
       const payload: Record<string, unknown> = {
         title,
+        description: descTrim || undefined,
         priority: formData.priority,
         customer_id: formData.customer_id || undefined,
         assigned_to: formData.assigned_to || undefined
@@ -109,6 +124,7 @@ export function CreateTaskModal({ onClose, onSuccess, employees, userRole, task 
       if (isEdit && task) {
         const patchPayload: Record<string, unknown> = {
           title: payload.title,
+          description: descTrim || null,
           due_date: payload.due_date,
           priority: payload.priority
         }
@@ -124,6 +140,12 @@ export function CreateTaskModal({ onClose, onSuccess, employees, userRole, task 
           toast.error(res.data.message || 'Cập nhật công việc thất bại.')
         }
       } else {
+        if (presetDeal?.deal_id) {
+          payload.related_type = 'DEAL'
+          payload.related_id = presetDeal.deal_id
+          // KH của deal được backend tự gắn cho task khi không truyền customer_id
+          delete payload.customer_id
+        }
         const res = await apiClient.post('/api/tasks', payload)
         if (res.data.success) {
           toast.success('Tạo công việc thành công!')
@@ -144,7 +166,7 @@ export function CreateTaskModal({ onClose, onSuccess, employees, userRole, task 
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between p-4 border-b border-gray-200">
           <h2 className="text-lg font-bold text-gray-900">{isEdit ? 'Sửa công việc' : 'Thêm công việc'}</h2>
           <button
@@ -178,6 +200,33 @@ export function CreateTaskModal({ onClose, onSuccess, employees, userRole, task 
           </div>
 
           <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nội dung</label>
+            <textarea
+              rows={4}
+              value={formData.description}
+              onChange={(e) => setFormData((prev) => ({ ...prev, description: e.target.value }))}
+              placeholder="Ghi chi tiết công việc cần làm, nội dung cần xác nhận với khách, ghi chú nội bộ..."
+              maxLength={4000}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0074BD] focus:border-transparent resize-y min-h-[5rem] text-sm"
+            />
+            <p className="text-xs text-gray-400 mt-1 text-right">{formData.description.length} / 4000</p>
+          </div>
+
+          {isCreateForDeal && (
+            <div className="px-3 py-2.5 border border-blue-200 bg-blue-50 rounded-lg text-sm text-blue-800">
+              <p className="font-medium">
+                Tạo công việc cho cơ hội {presetDeal?.display_code || presetDeal?.deal_id}
+              </p>
+              {presetDeal?.customer_name && (
+                <p className="text-blue-700">Khách hàng: {presetDeal.customer_name}</p>
+              )}
+              <p className="text-xs text-blue-700/80 mt-1">
+                Khách hàng & liên kết Deal sẽ được hệ thống tự gắn theo cơ hội này.
+              </p>
+            </div>
+          )}
+
+          <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Khách hàng</label>
             {isFromDeal ? (
               <div className="px-3 py-2.5 border border-amber-200 bg-amber-50 rounded-lg text-sm text-amber-800 space-y-1.5">
@@ -198,6 +247,10 @@ export function CreateTaskModal({ onClose, onSuccess, employees, userRole, task 
                     Mở Cơ hội
                   </button>
                 )}
+              </div>
+            ) : isCreateForDeal ? (
+              <div className="px-3 py-2 border border-gray-200 bg-gray-50 rounded-lg text-sm text-gray-700">
+                {presetDeal?.customer_name || '— Khách của Cơ hội —'}
               </div>
             ) : (
               <select

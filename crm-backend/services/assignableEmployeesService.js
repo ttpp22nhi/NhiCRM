@@ -1,14 +1,40 @@
 /**
  * Danh sách nhân viên được phép gán (Assigned To) theo phân cấp:
- * - director: toàn bộ nhân viên trong Tenant
- * - manager: chính mình + tất cả leader và sales thuộc department_path (cây đơn vị)
- * - leader: chính mình + tất cả sales thuộc team (cùng đơn vị current_node)
+ * - director / admin / super_admin: toàn bộ nhân viên trong Tenant
+ * - manager: chính mình + leader và sales thuộc nhánh đơn vị (path)
+ * - leader: chính mình + sales cùng đơn vị (current_node)
  * - sales: chỉ chính mình
  */
 
 import pool from '../database.js'
 
-const ADMIN_LIKE_ROLES = ['super_admin', 'admin', 'director', 'manager']
+/** Toàn tenant: chỉ admin / super_admin / director — không gồm manager (quản lý theo nhánh tổ chức). */
+const ADMIN_LIKE_ROLES = ['super_admin', 'admin', 'director']
+
+/**
+ * Danh sách department_id thuộc nhánh tổ chức của Quản lý (đơn vị hiện tại + mọi đơn vị con).
+ * @returns {Promise<string[]>} Rỗng nếu user không có department_id.
+ */
+export async function getManagerSubtreeDepartmentIds(tenantId, userId) {
+  const userRow = await pool.query(
+    'SELECT department_id FROM employees WHERE employee_id = $1 AND tenant_id = $2',
+    [userId, tenantId]
+  )
+  if (!userRow.rows.length || !userRow.rows[0].department_id) {
+    return []
+  }
+  const deptId = userRow.rows[0].department_id
+  const pathRow = await pool.query(
+    'SELECT path FROM departments WHERE id = $1 AND tenant_id = $2',
+    [deptId, tenantId]
+  )
+  const myPath = pathRow.rows[0]?.path || `${tenantId}/${deptId}`
+  const sub = await pool.query(
+    `SELECT id FROM departments WHERE tenant_id = $1 AND (path LIKE $2 OR id = $3)`,
+    [tenantId, `${myPath}/%`, deptId]
+  )
+  return (sub.rows || []).map((r) => r.id)
+}
 
 /**
  * Lấy danh sách employee_id được phép gán cho user (để validate 403)
@@ -24,24 +50,7 @@ export async function getAssignableEmployeeIds(tenantId, userId, role) {
     return (r.rows || []).map((row) => row.employee_id)
   }
   if (roleNorm === 'manager') {
-    const userRow = await pool.query(
-      'SELECT department_id FROM employees WHERE employee_id = $1 AND tenant_id = $2',
-      [userId, tenantId]
-    )
-    if (!userRow.rows.length || !userRow.rows[0].department_id) {
-      return [userId]
-    }
-    const deptId = userRow.rows[0].department_id
-    const pathRow = await pool.query(
-      'SELECT path FROM departments WHERE id = $1 AND tenant_id = $2',
-      [deptId, tenantId]
-    )
-    const myPath = pathRow.rows[0]?.path || `${tenantId}/${deptId}`
-    const sub = await pool.query(
-      `SELECT id FROM departments WHERE tenant_id = $1 AND (path LIKE $2 OR id = $3)`,
-      [tenantId, `${myPath}/%`, deptId]
-    )
-    const deptIds = sub.rows.map((r) => r.id)
+    const deptIds = await getManagerSubtreeDepartmentIds(tenantId, userId)
     if (deptIds.length === 0) return [userId]
     const placeholders = deptIds.map((_, i) => `$${i + 1}`).join(', ')
     const emp = await pool.query(
@@ -79,7 +88,7 @@ export async function getAssignableEmployees(tenantId, userId, role) {
   if (ids.length === 0) return []
   const placeholders = ids.map((_, i) => `$${i + 2}`).join(', ')
   const result = await pool.query(
-    `SELECT e.employee_id, e.username, e.full_name, e.email, e.role, e.department_id, e.is_active,
+    `SELECT e.employee_id, e.username, e.full_name, e.email, e.phone, e.role, e.department_id, e.is_active,
       d.name AS department_name
      FROM employees e
      LEFT JOIN departments d ON e.department_id = d.id AND d.tenant_id = e.tenant_id

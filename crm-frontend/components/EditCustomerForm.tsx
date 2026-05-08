@@ -268,7 +268,7 @@ export function EditCustomerForm({ customer, onSuccess, onCancel }: EditCustomer
           <option value="NEW">Khách mới</option>
           <option value="EXISTING">Khách hiện hữu</option>
         </select>
-        <p className="text-xs text-gray-500 mt-1">Khác với &quot;Loại khách hàng&quot; phía trên. Có thể tự động chuyển hiện hữu khi có deal thắng theo quy tắc hệ thống.</p>
+        <p className="text-xs text-gray-500 mt-1">Khác với &quot;Loại khách hàng&quot; phía trên. Tự chuyển hiện hữu từ tháng kế sau tháng có deal thắng hoặc đơn CBS đã duyệt (theo kỳ đóng / duyệt), không đổi ngay trong tháng chốt.</p>
       </div>
 
       {showCompanyFields && (

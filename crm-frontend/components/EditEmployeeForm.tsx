@@ -17,6 +17,7 @@ interface Employee {
   username: string
   full_name: string
   email: string
+  phone?: string | null
   role: string
   is_active: boolean
   department_id?: string
@@ -36,7 +37,7 @@ const ROLE_OPTIONS = [
   { value: 'sales', label: 'Nhân viên bán hàng' },
   { value: 'leader', label: 'Tổ trưởng' },
   { value: 'manager', label: 'Quản lý' },
-  { value: 'director', label: 'Giám đốc' },
+  { value: 'director', label: 'Lãnh đạo' },
   { value: 'admin', label: 'Quản trị viên' }
 ]
 
@@ -45,6 +46,7 @@ export function EditEmployeeForm({ employee, onSuccess, onCancel }: EditEmployee
   const [formData, setFormData] = useState({
     full_name: employee.full_name,
     email: employee.email,
+    phone: employee.phone || '',
     role: employee.role,
     is_active: employee.is_active,
     department_id: (employee.department_id || '') as string,
@@ -71,6 +73,7 @@ export function EditEmployeeForm({ employee, onSuccess, onCancel }: EditEmployee
     setFormData({
       full_name: employee.full_name,
       email: employee.email,
+      phone: employee.phone || '',
       role: employee.role,
       is_active: employee.is_active,
       department_id: employee.department_id || '',
@@ -102,6 +105,7 @@ export function EditEmployeeForm({ employee, onSuccess, onCancel }: EditEmployee
       const payload = {
         full_name: formData.full_name,
         email: formData.email,
+        phone: formData.phone.trim(),
         role: formData.role,
         is_active: formData.is_active,
         department_id: formData.department_id || undefined,
@@ -180,6 +184,24 @@ export function EditEmployeeForm({ employee, onSuccess, onCancel }: EditEmployee
             required
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
             placeholder="Nhập email"
+          />
+        </div>
+
+        <div className="md:col-span-2">
+          <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-2">
+            Số điện thoại
+          </label>
+          <input
+            id="phone"
+            name="phone"
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            value={formData.phone}
+            onChange={handleChange}
+            maxLength={30}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
+            placeholder="VD: 0901234567 (để trống nếu không có)"
           />
         </div>
 

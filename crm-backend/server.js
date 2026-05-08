@@ -2,7 +2,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import { register, login, changePassword, getEmployees, getSalesEmployees, getAssignableEmployeesList, getEmployeeById, resetPassword, updateEmployee, transferCustomers, getTransferStats } from './controllers/authController.js';
+import { register, login, changePassword, getEmployees, getSalesEmployees, getAssignableEmployeesList, getEmployeeById, resetPassword, updateEmployee, deleteEmployee, transferCustomers, getTransferStats } from './controllers/authController.js';
 import { downloadEmployeeImportTemplate, importEmployeesFromExcel } from './controllers/employeeImportController.js';
 import { uploadEmployeeImportExcel } from './middleware/uploadEmployeeImport.js';
 import { verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, verifyExecutive, verifyStrictAdmin, verifySuperAdmin, verifyEmployeeCreator } from './middleware/auth.js';
@@ -433,6 +433,8 @@ app.get('/api/employees/:id', verifyToken, extractTenant, requireTenant, checkTe
  */
 app.put('/api/employees/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, updateEmployee);
 
+app.delete('/api/employees/:id', verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifySuperAdmin, deleteEmployee);
+
 /**
  * @swagger
  * /api/employees/{id}/reset-password:
@@ -814,7 +816,7 @@ app.get('/api/reports/task-activity-log', verifyToken, extractTenant, requireTen
 /** Thông tin gói dịch vụ tenant (end_date, expired, days_remaining) cho UI banner/disable nút */
 app.get('/api/tenant/subscription', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getMySubscription);
 
-/** KPI hàng tháng: xem (Sales: của mình; Giám đốc/Quản lý/Admin: toàn bộ Sales) — giao chỉ tiêu qua PUT */
+/** KPI hàng tháng: xem (Sales: của mình; Lãnh đạo/Quản lý/Admin: toàn bộ Sales) — giao chỉ tiêu qua PUT */
 app.get('/api/kpis', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getKpis);
 app.put('/api/kpis', verifyToken, extractTenant, requireTenant, checkTenantSubscription, upsertKpis);
 

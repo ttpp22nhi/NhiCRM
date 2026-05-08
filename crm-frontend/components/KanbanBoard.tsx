@@ -36,6 +36,7 @@ export interface Deal {
   quantity?: number | null
   invoice_info?: string | null
   notes?: string | null
+  description?: string | null
   metadata?: { task_total?: number; task_completed?: number }
   display_code?: string | null
   deal_category?: 'MASS' | 'PROJECT' | string | null

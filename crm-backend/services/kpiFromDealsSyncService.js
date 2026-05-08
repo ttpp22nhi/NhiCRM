@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid'
 import pool from '../database.js'
+import { isKpiPeriodActualsLocked } from '../utils/kpiPeriodLock.js'
 
 /**
  * Đồng bộ KPI actuals từ Deals + CBS Orders và đếm actual_approach_count từ
@@ -11,8 +12,9 @@ import pool from '../database.js'
  *     KHÔNG cộng CBS order đó vào actual nữa.
  *   - Ngược lại (CBS không có deal_id) → cộng CBS vào actual theo kpi_kind_at_approve
  *     (fallback: suy từ kpi_customer_kind của customer; cuối cùng fallback 'NEW').
- *   - Deal thắng luôn được cộng theo kpi_customer_kind của customer tại thời điểm
- *     tính (vì Deal là nguồn nội bộ CRM, không snapshot).
+ *   - Deal thắng: phân nhóm theo kpi_customer_kind tại thời điểm tính.
+ *   - Kỳ đã chốt (sau ngày 05 VN tháng kế sau kỳ): không ghi đè actuals → báo cáo
+ *     quý/năm cộng dồn từng tháng không tự thay đổi ngược.
  *
  * Phân loại approach (Tiếp cận thực hiện):
  *   - Lấy trực tiếp từ bảng DEALS: mỗi deal mà sale (assigned_to) tạo trong kỳ
@@ -68,7 +70,12 @@ function dedupePairs(pairs) {
  * thị đúng "0 VNĐ" thay vì rỗng.
  */
 export async function recomputeKpiActuals(tenantId, userId, period) {
+  if (isKpiPeriodActualsLocked(period)) return
+
   // (1) Doanh thu từ Deal thắng — phân loại theo kpi_customer_kind của customer.
+  //     Đồng thời tính số lượng sản phẩm bán ra tách theo loại KH:
+  //     SUM(COALESCE(quantity, 1)) group by NEW/EXISTING — mỗi deal tối thiểu
+  //     = 1 sản phẩm (cùng mã bán cho 5 khách = 5).
   const dealsRes = await pool.query(
     `SELECT
        COALESCE(SUM(
@@ -82,7 +89,19 @@ export async function recomputeKpiActuals(tenantId, userId, period) {
            WHEN UPPER(TRIM(COALESCE(c.kpi_customer_kind, 'NEW'))) = 'EXISTING' THEN d.amount
            ELSE 0
          END
-       ), 0) AS actual_existing
+       ), 0) AS actual_existing,
+       COALESCE(SUM(
+         CASE
+           WHEN UPPER(TRIM(COALESCE(c.kpi_customer_kind, 'NEW'))) = 'EXISTING' THEN 0
+           ELSE COALESCE(d.quantity, 1)
+         END
+       ), 0) AS product_new,
+       COALESCE(SUM(
+         CASE
+           WHEN UPPER(TRIM(COALESCE(c.kpi_customer_kind, 'NEW'))) = 'EXISTING' THEN COALESCE(d.quantity, 1)
+           ELSE 0
+         END
+       ), 0) AS product_existing
      FROM deals d
      LEFT JOIN customers c
        ON c.customer_id = d.customer_id AND c.tenant_id = d.tenant_id AND c.deleted_at IS NULL
@@ -96,6 +115,8 @@ export async function recomputeKpiActuals(tenantId, userId, period) {
   const dealRow = dealsRes.rows[0] || {}
   let actualNew = toMoney(dealRow.actual_new)
   let actualExisting = toMoney(dealRow.actual_existing)
+  let productCountNew = Math.max(0, Math.floor(Number(dealRow.product_new) || 0))
+  let productCountExisting = Math.max(0, Math.floor(Number(dealRow.product_existing) || 0))
 
   // (2) Doanh thu từ CBS Orders đã duyệt NHƯNG KHÔNG có deal_id (avoid double-count).
   //     Ưu tiên kpi_kind_at_approve (snapshot); fallback customers.kpi_customer_kind;
@@ -142,6 +163,33 @@ export async function recomputeKpiActuals(tenantId, userId, period) {
     const cbsRow = cbsRes.rows[0] || {}
     actualNew = toMoney(actualNew + toMoney(cbsRow.actual_new))
     actualExisting = toMoney(actualExisting + toMoney(cbsRow.actual_existing))
+
+    // Mỗi CBS order đã duyệt (không có deal_id) = 1 sản phẩm bán ra.
+    // Tách theo loại KH: ưu tiên snapshot kpi_kind_at_approve → customers.kpi_customer_kind → 'NEW'.
+    const cbsProductRes = await pool.query(
+      `SELECT
+         SUM(CASE WHEN kind = 'EXISTING' THEN 0 ELSE 1 END)::int AS cnt_new,
+         SUM(CASE WHEN kind = 'EXISTING' THEN 1 ELSE 0 END)::int AS cnt_existing
+       FROM (
+         SELECT UPPER(COALESCE(
+           NULLIF(TRIM(o.kpi_kind_at_approve), ''),
+           NULLIF(TRIM(c.kpi_customer_kind), ''),
+           'NEW'
+         )) AS kind
+         FROM cbs_revenue_orders o
+         LEFT JOIN customers c
+           ON c.customer_id = o.customer_id AND c.tenant_id = o.tenant_id AND c.deleted_at IS NULL
+         WHERE o.tenant_id    = $1
+           AND o.claimed_by   = $2
+           AND o.claim_status = 'approved'
+           AND o.period_ym    = $3
+           AND o.deal_id IS NULL
+       ) s`,
+      [tenantId, userId, period]
+    )
+    const cbsProdRow = cbsProductRes.rows[0] || {}
+    productCountNew += Number(cbsProdRow.cnt_new || 0)
+    productCountExisting += Number(cbsProdRow.cnt_existing || 0)
   } catch (err) {
     if (err?.code !== '42P01' && err?.code !== '42703') {
       console.error('recomputeKpiActuals (cbs):', err)
@@ -176,15 +224,24 @@ export async function recomputeKpiActuals(tenantId, userId, period) {
        id, tenant_id, user_id, period,
        target_revenue_new, target_revenue_existing,
        actual_revenue_new, actual_revenue_existing,
-       approach_count, actual_approach_count, created_at, updated_at
-     ) VALUES ($1, $2, $3, $4, 0, 0, $5, $6, 0, $7, $8, $8)
+       approach_count, actual_approach_count,
+       target_product_count_new, target_product_count_existing,
+       actual_product_count_new, actual_product_count_existing,
+       created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, 0, 0, $5, $6, 0, $7, 0, 0, $8, $9, $10, $10)
      ON CONFLICT (tenant_id, user_id, period)
      DO UPDATE SET
        actual_revenue_new = EXCLUDED.actual_revenue_new,
        actual_revenue_existing = EXCLUDED.actual_revenue_existing,
        actual_approach_count   = EXCLUDED.actual_approach_count,
+       actual_product_count_new      = EXCLUDED.actual_product_count_new,
+       actual_product_count_existing = EXCLUDED.actual_product_count_existing,
        updated_at = EXCLUDED.updated_at`,
-    [uuidv4(), tenantId, userId, period, actualNew, actualExisting, approachCount, now]
+    [
+      uuidv4(), tenantId, userId, period,
+      actualNew, actualExisting, approachCount,
+      productCountNew, productCountExisting, now
+    ]
   )
 }
 
@@ -195,6 +252,7 @@ export async function recomputeKpiActuals(tenantId, userId, period) {
  */
 export async function recomputeKpiApproach(tenantId, userId, period) {
   if (!tenantId || !userId || !period) return
+  if (isKpiPeriodActualsLocked(period)) return
   try {
     const ap = await pool.query(
       `SELECT COUNT(*)::int AS cnt

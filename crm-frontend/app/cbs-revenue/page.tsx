@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
 import { apiClient } from '@/lib/api'
@@ -25,6 +25,7 @@ import {
   Clock,
   Calculator,
   FilterX,
+  Info,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { CbsConfigModal } from '@/components/CbsConfigModal'
@@ -53,6 +54,12 @@ interface ListResp {
     last_synced_at: number | null
     last_sync_status: string | null
     last_sync_message: string | null
+  } | null
+  last_sync_batch?: {
+    period_ym: string | null
+    received: number
+    inserted: number
+    updated: number
   } | null
 }
 
@@ -159,16 +166,36 @@ const EMPTY_COL_FILTERS: ColumnFilters = {
 export default function CbsRevenuePage() {
   const { user } = useAuth()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const canAccess = canAccessCbsRevenue(user?.role)
   const canSync = canSyncCbsRevenue(user?.role)
   const canManage = canManageCbsConfig(user?.role)
   const role = String(user?.role || '').toLowerCase()
   const canAssignSeller = role !== 'sales' // admin/director/manager/leader
 
-  const [period, setPeriod] = useState(defaultPeriod)
+  // Prefill từ URL query (dùng cho deep-link từ KPI tháng):
+  //   ?period=YYYY-MM & seller=<username|full_name> & status=approved|pending|unclaimed
+  const initialPeriod = (() => {
+    const p = searchParams?.get('period') || ''
+    return /^\d{4}-(0[1-9]|1[0-2])$/.test(p) ? p : defaultPeriod()
+  })()
+  const initialSeller = searchParams?.get('seller') || ''
+  const initialStatusParam = String(searchParams?.get('status') || '').toLowerCase()
+  const initialStatus: SellerStatusFilter = (
+    ['all', 'unclaimed', 'pending', 'approved'].includes(initialStatusParam)
+      ? (initialStatusParam as SellerStatusFilter)
+      : 'all'
+  )
+  const hasDeepLink = Boolean(initialSeller) || initialStatusParam === 'approved'
+
+  const [period, setPeriod] = useState(initialPeriod)
   const [owner, setOwner] = useState<OwnerFilter>('all')
   const [q, setQ] = useState('')
-  const [columnFilters, setColumnFilters] = useState<ColumnFilters>(EMPTY_COL_FILTERS)
+  const [columnFilters, setColumnFilters] = useState<ColumnFilters>({
+    ...EMPTY_COL_FILTERS,
+    seller: initialSeller,
+    sellerStatus: initialStatus,
+  })
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [recomputing, setRecomputing] = useState(false)
@@ -417,7 +444,8 @@ export default function CbsRevenuePage() {
     setSyncing(true)
     try {
       const r = await apiClient.post<{ success: boolean; message: string }>(
-        '/api/cbs/sync'
+        '/api/cbs/sync',
+        { period }
       )
       toast.success(r.data.message || 'Đồng bộ CBS thành công.')
       await load()
@@ -433,6 +461,7 @@ export default function CbsRevenuePage() {
 
   const summary = resp?.summary
   const lastSync = resp?.last_sync
+  const lastSyncBatch = resp?.last_sync_batch
 
   const ownerTabs: { id: OwnerFilter; label: string }[] = [
     { id: 'all', label: 'Tất cả' },
@@ -462,8 +491,10 @@ export default function CbsRevenuePage() {
                   Doanh thu CBS
                 </h1>
                 <p className="text-sm text-gray-600">
-                  Đồng bộ định kỳ 06:00 và 18:00 (giờ VN). Sales tích đơn của mình
-                  ở trạng thái <strong>chờ duyệt</strong>; quản lý xác nhận người bán.
+                  Đồng bộ định kỳ 06:00 và 18:00 (giờ VN) theo <strong>tháng hiện tại</strong>. Nút{' '}
+                  <strong>Đồng bộ ngay</strong> lấy đúng <strong>Kỳ</strong> bạn chọn ở ô tháng bên cạnh (ví dụ
+                  tháng 4). Sales tích đơn của mình ở trạng thái <strong>chờ duyệt</strong>; quản lý xác nhận
+                  người bán.
                 </p>
               </div>
             </div>
@@ -525,7 +556,11 @@ export default function CbsRevenuePage() {
               canAssignSeller ? 'md:grid-cols-6' : 'md:grid-cols-5'
             }`}
           >
-            <Card label="Tổng đơn" value={summary?.total ?? 0} />
+            <Card
+              label="Tổng đơn"
+              hint="Số dòng trong CRM có mã kỳ = Kỳ (sau lọc tab / tìm kiếm API)"
+              value={summary?.total ?? 0}
+            />
             <Card
               label="Tổng doanh thu (VAT)"
               value={formatVND(summary?.total_vat ?? 0)}
@@ -578,6 +613,22 @@ export default function CbsRevenuePage() {
               )}
             </div>
           )}
+
+          {lastSyncBatch?.period_ym === period &&
+            typeof summary?.total === 'number' &&
+            lastSyncBatch.received !== summary.total && (
+              <div className="mb-4 flex items-start gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-950">
+                <Info className="w-4 h-4 mt-0.5 flex-shrink-0 text-sky-700" aria-hidden />
+                <div>
+                  <strong>Giải thích số liệu:</strong> mỗi lần đồng bộ, đơn trong kỳ <strong>chưa duyệt</strong>{' '}
+                  mà <em>không</em> còn trong file CBS sẽ được <strong>gỡ</strong> để dữ liệu CRM sát CBS. Nếu{' '}
+                  <strong>Tổng đơn</strong> (<strong>{summary.total}</strong>) vẫn khác{' '}
+                  <strong>{lastSyncBatch.received}</strong> dòng CBS trả về: có thể do <strong>đơn đã duyệt</strong>{' '}
+                  vẫn được giữ (không xóa tự động), hoặc bạn đang dùng tab lọc (Của tôi, …) / ô tìm kiếm — thống kê
+                  trên thẻ đã áp lọc API.
+                </div>
+              </div>
+            )}
 
           {/* Filters */}
           <div className="bg-white rounded-xl shadow border border-gray-200 p-3 mb-3 flex flex-col sm:flex-row gap-3 sm:items-center">
@@ -650,9 +701,10 @@ export default function CbsRevenuePage() {
                 className="overflow-auto"
                 style={{ maxHeight: 'calc(100vh - 380px)', minHeight: '320px' }}
               >
-                <table className="min-w-[1200px] w-full divide-y divide-gray-200">
+                <table className="min-w-[1240px] w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                     <tr className="text-xs font-semibold text-gray-600 uppercase">
+                      <th className="px-2 py-3 text-center whitespace-nowrap w-12">STT</th>
                       <th className="px-3 py-3 text-left whitespace-nowrap">Ngày thu</th>
                       <th className="px-3 py-3 text-left">Khách hàng</th>
                       <th className="px-3 py-3 text-left">Sản phẩm</th>
@@ -666,6 +718,7 @@ export default function CbsRevenuePage() {
                     </tr>
                     {/* Hàng filter theo cột (client-side) */}
                     <tr className="bg-white border-t border-gray-100">
+                      <th className="px-2 py-1.5 align-top" />
                       <th className="px-2 py-1.5 align-top">
                         <div className="flex flex-col gap-1">
                           <input
@@ -769,7 +822,7 @@ export default function CbsRevenuePage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {filteredData.map((o) => {
+                    {filteredData.map((o, idx) => {
                       const busy = busyIds.has(o.id)
                       return (
                         <tr
@@ -777,6 +830,9 @@ export default function CbsRevenuePage() {
                           className="hover:bg-gray-50/80 cursor-pointer"
                           onClick={() => setDetailOrder(o)}
                         >
+                          <td className="px-2 py-2 text-xs text-center tabular-nums text-gray-500 whitespace-nowrap w-12">
+                            {idx + 1}
+                          </td>
                           <td className="px-3 py-2 text-xs text-gray-700 whitespace-nowrap">
                             {formatDateVN(o.payment_date || o.active_date)}
                           </td>
@@ -873,7 +929,7 @@ export default function CbsRevenuePage() {
 
           <p className="mt-4 text-xs text-gray-500">
             Sales tự tích đơn thì đơn ở trạng thái <strong>chờ duyệt</strong>.
-            Admin / Giám đốc / Quản lý / Leader có thể gán trực tiếp người bán
+            Admin / Lãnh đạo / Quản lý / Leader có thể gán trực tiếp người bán
             hoặc duyệt các đơn đang chờ. Dữ liệu được đồng bộ định kỳ bằng tài
             khoản CBS của công ty (Admin đặt tại <strong>Cấu hình CBS</strong>).
           </p>
@@ -1112,11 +1168,13 @@ function Card({
   value,
   tone,
   strong,
+  hint,
 }: {
   label: string
   value: number | string
   tone?: 'primary' | 'success' | 'warn'
   strong?: boolean
+  hint?: string
 }) {
   const toneClass =
     tone === 'primary'
@@ -1138,6 +1196,11 @@ function Card({
       >
         {value}
       </div>
+      {hint ? (
+        <p className="mt-1.5 text-[10px] leading-snug text-gray-500 font-normal normal-case">
+          {hint}
+        </p>
+      ) : null}
     </div>
   )
 }

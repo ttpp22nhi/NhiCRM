@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS public.employees (
   password_hash TEXT NOT NULL,
   full_name VARCHAR(100) NULL,
   email VARCHAR(100) NULL,
+  phone VARCHAR(30) NULL,
   role VARCHAR(20) DEFAULT 'sales' NULL,
   is_active BOOLEAN DEFAULT true NULL,
   created_at INT8 NULL,
@@ -52,6 +53,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS employees_username_tenant_unique ON public.emp
 CREATE UNIQUE INDEX IF NOT EXISTS employees_email_tenant_unique ON public.employees (tenant_id, email) WHERE email IS NOT NULL AND email <> '';
 CREATE INDEX IF NOT EXISTS idx_employees_tenant_id ON public.employees (tenant_id);
 CREATE INDEX IF NOT EXISTS idx_employees_department_id ON public.employees (department_id);
+CREATE INDEX IF NOT EXISTS idx_employees_phone ON public.employees (tenant_id, phone)
+  WHERE phone IS NOT NULL AND TRIM(phone) <> '';
 
 -- ============================================
 -- 3. DEPARTMENTS (create_departments_table + add_tenant_id_multi_tenant + add_path_to_departments)

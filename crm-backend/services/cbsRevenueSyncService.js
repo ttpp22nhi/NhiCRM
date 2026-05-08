@@ -1,19 +1,60 @@
 /**
  * Đồng bộ doanh thu CBS → bảng cbs_revenue_orders.
- *  - syncTenant(tenantId): login CBS bằng cấu hình tenant → fetch báo cáo tháng → upsert theo fingerprint.
- *  - syncAllTenants(): quét mọi cấu hình auto_sync=true.
+ *  - syncTenant(tenantId, { range?, period? }): login CBS → fetch báo cáo theo range hoặc period (YYYY-MM) → upsert theo fingerprint.
+ *  - Sau khi upsert: xóa đơn cùng kỳ có fingerprint không có trong gói CBS (trừ claim_status = approved).
+ *  - syncAllTenants(): quét mọi cấu hình auto_sync=true (luôn dùng tháng hiện tại VN).
  * Lưu ý: CBS yêu cầu đăng nhập lần gọi → đơn giản hoá bằng cách login mỗi lần.
  */
 
 import crypto from 'crypto'
 import { v4 as uuidv4 } from 'uuid'
 import pool from '../database.js'
-import { currentVNMonthRange, fetchMonthlyReport, loginCbs } from './cbsClient.js'
+import { currentVNMonthRange, fetchMonthlyReport, loginCbs, vnMonthRangeFromYyyyMm } from './cbsClient.js'
 import { recomputeKpiActuals } from './kpiFromDealsSyncService.js'
 import { refreshKpiCustomerKindForTenant } from './customerKindRefreshService.js'
 import { createAutoTasksForPendingCbsOrders } from './cbsAutoTaskService.js'
 
 const CBS_TZ_OFFSET_MS = 7 * 60 * 60 * 1000 // Asia/Ho_Chi_Minh = UTC+7
+const PERIOD_YM_RE = /^\d{4}-(0[1-9]|1[0-2])$/
+
+function firstDefined(...vals) {
+  for (const v of vals) {
+    if (v != null && v !== '') return v
+  }
+  return null
+}
+
+/** Chuẩn hoá field CBS (camelCase từ API Mobifone hoặc snake_case nếu có). */
+function normalizeCbsReportItem(raw) {
+  if (!raw || typeof raw !== 'object') return {}
+  const r = raw
+  const g = (a, b) => firstDefined(r[a], r[b])
+
+  return {
+    subStartDate: g('subStartDate', 'sub_start_date'),
+    masp: firstDefined(r.masp, r.MASP),
+    contractNo: g('contractNo', 'contract_no'),
+    contractType: g('contractType', 'contract_type'),
+    vat: g('vat', 'vat'),
+    staff: g('staff', 'staff'),
+    productName: g('productName', 'product_name'),
+    externalId1: g('externalId1', 'external_id1'),
+    paymentType: g('paymentType', 'payment_type'),
+    firstDateRevenue: g('firstDateRevenue', 'first_date_revenue'),
+    primaryProductCode: g('primaryProductCode', 'primary_product_code'),
+    customerType: g('customerType', 'customer_type'),
+    productCode: g('productCode', 'product_code'),
+    partner: g('partner', 'partner'),
+    priceNotVat: g('priceNotVat', 'price_not_vat'),
+    name: firstDefined(r.name, r.customer_name, r.customerName),
+    activeDate: g('activeDate', 'active_date'),
+    priceVat: g('priceVat', 'price_vat'),
+    priceNotVatRound: g('priceNotVatRound', 'price_not_vat_round'),
+    paymentDate: g('paymentDate', 'payment_date'),
+    cenCodeDev: g('cenCodeDev', 'cen_code_dev'),
+    serial: g('serial', 'serial'),
+  }
+}
 
 function toMs(value) {
   if (value == null || value === '') return null
@@ -39,11 +80,15 @@ function fingerprintFor(item) {
   const key = [
     item.contractNo || '',
     item.productCode || '',
+    item.primaryProductCode || '',
+    item.masp || '',
     item.externalId1 || '',
     item.serial || '',
     item.paymentDate || '',
     item.activeDate || '',
+    item.firstDateRevenue || '',
     item.priceVat ?? '',
+    item.priceNotVatRound ?? item.priceNotVat ?? '',
   ]
     .map((v) => String(v).trim())
     .join('|')
@@ -84,12 +129,25 @@ async function updateSyncStatus(tenantId, status, message, now = Date.now()) {
 }
 
 /**
- * Upsert một đơn hàng doanh thu, trả về 'inserted' | 'updated' | 'claimed-kept'.
+ * @param {string} tenantId
+ * @param {object} rawItem — một dòng từ CBS export-report-online
+ * @param {number} now
+ * @param {{ periodYmFromSync?: string | null }} [options] — kỳ KPI (YYYY-MM) khớp lần sync
  */
-async function upsertOrder(tenantId, item, now) {
+async function upsertOrder(tenantId, rawItem, now, options = {}) {
+  const item = normalizeCbsReportItem(rawItem)
+  const { periodYmFromSync } = options
   const fp = fingerprintFor(item)
   const paymentMs = toMs(item.paymentDate)
-  const periodYm = periodYmFromMs(paymentMs) || periodYmFromMs(toMs(item.activeDate))
+  const syncYm =
+    periodYmFromSync && PERIOD_YM_RE.test(String(periodYmFromSync).trim())
+      ? String(periodYmFromSync).trim()
+      : null
+  const periodYm =
+    syncYm ||
+    periodYmFromMs(paymentMs) ||
+    periodYmFromMs(toMs(item.activeDate)) ||
+    periodYmFromMs(toMs(item.firstDateRevenue))
   const priceNotVat = toMoneyNumber(item.priceNotVat)
   const priceNotVatRound = toMoneyNumber(item.priceNotVatRound ?? item.priceNotVat)
   const priceVat = toMoneyNumber(item.priceVat)
@@ -148,7 +206,7 @@ async function upsertOrder(tenantId, item, now) {
         toMs(item.firstDateRevenue),
         toMs(item.activeDate),
         paymentMs,
-        JSON.stringify(item),
+        JSON.stringify(rawItem),
         now,
       ]
     )
@@ -192,7 +250,7 @@ async function upsertOrder(tenantId, item, now) {
       toMs(item.firstDateRevenue),
       toMs(item.activeDate),
       paymentMs,
-      JSON.stringify(item),
+      JSON.stringify(rawItem),
       now,
     ]
   )
@@ -200,14 +258,37 @@ async function upsertOrder(tenantId, item, now) {
 }
 
 /**
- * Đồng bộ doanh thu CBS cho 1 tenant theo tháng hiện tại (giờ VN).
- * Trả về { inserted, updated, total }.
+ * Đồng bộ doanh thu CBS cho 1 tenant.
+ * @param {string} tenantId
+ * @param {{ range?: { from: Date, to: Date }, period?: string }} [opts]
+ *        - period: YYYY-MM — fetch đúng kỳ đó (cho đồng bộ tay khi xem tháng cũ)
+ *        - range: override from/to trực tiếp
+ *        - mặc định: tháng hiện tại (giờ VN)
+ * Trả về { inserted, updated, total, synced_for_period, removed_orphans }.
  */
-export async function syncTenant(tenantId, { range } = {}) {
+export async function syncTenant(tenantId, { range, period } = {}) {
   if (!tenantId) throw new Error('Thiếu tenantId')
   const cfg = await getCbsConfigRow(tenantId)
   if (!cfg) {
     throw new Error('Tenant chưa cấu hình tài khoản CBS.')
+  }
+
+  let syncedForPeriod = null
+  let resolvedRange = range
+  if (!resolvedRange && period && PERIOD_YM_RE.test(String(period).trim())) {
+    const p = String(period).trim()
+    const mr = vnMonthRangeFromYyyyMm(p)
+    if (mr) {
+      resolvedRange = { from: mr.from, to: mr.to }
+      syncedForPeriod = p
+    }
+  }
+  if (!resolvedRange) {
+    const cur = currentVNMonthRange()
+    resolvedRange = { from: cur.from, to: cur.to }
+    syncedForPeriod = `${cur.year}-${String(cur.month).padStart(2, '0')}`
+  } else if (syncedForPeriod == null && resolvedRange.from) {
+    syncedForPeriod = periodYmFromMs(resolvedRange.from.getTime()) || null
   }
 
   const now = Date.now()
@@ -220,7 +301,7 @@ export async function syncTenant(tenantId, { range } = {}) {
       password: cfg.password,
     })
 
-    const { from, to } = range || currentVNMonthRange()
+    const { from, to } = resolvedRange
     const items = await fetchMonthlyReport({
       baseUrl: cfg.base_url,
       accessToken,
@@ -233,12 +314,83 @@ export async function syncTenant(tenantId, { range } = {}) {
     let inserted = 0
     let updated = 0
     for (const it of items) {
-      const r = await upsertOrder(tenantId, it, now)
+      const r = await upsertOrder(tenantId, it, now, { periodYmFromSync: syncedForPeriod })
       if (r === 'inserted') inserted++
       else if (r === 'updated') updated++
     }
 
-    const msg = `Đồng bộ CBS: nhận ${items.length}, thêm ${inserted}, cập nhật ${updated}.`
+    // Gỡ dòng trong kỳ không còn trong gói CBS (giữ đơn đã approved để không mất chốt).
+    // Lưu ý SQL: NOT (fingerprint = ANY(...)) với fingerprint NULL cho kết quả UNKNOWN → không xóa;
+    // phải thêm fingerprint IS NULL để gỡ dòng hỏng / import cũ.
+    let removedOrphans = 0
+    let fpArr = []
+    if (syncedForPeriod && items.length > 0) {
+      const fpSet = new Set()
+      for (const it of items) {
+        fpSet.add(fingerprintFor(normalizeCbsReportItem(it)))
+      }
+      fpArr = [...fpSet]
+      if (fpArr.length > 0) {
+        try {
+          const del = await pool.query(
+            `DELETE FROM cbs_revenue_orders
+             WHERE tenant_id   = $1
+               AND period_ym   = $2
+               AND (fingerprint IS NULL OR NOT (fingerprint = ANY($3::text[])))
+               AND COALESCE(LOWER(TRIM(claim_status)), '') <> 'approved'`,
+            [tenantId, syncedForPeriod, fpArr]
+          )
+          removedOrphans = del.rowCount || 0
+        } catch (delErr) {
+          if (delErr?.code !== '42P01' && delErr?.code !== '42703') {
+            console.error('syncTenant removeOrphans:', delErr)
+          }
+        }
+      }
+    }
+
+    let remainingInPeriod = 0
+    let approvedOrphansKept = 0
+    if (syncedForPeriod) {
+      try {
+        const cnt = await pool.query(
+          `SELECT COUNT(*)::int AS n
+             FROM cbs_revenue_orders
+            WHERE tenant_id = $1 AND period_ym = $2`,
+          [tenantId, syncedForPeriod]
+        )
+        remainingInPeriod = cnt.rows[0]?.n ?? 0
+        if (items.length > 0 && fpArr.length > 0) {
+          const apk = await pool.query(
+            `SELECT COUNT(*)::int AS n
+               FROM cbs_revenue_orders
+              WHERE tenant_id = $1
+                AND period_ym   = $2
+                AND COALESCE(LOWER(TRIM(claim_status)), '') = 'approved'
+                AND (fingerprint IS NULL OR NOT (fingerprint = ANY($3::text[])))`,
+            [tenantId, syncedForPeriod, fpArr]
+          )
+          approvedOrphansKept = apk.rows[0]?.n ?? 0
+        }
+      } catch (cntErr) {
+        if (cntErr?.code !== '42P01' && cntErr?.code !== '42703') {
+          console.error('syncTenant count period:', cntErr)
+        }
+      }
+    }
+
+    const msg =
+      syncedForPeriod && (removedOrphans > 0 || remainingInPeriod > 0 || items.length > 0)
+        ? `Đồng bộ CBS (kỳ ${syncedForPeriod}): nhận ${items.length}, thêm ${inserted}, cập nhật ${updated}${
+            removedOrphans > 0
+              ? `, gỡ ${removedOrphans} dòng thừa (không còn trong CBS, chưa duyệt)`
+              : ''
+          }. Trong CRM kỳ này còn ${remainingInPeriod} đơn.${
+            approvedOrphansKept > 0
+              ? ` (${approvedOrphansKept} đơn đã duyệt không nằm trong file CBS — giữ để chốt KPI.)`
+              : ''
+          }`
+        : `Đồng bộ CBS (kỳ ${syncedForPeriod || '—'}): nhận ${items.length}, thêm ${inserted}, cập nhật ${updated}.`
     await updateSyncStatus(tenantId, 'success', msg, Date.now())
 
     // Backfill KPI actuals cho tất cả (claimed_by, period_ym) có đơn đã duyệt trong tenant.
@@ -286,7 +438,13 @@ export async function syncTenant(tenantId, { range } = {}) {
       }
     }
 
-    return { inserted, updated, total: items.length }
+    return {
+      inserted,
+      updated,
+      total: items.length,
+      synced_for_period: syncedForPeriod,
+      removed_orphans: removedOrphans,
+    }
   } catch (err) {
     const message = err?.message || 'Lỗi không xác định'
     await updateSyncStatus(tenantId, 'error', message, Date.now())

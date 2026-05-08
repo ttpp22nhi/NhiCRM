@@ -193,8 +193,19 @@ export function DealCard({ deal, onEdit, onViewDetail, onCancel, onDelete, canDe
             Lý do: {deal.loss_reason}
           </div>
         )}
-        {(deal.product_name || deal.quantity != null || deal.invoice_info || deal.notes) && (
+        {(deal.product_name || deal.quantity != null || deal.invoice_info || deal.notes || deal.description) && (
           <div className="mt-2 pt-2 border-t border-gray-100 space-y-1.5">
+            {deal.description && String(deal.description).trim() && (
+              <div className="flex items-start gap-2">
+                <FileText className="w-3.5 h-3.5 text-slate-500 flex-shrink-0 mt-0.5" />
+                <div className="min-w-0">
+                  <span className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Nội dung</span>
+                  <span className="text-xs text-gray-700 line-clamp-3 block whitespace-pre-wrap break-words">
+                    {String(deal.description).trim()}
+                  </span>
+                </div>
+              </div>
+            )}
             {deal.product_name && (
               <div className="flex items-center gap-2">
                 <Package className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />

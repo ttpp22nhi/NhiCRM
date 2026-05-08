@@ -17,7 +17,7 @@ export default function CustomersPage() {
   const [showImport, setShowImport] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   
-  // Admin-like: Admin/Super Admin/Giám đốc/Quản lý
+  // Admin-like: Admin/Super Admin/Lãnh đạo/Quản lý
   const canTransfer =
     user?.role === 'admin' ||
     user?.role === 'super_admin' ||

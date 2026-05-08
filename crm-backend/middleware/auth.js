@@ -196,7 +196,7 @@ export const verifyTenantAdmin = (req, res, next) => {
 };
 
 /**
- * Lãnh đạo vận hành: admin, super_admin, giám đốc, quản lý — không gồm chỉnh cấu hình tenant.
+ * Lãnh đạo vận hành: admin, super_admin, lãnh đạo (director), quản lý — không gồm chỉnh cấu hình tenant.
  */
 export const verifyExecutive = (req, res, next) => {
   if (!req.user) {
@@ -208,14 +208,14 @@ export const verifyExecutive = (req, res, next) => {
   if (!isExecutiveRole(req.user.role)) {
     return res.status(403).json({
       success: false,
-      message: 'Chỉ quản trị viên, giám đốc hoặc quản lý mới có quyền thực hiện thao tác này.',
+      message: 'Chỉ quản trị viên, lãnh đạo hoặc quản lý mới có quyền thực hiện thao tác này.',
     });
   }
   next();
 };
 
 /**
- * Tạo nhân viên mới (POST /api/auth/register, import Excel): Admin, Super Admin, Giám đốc, Quản lý.
+ * Tạo nhân viên mới (POST /api/auth/register, import Excel): Admin, Super Admin, Lãnh đạo, Quản lý.
  */
 export const verifyEmployeeCreator = (req, res, next) => {
   if (!req.user) {
@@ -227,7 +227,7 @@ export const verifyEmployeeCreator = (req, res, next) => {
   if (!canCreateEmployees(req.user.role)) {
     return res.status(403).json({
       success: false,
-      message: 'Chỉ Quản trị viên, Giám đốc hoặc Quản lý mới được thêm nhân viên mới.',
+      message: 'Chỉ Quản trị viên, Lãnh đạo hoặc Quản lý mới được thêm nhân viên mới.',
     });
   }
   next();

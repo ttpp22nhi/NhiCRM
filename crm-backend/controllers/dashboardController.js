@@ -407,8 +407,16 @@ export const getDashboardAnalytics = async (req, res) => {
           massDealCountTrend,
           massGrowthRate,
           projectWeightValue,
-          topOpportunities
-        ] = await Promise.all([...baseCalls, ...massProjectCalls])
+          topOpportunities,
+          monthlyKpiLeaderboard
+        ] = await Promise.all([
+          ...baseCalls,
+          ...massProjectCalls,
+          analytics.getMonthlyKpiLeaderboard(tenantId, scopeOptions, dateRange).catch(() => ({
+            period: '',
+            rows: []
+          }))
+        ])
 
         return {
           revenue: revenueStats,
@@ -422,7 +430,8 @@ export const getDashboardAnalytics = async (req, res) => {
           scopeLabel: getScopeLabel(scopeOptions, queryScopePath, canUseScopePath, role),
           dateRange,
           massStats: { dealCountTrend: massDealCountTrend, growthRate: massGrowthRate },
-          projectStats: { totalWeightValue: projectWeightValue, topOpportunities }
+          projectStats: { totalWeightValue: projectWeightValue, topOpportunities },
+          monthlyKpiLeaderboard
         }
       })
     ])

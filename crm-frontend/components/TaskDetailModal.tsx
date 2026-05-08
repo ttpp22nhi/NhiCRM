@@ -5,6 +5,7 @@ import { X, Calendar, User, CheckSquare, AlertCircle, ExternalLink } from 'lucid
 export interface TaskForDetail {
   task_id: string
   title: string
+  description?: string | null
   display_code?: string
   parent_display_code?: string
   related_type?: string
@@ -68,6 +69,13 @@ export function TaskDetailModal({ task, onClose, onOpenDeal }: TaskDetailModalPr
               <span className="text-xs text-gray-500">{PRIORITY_LABELS[task.priority] || task.priority}</span>
             </div>
           </div>
+
+          {task.description && String(task.description).trim() && (
+            <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+              <p className="text-xs text-gray-500 mb-0.5">Nội dung</p>
+              <p className="text-sm text-gray-900 whitespace-pre-wrap">{String(task.description).trim()}</p>
+            </div>
+          )}
 
           {task.customer_full_name && (
             <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">

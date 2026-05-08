@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
 import { apiClient } from '@/lib/api'
@@ -15,7 +15,14 @@ import {
   Building2,
   User,
   AlertCircle,
-  Download
+  Download,
+  Target,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  Users,
+  Package,
+  FolderKanban,
 } from 'lucide-react'
 import {
   BarChart,
@@ -31,10 +38,11 @@ import {
   LabelList,
   PieChart,
   Pie,
-  Cell
+  Cell,
 } from 'recharts'
 import toast from 'react-hot-toast'
 import Link from 'next/link'
+import { canAccessKpiPage } from '@/lib/rbac'
 import { exportEmployeeKpiReport, type EmployeeKpiReportPayload } from '@/lib/exportEmployeeKpiReport'
 import { exportSalesForecastReport, type SalesForecastPayload } from '@/lib/exportSalesForecastReport'
 import { exportLossAnalysisReport, type LossAnalysisPayload } from '@/lib/exportLossAnalysisReport'
@@ -72,6 +80,23 @@ interface DashboardAnalytics {
   projectStats?: {
     totalWeightValue: number
     topOpportunities: Array<{ deal_id: string; title: string; amount: number; stage: string; display_code?: string | null; status?: string }>
+  }
+  monthlyKpiLeaderboard?: {
+    period: string
+    rows: Array<{
+      employee_id: string
+      full_name: string
+      username: string
+      target_revenue_total: number
+      actual_revenue_total: number
+      approach_target: number
+      approach_actual: number
+      target_product_total: number
+      actual_product_total: number
+      revenue_achievement_pct: number | null
+      approach_achievement_pct: number | null
+      product_achievement_pct: number | null
+    }>
   }
 }
 
@@ -142,6 +167,16 @@ const formatShortCurrency = (value: number) => {
   return String(value)
 }
 
+/** Nhãn giai đoạn deal (API dùng stage code) */
+const DEAL_STAGE_LABEL: Record<string, string> = {
+  tiep_can: 'Tiếp cận',
+  tu_van: 'Tư vấn',
+  khao_sat: 'Khảo sát',
+  bao_gia: 'Báo giá',
+  thuong_thao: 'Thương thảo',
+  thanh_cong: 'Thành công',
+}
+
 const canFilterByDepartment = (role: string) => role === 'admin' || role === 'super_admin'
 
 const canExportForecast = (role: string) => ['admin', 'super_admin', 'director', 'manager', 'leader'].includes(role)
@@ -176,6 +211,116 @@ export default function DashboardPage() {
   const [businessType, setBusinessType] = useState<'MASS' | 'PROJECT' | ''>('')
   const [confidenceFilter, setConfidenceFilter] = useState<'all' | 'low'>('all')
   const showDeptFilter = canFilterByDepartment(user?.role ?? '')
+  const [kpiLbSearch, setKpiLbSearch] = useState('')
+  const [kpiLbPage, setKpiLbPage] = useState(1)
+
+  const monthlyKpiLeaderboard = data?.monthlyKpiLeaderboard
+
+  type KpiLbRow = NonNullable<DashboardAnalytics['monthlyKpiLeaderboard']>['rows'][number]
+
+  const KPI_LB_PAGE_SIZE = 25
+
+  const kpiLbDerived = useMemo(() => {
+    const rows = monthlyKpiLeaderboard?.rows
+    if (!rows?.length) {
+      return {
+        sortedForTable: [] as KpiLbRow[],
+        histogram: [] as { key: string; label: string; count: number; fill: string }[],
+        top10Revenue: [] as Array<KpiLbRow & { chartLabel: string }>,
+        summary: { total: 0, atOrOver100: 0, below100WithTarget: 0, noTarget: 0 },
+      }
+    }
+
+    let noTarget = 0
+    let b0_80 = 0
+    let b80_100 = 0
+    let b100_120 = 0
+    let b120 = 0
+    let atOrOver100 = 0
+    let below100WithTarget = 0
+
+    for (const r of rows) {
+      const t = r.target_revenue_total || 0
+      const pct = r.revenue_achievement_pct
+      if (t <= 0) {
+        noTarget += 1
+        continue
+      }
+      if (pct != null) {
+        if (pct >= 100) atOrOver100 += 1
+        else below100WithTarget += 1
+        if (pct < 80) b0_80 += 1
+        else if (pct < 100) b80_100 += 1
+        else if (pct < 120) b100_120 += 1
+        else b120 += 1
+      }
+    }
+
+    const histogram = [
+      { key: 'no_ct', label: 'Chưa giao CT doanh thu', count: noTarget, fill: '#94a3b8' },
+      { key: 'lt80', label: 'Dưới 80%', count: b0_80, fill: '#f87171' },
+      { key: '80_100', label: '80% – dưới 100%', count: b80_100, fill: '#fbbf24' },
+      { key: '100_120', label: '100% – dưới 120%', count: b100_120, fill: '#34d399' },
+      { key: 'gte120', label: 'Từ 120% trở lên', count: b120, fill: '#0f766e' },
+    ]
+
+    const sortedForTable = [...rows].sort((a, b) => {
+      const pa = a.revenue_achievement_pct
+      const pb = b.revenue_achievement_pct
+      if (pa != null && pb != null && pb !== pa) return pb - pa
+      if (pa != null && pb == null) return -1
+      if (pa == null && pb != null) return 1
+      return (b.actual_revenue_total || 0) - (a.actual_revenue_total || 0)
+    })
+
+    const top10Revenue = [...rows]
+      .sort((a, b) => (b.actual_revenue_total || 0) - (a.actual_revenue_total || 0))
+      .slice(0, 10)
+      .map((r) => {
+        const raw = (r.full_name || r.username || '').trim()
+        const chartLabel = raw.length > 18 ? `${raw.slice(0, 17)}…` : raw
+        return { ...r, chartLabel }
+      })
+      .reverse()
+
+    return {
+      sortedForTable,
+      histogram,
+      top10Revenue,
+      summary: {
+        total: rows.length,
+        atOrOver100,
+        below100WithTarget,
+        noTarget,
+      },
+    }
+  }, [monthlyKpiLeaderboard])
+
+  const kpiFilteredRows = useMemo(() => {
+    const q = kpiLbSearch.trim().toLowerCase()
+    if (!q) return kpiLbDerived.sortedForTable
+    return kpiLbDerived.sortedForTable.filter(
+      (r) =>
+        (r.full_name || '').toLowerCase().includes(q) ||
+        (r.username || '').toLowerCase().includes(q)
+    )
+  }, [kpiLbDerived.sortedForTable, kpiLbSearch])
+
+  const kpiLbPageCount = Math.max(1, Math.ceil(kpiFilteredRows.length / KPI_LB_PAGE_SIZE))
+  const kpiLbSafePage = Math.min(Math.max(1, kpiLbPage), kpiLbPageCount)
+  const kpiLbPageRows = kpiFilteredRows.slice(
+    (kpiLbSafePage - 1) * KPI_LB_PAGE_SIZE,
+    kpiLbSafePage * KPI_LB_PAGE_SIZE
+  )
+
+  useEffect(() => {
+    setKpiLbSearch('')
+    setKpiLbPage(1)
+  }, [monthlyKpiLeaderboard?.period])
+
+  useEffect(() => {
+    setKpiLbPage((p) => Math.min(Math.max(1, p), kpiLbPageCount))
+  }, [kpiLbPageCount])
 
   useEffect(() => {
     if (!showDeptFilter) return
@@ -632,11 +777,125 @@ export default function DashboardPage() {
             </div>
           </div>
 
+          {/* MASS & PROJECT: API luôn trả hai khối riêng (không phụ thuộc ô lọc Loại hình trên header) */}
+          {(data.massStats || data.projectStats) && (
+            <div className="mb-8 grid grid-cols-1 xl:grid-cols-2 gap-6">
+              {data.massStats && (
+                <div className="bg-white rounded-xl shadow p-6 border border-gray-100">
+                  <div className="flex items-start gap-3 mb-4">
+                    <div className="p-2 rounded-lg bg-sky-50 text-sky-700">
+                      <Package className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold text-gray-900">Deal MASS</h3>
+                      <p className="text-sm text-gray-500 mt-1">
+                        Luôn chỉ tính deal <strong>MASS</strong> (cột deal_category). Phạm vi nhân viên/ngày giống các chỉ
+                        số chính; <strong>không</strong> đổi khi bạn chỉ lọc “Dự án” ở ô Loại hình — khối này vẫn là MASS
+                        riêng.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                    <div className="rounded-lg border border-gray-100 bg-gray-50/80 p-3">
+                      <p className="text-xs text-gray-500 font-medium">Deal tạo (khoảng lọc)</p>
+                      <p className="text-xl font-bold text-gray-900 mt-1">{data.massStats.growthRate.thisMonthCount}</p>
+                    </div>
+                    <div className="rounded-lg border border-gray-100 bg-gray-50/80 p-3">
+                      <p className="text-xs text-gray-500 font-medium">Kỳ liền trước (cùng độ dài)</p>
+                      <p className="text-xl font-bold text-gray-700 mt-1">{data.massStats.growthRate.lastMonthCount}</p>
+                    </div>
+                    <div className="rounded-lg border border-gray-100 bg-gray-50/80 p-3">
+                      <p className="text-xs text-gray-500 font-medium">% thay đổi</p>
+                      <p
+                        className={`text-xl font-bold mt-1 ${
+                          data.massStats.growthRate.growthRate >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                        }`}
+                      >
+                        {data.massStats.growthRate.growthRate >= 0 ? '+' : ''}
+                        {data.massStats.growthRate.growthRate}%
+                      </p>
+                    </div>
+                  </div>
+                  {data.massStats.dealCountTrend.some((x) => x.count > 0) ? (
+                    <ResponsiveContainer width="100%" height={260}>
+                      <BarChart data={data.massStats.dealCountTrend} margin={{ left: 0, right: 8 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                        <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                        <YAxis allowDecimals={false} width={36} />
+                        <Tooltip formatter={(v: number | string | undefined) => [Number(v ?? 0), 'Số deal MASS']} />
+                        <Bar dataKey="count" fill="#0369a1" name="Số deal" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="flex items-center justify-center h-40 text-sm text-gray-500 border border-dashed border-gray-200 rounded-lg">
+                      Không có deal MASS được tạo trong khoảng ngày đã chọn.
+                    </div>
+                  )}
+                </div>
+              )}
+              {data.projectStats && (
+                <div className="bg-white rounded-xl shadow p-6 border border-gray-100">
+                  <div className="flex items-start gap-3 mb-4">
+                    <div className="p-2 rounded-lg bg-violet-50 text-violet-700">
+                      <FolderKanban className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold text-gray-900">Dự án (PROJECT)</h3>
+                      <p className="text-sm text-gray-500 mt-1">
+                        Luôn chỉ deal <strong>PROJECT</strong>. Tổng trọng số = SUM(amount × % giai đoạn × hệ số độ tự tin);
+                        danh sách là top cơ hội theo <strong>amount</strong>.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-xl border border-violet-100 bg-violet-50/50 p-4 mb-4">
+                    <p className="text-xs font-medium text-violet-800 uppercase tracking-wide">Tổng giá trị có trọng số</p>
+                    <p className="text-2xl font-bold text-violet-900 mt-1">{formatCurrency(data.projectStats.totalWeightValue)}</p>
+                    <p className="text-xs text-violet-700/90 mt-1">Won + active (created_at trong khoảng lọc)</p>
+                  </div>
+                  {data.projectStats.topOpportunities.length > 0 ? (
+                    <div>
+                      <h4 className="text-sm font-semibold text-gray-800 mb-2">Top cơ hội</h4>
+                      <ul className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
+                        {data.projectStats.topOpportunities.map((deal) => (
+                          <li
+                            key={deal.deal_id}
+                            className="flex items-start justify-between gap-2 py-2 border-b border-gray-100 last:border-0 text-sm"
+                          >
+                            <div className="min-w-0">
+                              <Link
+                                href={`/deals?openDealId=${deal.deal_id}`}
+                                className="font-medium text-primary-600 hover:underline"
+                              >
+                                {deal.display_code || deal.deal_id} — {deal.title}
+                              </Link>
+                              <p className="text-xs text-gray-500">
+                                {DEAL_STAGE_LABEL[deal.stage] || deal.stage}
+                                {deal.status ? ` · ${deal.status}` : ''} · {formatCurrency(deal.amount)}
+                              </p>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-500 border border-dashed border-gray-200 rounded-lg py-8 text-center">
+                      Chưa có deal PROJECT trong phạm vi lọc.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* KPI progress (chỉ hiện khi có chỉ tiêu) */}
           {data.kpiProgress.targetValue > 0 && (
             <div className="mb-8 bg-white rounded-xl shadow p-6 border border-gray-100">
               <h3 className="text-lg font-semibold text-gray-900 mb-2">Tiến độ KPI — tổng toàn Sales (tenant)</h3>
-              <p className="text-xs text-gray-500 mb-3">Gộp chỉ tiêu & thực đạt từ mục KPI tháng (theo kỳ lọc ngày).</p>
+              <p className="text-xs text-gray-500 mb-3">
+                Gộp chỉ tiêu và thực đạt từ KPI tháng: <strong>mọi tháng</strong> có trong khoảng ngày lọc,{' '}
+                <strong>toàn tenant</strong> (không lọc theo đơn vị / Loại hình MASS–Dự án). Khác với khối so sánh KPI nhân
+                viên bên dưới.
+              </p>
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <p className="text-sm text-gray-500">Chỉ tiêu: {formatCurrency(data.kpiProgress.targetValue)}</p>
@@ -652,6 +911,246 @@ export default function DashboardPage() {
                   className="h-full bg-primary-500 rounded-full transition-all"
                   style={{ width: `${Math.min(100, data.kpiProgress.progressPercent)}%` }}
                 />
+              </div>
+            </div>
+          )}
+
+          {/* KPI tháng: tối ưu cho nhiều nhân viên (phân bổ + Top 10 + bảng phân trang) */}
+          {monthlyKpiLeaderboard && kpiLbDerived.summary.total > 0 && (
+            <div className="mb-8 bg-white rounded-xl shadow p-6 border border-gray-100">
+              <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-lg bg-teal-50 text-teal-700">
+                    <Target className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900">KPI tháng — so sánh nhân viên</h3>
+                    <p className="text-sm text-gray-500 mt-1">
+                      Kỳ <strong className="text-gray-800">{monthlyKpiLeaderboard.period}</strong> (tháng của ngày kết thúc
+                      bộ lọc) — <strong className="text-gray-800">{kpiLbDerived.summary.total}</strong> Sales trong phạm vi
+                      Dashboard. KPI tháng <strong>không</strong> đổi khi chọn Loại hình MASS / Dự án. Biểu đồ cột là{' '}
+                      <em>phân bổ theo mức đạt</em>; bảng dưới có tìm kiếm và phân trang.
+                      {data.scopeLabel === 'personal'
+                        ? ' Phạm vi: cá nhân.'
+                        : data.scopeLabel === 'team'
+                          ? ' Phạm vi: nhóm.'
+                          : ' Phạm vi: toàn bộ dữ liệu được phép.'}
+                    </p>
+                  </div>
+                </div>
+                {canAccessKpiPage(role) && monthlyKpiLeaderboard.period && (
+                  <Link
+                    href={`/kpi?period=${encodeURIComponent(monthlyKpiLeaderboard.period)}`}
+                    className="text-sm font-semibold text-primary-600 hover:text-primary-800 whitespace-nowrap"
+                  >
+                    Mở trang KPI →
+                  </Link>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+                <div className="rounded-lg border border-gray-100 bg-gray-50/80 p-4">
+                  <div className="flex items-center gap-2 text-gray-500 text-xs font-medium uppercase tracking-wide">
+                    <Users className="w-4 h-4" />
+                    Tổng Sales
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">{kpiLbDerived.summary.total}</p>
+                </div>
+                <div className="rounded-lg border border-emerald-100 bg-emerald-50/60 p-4">
+                  <p className="text-xs font-medium text-emerald-800 uppercase tracking-wide">Đạt / vượt (≥100%)</p>
+                  <p className="text-2xl font-bold text-emerald-700 mt-1">{kpiLbDerived.summary.atOrOver100}</p>
+                  <p className="text-xs text-emerald-700/80 mt-0.5">Có chỉ tiêu doanh thu</p>
+                </div>
+                <div className="rounded-lg border border-amber-100 bg-amber-50/60 p-4">
+                  <p className="text-xs font-medium text-amber-900 uppercase tracking-wide">Dưới 100%</p>
+                  <p className="text-2xl font-bold text-amber-800 mt-1">{kpiLbDerived.summary.below100WithTarget}</p>
+                  <p className="text-xs text-amber-800/80 mt-0.5">Có chỉ tiêu, chưa đủ</p>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-medium text-slate-600 uppercase tracking-wide">Chưa giao CT DT</p>
+                  <p className="text-2xl font-bold text-slate-800 mt-1">{kpiLbDerived.summary.noTarget}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Chờ giao chỉ tiêu / kỳ mới</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-800 mb-1">Phân bổ mức đạt doanh thu KPI</h4>
+                  <p className="text-xs text-gray-500 mb-3">
+                    Số nhân viên theo từng nhóm (tổng mọi người = {kpiLbDerived.summary.total}) — phù hợp khi có nhiều
+                    nhân viên, ví dụ 100+.
+                  </p>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={kpiLbDerived.histogram} margin={{ top: 12, right: 8, left: 0, bottom: 56 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                      <XAxis
+                        dataKey="label"
+                        tick={{ fontSize: 10 }}
+                        interval={0}
+                        angle={-22}
+                        textAnchor="end"
+                        height={72}
+                      />
+                      <YAxis allowDecimals={false} width={36} />
+                      <Tooltip formatter={(v: number | string | undefined) => [Number(v ?? 0), 'Số nhân viên']} />
+                      <Bar dataKey="count" name="Số NV" radius={[6, 6, 0, 0]} maxBarSize={56}>
+                        {kpiLbDerived.histogram.map((entry) => (
+                          <Cell key={entry.key} fill={entry.fill} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-800 mb-1">Top 10 thực hiện doanh thu KPI (VNĐ)</h4>
+                  <p className="text-xs text-gray-500 mb-3">
+                    So sánh nhanh chỉ tiêu vs thực hiện trên 10 người dẫn đầu; toàn bộ nằm ở bảng phía dưới.
+                  </p>
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={kpiLbDerived.top10Revenue} layout="vertical" margin={{ left: 4, right: 12 }}>
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                      <XAxis type="number" tickFormatter={(v) => formatShortCurrency(Number(v))} />
+                      <YAxis type="category" dataKey="chartLabel" width={108} tick={{ fontSize: 11 }} />
+                      <Tooltip
+                        formatter={(value: number | string | undefined, name: string | undefined) => [
+                          formatCurrency(Number(value ?? 0)),
+                          name === 'target_revenue_total' ? 'Chỉ tiêu' : 'Thực hiện',
+                        ]}
+                        labelFormatter={(_, payload) => {
+                          const p = (payload?.[0]?.payload ?? {}) as { full_name?: string }
+                          return p.full_name || ''
+                        }}
+                      />
+                      <Legend
+                        formatter={(value) =>
+                          value === 'target_revenue_total' ? 'Chỉ tiêu' : value === 'actual_revenue_total' ? 'Thực hiện' : String(value)
+                        }
+                      />
+                      <Bar dataKey="target_revenue_total" name="target_revenue_total" fill="#94a3b8" radius={[0, 3, 3, 0]} barSize={11} />
+                      <Bar dataKey="actual_revenue_total" name="actual_revenue_total" fill="#0f766e" radius={[0, 3, 3, 0]} barSize={11} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="border border-gray-200 rounded-xl overflow-hidden">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 bg-gray-50 border-b border-gray-200">
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-800">Bảng chi tiết theo nhân viên</h4>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      SP: chỉ tiêu / thực hiện <strong>số lượng</strong> sản phẩm (mới + hiện hữu).
+                    </p>
+                  </div>
+                  <div className="relative max-w-md w-full sm:w-72">
+                    <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="search"
+                      value={kpiLbSearch}
+                      onChange={(e) => {
+                        setKpiLbSearch(e.target.value)
+                        setKpiLbPage(1)
+                      }}
+                      placeholder="Tìm theo tên hoặc username..."
+                      className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-primary-500 bg-white"
+                    />
+                  </div>
+                </div>
+                <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
+                  <table className="min-w-[1120px] w-full text-sm">
+                    <thead className="sticky top-0 z-10 bg-white shadow-sm">
+                      <tr className="text-left text-gray-600 border-b border-gray-200">
+                        <th className="px-3 py-2.5 font-semibold w-10">#</th>
+                        <th className="px-3 py-2.5 font-semibold">Họ tên</th>
+                        <th className="px-3 py-2.5 font-semibold text-right">CT doanh thu</th>
+                        <th className="px-3 py-2.5 font-semibold text-right">TH doanh thu</th>
+                        <th className="px-3 py-2.5 font-semibold text-right">% đạt DT</th>
+                        <th className="px-3 py-2.5 font-semibold text-right">CT tiếp cận</th>
+                        <th className="px-3 py-2.5 font-semibold text-right">TH tiếp cận</th>
+                        <th className="px-3 py-2.5 font-semibold text-right">% đạt TC</th>
+                        <th className="px-3 py-2.5 font-semibold text-right">CT SP</th>
+                        <th className="px-3 py-2.5 font-semibold text-right">TH SP</th>
+                        <th className="px-3 py-2.5 font-semibold text-right">% đạt SP</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {kpiLbPageRows.map((r, idx) => {
+                        const stt = (kpiLbSafePage - 1) * KPI_LB_PAGE_SIZE + idx + 1
+                        const pctDt =
+                          r.revenue_achievement_pct != null
+                            ? `${r.revenue_achievement_pct.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}%`
+                            : '—'
+                        const pctTc =
+                          r.approach_achievement_pct != null
+                            ? `${r.approach_achievement_pct.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}%`
+                            : '—'
+                        const pctSp =
+                          r.product_achievement_pct != null
+                            ? `${r.product_achievement_pct.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}%`
+                            : '—'
+                        return (
+                          <tr key={r.employee_id} className="border-b border-gray-100 hover:bg-gray-50/80">
+                            <td className="px-3 py-2 text-gray-500">{stt}</td>
+                            <td className="px-3 py-2 font-medium text-gray-900">
+                              {r.full_name}
+                              {r.username ? (
+                                <span className="block text-xs font-normal text-gray-500">@{r.username}</span>
+                              ) : null}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums text-gray-700">{formatCurrency(r.target_revenue_total)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-gray-900">{formatCurrency(r.actual_revenue_total)}</td>
+                            <td className="px-3 py-2 text-right tabular-nums font-medium text-gray-800">{pctDt}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-gray-700">{r.approach_target}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-gray-900">{r.approach_actual}</td>
+                            <td className="px-3 py-2 text-right tabular-nums font-medium text-gray-800">{pctTc}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-gray-700">{r.target_product_total}</td>
+                            <td className="px-3 py-2 text-right tabular-nums text-gray-900">{r.actual_product_total}</td>
+                            <td className="px-3 py-2 text-right tabular-nums font-medium text-gray-800">{pctSp}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 bg-gray-50 border-t border-gray-200 text-sm text-gray-600">
+                  <span>
+                    {kpiFilteredRows.length === 0 ? (
+                      'Không có dòng nào khớp tìm kiếm.'
+                    ) : (
+                      <>
+                        Hiển thị{' '}
+                        <strong className="text-gray-900">
+                          {(kpiLbSafePage - 1) * KPI_LB_PAGE_SIZE + 1}–
+                          {Math.min(kpiLbSafePage * KPI_LB_PAGE_SIZE, kpiFilteredRows.length)}
+                        </strong>{' '}
+                        / {kpiFilteredRows.length}
+                        {kpiLbSearch.trim() ? ' (đã lọc)' : ''}
+                      </>
+                    )}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={kpiLbSafePage <= 1}
+                      onClick={() => setKpiLbPage((p) => Math.max(1, p - 1))}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                      Trước
+                    </button>
+                    <span className="tabular-nums px-2">
+                      Trang {kpiLbSafePage} / {kpiLbPageCount}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={kpiLbSafePage >= kpiLbPageCount}
+                      onClick={() => setKpiLbPage((p) => Math.min(kpiLbPageCount, p + 1))}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-40 disabled:pointer-events-none"
+                    >
+                      Sau
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -689,11 +1188,16 @@ export default function DashboardPage() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
             <div className="bg-white rounded-xl shadow p-6 border border-gray-100">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">Phễu Deal theo giai đoạn</h3>
+              <p className="text-sm text-gray-500 mb-4">Số lượng deal (theo bộ lọc ngày và loại hình) — trục ngang là số deal, không phải tiền.</p>
               {data.funnel.some((f) => f.count > 0) ? (
                 <ResponsiveContainer width="100%" height={320}>
                   <BarChart data={data.funnel} layout="vertical" margin={{ left: 80 }}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis type="number" tickFormatter={(v) => formatShortCurrency(v)} />
+                    <XAxis
+                      type="number"
+                      allowDecimals={false}
+                      tickFormatter={(v) => new Intl.NumberFormat('vi-VN').format(Number(v))}
+                    />
                     <YAxis type="category" dataKey="label" width={80} />
                     <Tooltip formatter={(v: number | string | undefined) => [Number(v ?? 0), 'Số Deal']} />
                     <Bar dataKey="count" fill="#0066CC" name="Số Deal" radius={[0, 4, 4, 0]}>
@@ -706,7 +1210,10 @@ export default function DashboardPage() {
               )}
             </div>
             <div className="bg-white rounded-xl shadow p-6 border border-gray-100">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Xu hướng doanh thu 12 tháng</h3>
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">Doanh thu Won theo tháng</h3>
+              <p className="text-sm text-gray-500 mb-4">
+                {data.monthlyTrend.length} tháng trong khoảng {fromDate} → {toDate} (deal thắng theo ngày cập nhật).
+              </p>
               {data.monthlyTrend.some((m) => m.revenue > 0) ? (
                 <ResponsiveContainer width="100%" height={320}>
                   <LineChart data={data.monthlyTrend}>

@@ -370,7 +370,7 @@ export function CustomerForm({ onSuccess, onCancel }: CustomerFormProps) {
             <option value="NEW">Khách mới</option>
             <option value="EXISTING">Khách hiện hữu</option>
           </select>
-          <p className="text-xs text-gray-500 mt-1">Độc lập với &quot;Loại khách hàng&quot; (cá nhân, DN…). Có thể tự động đổi sang hiện hữu khi có deal thắng theo quy tắc hệ thống.</p>
+          <p className="text-xs text-gray-500 mt-1">Độc lập với &quot;Loại khách hàng&quot; (cá nhân, DN…). Tự đổi hiện hữu từ tháng kế sau tháng có deal thắng hoặc đơn CBS đã duyệt (theo kỳ đóng / duyệt), không đổi ngay trong tháng chốt.</p>
         </div>
 
         <div>

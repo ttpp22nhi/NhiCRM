@@ -54,6 +54,22 @@ async function onDealStageChanged ({ deal, tenantId, userId, newStage, source })
   }
 
   try {
+    // Idempotent: nếu đã có task auto cho deal+title này (chưa hoàn thành) → bỏ qua,
+    // tránh tạo trùng khi deal bị kéo lùi rồi chuyển lại đúng stage.
+    const dup = await pool.query(
+      `SELECT 1 FROM tasks
+        WHERE tenant_id = $1
+          AND related_type = 'DEAL'
+          AND related_id = $2
+          AND title = $3
+          AND COALESCE(is_completed, false) = false
+        LIMIT 1`,
+      [tenantId, dealId, taskTitle]
+    )
+    if (dup.rows.length > 0) {
+      return
+    }
+
     const now = Date.now()
     const taskId = uuidv4()
     const displayCode = await generateDisplayCode('TSK', tenantId)

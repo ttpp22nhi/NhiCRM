@@ -56,6 +56,18 @@ function getMonthRange(dateRange) {
   return months
 }
 
+const VN_TZ_MS = 7 * 60 * 60 * 1000
+
+/** Kỳ KPI YYYY-MM theo ngày kết thúc bộ lọc (Asia/Ho_Chi_Minh), khớp trang /kpi. */
+function kpiPeriodFromDateRangeEnd(dateRange) {
+  const { toTs } = normalizeDateRange(dateRange)
+  const ts = toTs != null && Number.isFinite(toTs) ? toTs : Date.now()
+  const d = new Date(ts + VN_TZ_MS)
+  const y = d.getUTCFullYear()
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0')
+  return `${y}-${m}`
+}
+
 /**
  * Resolve scopeOptions thành employeeIds (hoặc null = toàn tenant).
  * @param {string} tenantId
@@ -225,6 +237,109 @@ export async function getKpiProgress(tenantId, _scopeOptions, dateRange = null) 
   } catch (err) {
     if (err.code === '42P01') {
       return { targetValue: 0, actualRevenue: 0, progressPercent: 0 }
+    }
+    throw err
+  }
+}
+
+/**
+ * KPI tháng (bảng kpis) theo từng Sales trong phạm vi scope Dashboard — để so sánh nhân viên.
+ * Kỳ = tháng chứa ngày kết thúc filter (theo giờ VN).
+ */
+export async function getMonthlyKpiLeaderboard(tenantId, scopeOptions, dateRange = null) {
+  const period = kpiPeriodFromDateRangeEnd(dateRange)
+
+  try {
+    const employeeIds = await resolveScopeToEmployeeIds(tenantId, scopeOptions)
+    if (employeeIds && employeeIds.length === 0) {
+      return { period, rows: [] }
+    }
+
+    const salesClause =
+      "e.tenant_id = $1 AND e.is_active = TRUE AND LOWER(TRIM(COALESCE(e.role, ''))) = 'sales'"
+
+    let query
+    let params
+    if (employeeIds != null && employeeIds.length > 0) {
+      const placeholders = employeeIds.map((_, i) => `$${i + 3}`).join(', ')
+      params = [tenantId, period, ...employeeIds]
+      query = `
+        SELECT
+          e.employee_id,
+          e.full_name,
+          e.username,
+          COALESCE(k.target_revenue_new, 0) + COALESCE(k.target_revenue_existing, 0) AS target_revenue_total,
+          COALESCE(k.actual_revenue_new, 0) + COALESCE(k.actual_revenue_existing, 0) AS actual_revenue_total,
+          COALESCE(k.approach_count, 0)::int AS approach_target,
+          COALESCE(k.actual_approach_count, 0)::int AS approach_actual,
+          COALESCE(k.target_product_count_new, 0) + COALESCE(k.target_product_count_existing, 0) AS target_product_total,
+          COALESCE(k.actual_product_count_new, 0) + COALESCE(k.actual_product_count_existing, 0) AS actual_product_total
+        FROM employees e
+        LEFT JOIN kpis k
+          ON k.tenant_id = e.tenant_id AND k.user_id = e.employee_id AND k.period = $2
+        WHERE ${salesClause}
+          AND e.employee_id IN (${placeholders})
+        ORDER BY (COALESCE(k.actual_revenue_new, 0) + COALESCE(k.actual_revenue_existing, 0)) DESC NULLS LAST,
+                 e.full_name ASC NULLS LAST
+      `
+    } else {
+      params = [tenantId, period]
+      query = `
+        SELECT
+          e.employee_id,
+          e.full_name,
+          e.username,
+          COALESCE(k.target_revenue_new, 0) + COALESCE(k.target_revenue_existing, 0) AS target_revenue_total,
+          COALESCE(k.actual_revenue_new, 0) + COALESCE(k.actual_revenue_existing, 0) AS actual_revenue_total,
+          COALESCE(k.approach_count, 0)::int AS approach_target,
+          COALESCE(k.actual_approach_count, 0)::int AS approach_actual,
+          COALESCE(k.target_product_count_new, 0) + COALESCE(k.target_product_count_existing, 0) AS target_product_total,
+          COALESCE(k.actual_product_count_new, 0) + COALESCE(k.actual_product_count_existing, 0) AS actual_product_total
+        FROM employees e
+        LEFT JOIN kpis k
+          ON k.tenant_id = e.tenant_id AND k.user_id = e.employee_id AND k.period = $2
+        WHERE ${salesClause}
+        ORDER BY (COALESCE(k.actual_revenue_new, 0) + COALESCE(k.actual_revenue_existing, 0)) DESC NULLS LAST,
+                 e.full_name ASC NULLS LAST
+      `
+    }
+
+    const result = await pool.query(query, params)
+    const rows = (result.rows || []).map((r) => {
+      const targetRev = parseFloat(r.target_revenue_total) || 0
+      const actualRev = parseFloat(r.actual_revenue_total) || 0
+      const targetAp = parseInt(r.approach_target, 10) || 0
+      const actualAp = parseInt(r.approach_actual, 10) || 0
+      const targetPr = parseFloat(r.target_product_total) || 0
+      const actualPr = parseFloat(r.actual_product_total) || 0
+
+      const revenueAchievementPct =
+        targetRev > 0 ? Math.min(999.99, Math.round((actualRev / targetRev) * 10000) / 100) : null
+      const approachAchievementPct =
+        targetAp > 0 ? Math.min(999.99, Math.round((actualAp / targetAp) * 10000) / 100) : null
+      const productAchievementPct =
+        targetPr > 0 ? Math.min(999.99, Math.round((actualPr / targetPr) * 10000) / 100) : null
+
+      return {
+        employee_id: r.employee_id,
+        full_name: r.full_name || r.username || r.employee_id,
+        username: r.username || '',
+        target_revenue_total: targetRev,
+        actual_revenue_total: actualRev,
+        approach_target: targetAp,
+        approach_actual: actualAp,
+        target_product_total: targetPr,
+        actual_product_total: actualPr,
+        revenue_achievement_pct: revenueAchievementPct,
+        approach_achievement_pct: approachAchievementPct,
+        product_achievement_pct: productAchievementPct
+      }
+    })
+
+    return { period, rows }
+  } catch (err) {
+    if (err.code === '42P01') {
+      return { period, rows: [] }
     }
     throw err
   }

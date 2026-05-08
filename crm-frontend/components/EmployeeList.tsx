@@ -4,26 +4,35 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { createPortal } from 'react-dom'
 import { apiClient } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
-import { Users, Mail, Shield, AlertCircle, Key, Copy, X, CheckCircle, Edit, Eye, MoreVertical, ArrowRightLeft, Filter } from 'lucide-react'
+import { Users, Mail, Phone, Shield, AlertCircle, Key, Copy, X, CheckCircle, Edit, Eye, MoreVertical, ArrowRightLeft, Filter, Trash2, Loader2 } from 'lucide-react'
 import { EditEmployeeForm } from './EditEmployeeForm'
 import { EmployeeDetailView } from './EmployeeDetailView'
 import { TransferCustomersModal } from './TransferCustomersModal'
 import toast from 'react-hot-toast'
 import { useAlert } from './AlertModal'
+import { isSuperAdmin } from '@/lib/rbac'
 
 interface Employee {
   employee_id: string
   username: string
   full_name: string
   email: string
+  phone?: string | null
   role: string
   is_active: boolean
   created_at: number | string
   department_id?: string
   department_name?: string
+  department_type?: string
   title?: string
   rank?: string
   territory?: string | null
+}
+
+interface DepartmentOption {
+  id: string
+  name: string
+  type: string
 }
 
 interface EmployeeListProps {
@@ -37,7 +46,7 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [resetPasswordData, setResetPasswordData] = useState<{
-    employee: { full_name: string; username: string; email: string }
+    employee: { full_name: string; username: string; email: string; phone?: string | null }
     newPassword: string
   } | null>(null)
   const [resettingId, setResettingId] = useState<string | null>(null)
@@ -48,22 +57,33 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null)
   const [roleFilter, setRoleFilter] = useState<string>('')
+  const [departmentFilter, setDepartmentFilter] = useState<string>('')
+  const [departments, setDepartments] = useState<DepartmentOption[]>([])
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const actionButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   const ROLE_FILTER_OPTIONS: { value: string; label: string }[] = [
     { value: 'super_admin', label: 'Super Admin' },
     { value: 'admin', label: 'Quản trị viên' },
-    { value: 'director', label: 'Giám đốc' },
+    { value: 'director', label: 'Lãnh đạo' },
     { value: 'manager', label: 'Quản lý' },
     { value: 'leader', label: 'Tổ trưởng' },
     { value: 'sales', label: 'Nhân viên bán hàng' },
   ]
 
   const filteredEmployees = useMemo(() => {
-    if (!roleFilter) return employees
-    const r = roleFilter.toLowerCase()
-    return employees.filter((e) => String(e.role || '').toLowerCase() === r)
-  }, [employees, roleFilter])
+    let list = employees
+    if (roleFilter) {
+      const r = roleFilter.toLowerCase()
+      list = list.filter((e) => String(e.role || '').toLowerCase() === r)
+    }
+    if (departmentFilter === '__unassigned__') {
+      list = list.filter((e) => !e.department_id)
+    } else if (departmentFilter) {
+      list = list.filter((e) => e.department_id === departmentFilter)
+    }
+    return list
+  }, [employees, roleFilter, departmentFilter])
 
   const hasAdminLikeAccess =
     user?.role === 'admin' ||
@@ -72,12 +92,13 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
     user?.role === 'manager'
   const canEditEmployee = user?.role === 'admin' || user?.role === 'super_admin'
   const canResetPassword = user?.role === 'admin' || user?.role === 'super_admin'
+  const canDeleteEmployeeAsSuperAdmin = isSuperAdmin(user?.role)
 
   const getRoleLabel = (role: string) => {
     switch (role) {
       case 'super_admin': return 'Super Admin'
       case 'admin': return 'Quản trị viên'
-      case 'director': return 'Giám đốc'
+      case 'director': return 'Lãnh đạo'
       case 'manager': return 'Quản lý'
       case 'leader': return 'Tổ trưởng'
       case 'sales': return 'Nhân viên bán hàng'
@@ -99,6 +120,24 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
 
   useEffect(() => {
     fetchEmployees()
+  }, [refreshKey])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadDepartments = async () => {
+      try {
+        const res = await apiClient.get('/api/departments/flat')
+        if (!cancelled && res.data?.success) {
+          setDepartments(res.data.data || [])
+        }
+      } catch {
+        if (!cancelled) setDepartments([])
+      }
+    }
+    void loadDepartments()
+    return () => {
+      cancelled = true
+    }
   }, [refreshKey])
 
   // Cập nhật vị trí dropdown khi mở và khi scroll/resize
@@ -142,7 +181,7 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
 
   useEffect(() => {
     setOpenMenuId(null)
-  }, [roleFilter])
+  }, [roleFilter, departmentFilter])
 
   const fetchEmployees = async () => {
     try {
@@ -161,7 +200,48 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
     }
   }
 
-  const handleResetPassword = async (employeeId: string, employeeName: string, username: string, email: string) => {
+  const handleDeleteEmployee = async (employee: Employee) => {
+    if (!canDeleteEmployeeAsSuperAdmin) return
+    if (employee.employee_id === user?.id) {
+      toast.error('Không thể xóa tài khoản của chính bạn.')
+      return
+    }
+    if (String(employee.role || '').toLowerCase() === 'super_admin') {
+      toast.error('Không được xóa tài khoản Super Admin.')
+      return
+    }
+    const confirmed = await showConfirm({
+      title: 'Xóa nhân viên vĩnh viễn',
+      message: `Xóa vĩnh viễn "${employee.full_name}" (@${employee.username})? Hành động này không hoàn tác. Dữ liệu gán cho nhân viên sẽ được gỡ (khách, deal, task…).`,
+      confirmText: 'Xóa',
+      cancelText: 'Hủy',
+    })
+    if (!confirmed) return
+
+    setOpenMenuId(null)
+    try {
+      setDeletingId(employee.employee_id)
+      const res = await apiClient.delete(`/api/employees/${employee.employee_id}`)
+      if (res.data?.success) {
+        toast.success('Đã xóa nhân viên.')
+        fetchEmployees()
+      } else {
+        toast.error(res.data?.message || 'Xóa thất bại')
+      }
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Lỗi khi xóa nhân viên')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  const handleResetPassword = async (
+    employeeId: string,
+    employeeName: string,
+    username: string,
+    email: string,
+    phone?: string | null
+  ) => {
     const confirmed = await showConfirm({
       title: 'Xác nhận reset password',
       message: `Bạn có chắc chắn muốn reset password cho ${employeeName}?`,
@@ -182,7 +262,8 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
           employee: {
             full_name: employeeName,
             username: username,
-            email: email
+            email: email,
+            phone: phone ?? null
           },
           newPassword: response.data.data.new_password
         })
@@ -238,6 +319,13 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
     return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`
   }
 
+  const formatDepartmentCell = (e: Employee) => {
+    const name = e.department_name?.trim()
+    if (!name) return '—'
+    const prefix = e.department_type === 'team' ? '└ ' : ''
+    return `${prefix}${name}`
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -272,27 +360,48 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
 
   return (
     <div className="bg-white rounded-lg shadow overflow-hidden">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50/90">
-        <div className="flex items-center gap-2 text-sm text-gray-700">
-          <Filter className="w-4 h-4 text-gray-500 shrink-0" />
-          <label htmlFor="employee-role-filter" className="font-medium text-gray-700 shrink-0">
-            Vai trò
-          </label>
-          <select
-            id="employee-role-filter"
-            value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value)}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none min-w-[200px]"
-          >
-            <option value="">Tất cả</option>
-            {ROLE_FILTER_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+      <div className="flex flex-col lg:flex-row lg:flex-wrap lg:items-center gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50/90">
+        <div className="flex flex-wrap items-center gap-3 text-sm text-gray-700">
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-gray-500 shrink-0" />
+            <label htmlFor="employee-role-filter" className="font-medium text-gray-700 shrink-0">
+              Vai trò
+            </label>
+            <select
+              id="employee-role-filter"
+              value={roleFilter}
+              onChange={(e) => setRoleFilter(e.target.value)}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none min-w-[180px]"
+            >
+              <option value="">Tất cả</option>
+              {ROLE_FILTER_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <label htmlFor="employee-dept-filter" className="font-medium text-gray-700 shrink-0">
+              Phòng/Tổ
+            </label>
+            <select
+              id="employee-dept-filter"
+              value={departmentFilter}
+              onChange={(e) => setDepartmentFilter(e.target.value)}
+              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-900 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 outline-none min-w-[220px]"
+            >
+              <option value="">Tất cả</option>
+              <option value="__unassigned__">Chưa gán phòng/tổ</option>
+              {departments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.type === 'team' ? `└ ${d.name}` : d.name}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <p className="text-xs text-gray-500 sm:text-right">
+        <p className="text-xs text-gray-500 lg:ml-auto">
           Hiển thị{' '}
           <span className="font-semibold text-gray-700">{filteredEmployees.length}</span>
           {employees.length !== filteredEmployees.length && (
@@ -306,10 +415,13 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
       </div>
       {filteredEmployees.length === 0 ? (
         <div className="p-10 text-center text-gray-600 text-sm">
-          Không có nhân viên nào khớp vai trò đã chọn.{' '}
+          Không có nhân viên nào khớp bộ lọc đã chọn.{' '}
           <button
             type="button"
-            onClick={() => setRoleFilter('')}
+            onClick={() => {
+              setRoleFilter('')
+              setDepartmentFilter('')
+            }}
             className="text-primary-600 hover:underline font-medium"
           >
             Xóa bộ lọc
@@ -325,6 +437,9 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
               </th>
               <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Vai trò
+              </th>
+              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider min-w-[140px] max-w-[220px]">
+                Phòng/Tổ
               </th>
               <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider max-w-[140px]">
                 Địa bàn
@@ -357,6 +472,12 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
                         <Mail className="w-3 h-3 flex-shrink-0" />
                         <span className="truncate">{employee.email}</span>
                       </div>
+                      {(employee.phone && String(employee.phone).trim()) ? (
+                        <div className="text-xs text-gray-500 truncate flex items-center gap-1 mt-0.5">
+                          <Phone className="w-3 h-3 flex-shrink-0" />
+                          <span className="truncate">{String(employee.phone).trim()}</span>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </td>
@@ -367,8 +488,13 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
                     )}
                     <span className="hidden sm:inline">{getRoleLabel(employee.role)}</span>
                     <span className="sm:hidden">
-                      {employee.role === 'admin' || employee.role === 'super_admin' ? 'Admin' : employee.role === 'manager' ? 'QL' : employee.role === 'director' ? 'GĐ' : employee.role === 'leader' ? 'TT' : 'Sales'}
+                      {employee.role === 'admin' || employee.role === 'super_admin' ? 'Admin' : employee.role === 'manager' ? 'QL' : employee.role === 'director' ? 'LD' : employee.role === 'leader' ? 'TT' : 'Sales'}
                     </span>
+                  </span>
+                </td>
+                <td className="px-3 py-3 text-xs text-gray-800 max-w-[220px]">
+                  <span className="line-clamp-2" title={formatDepartmentCell(employee) !== '—' ? formatDepartmentCell(employee) : undefined}>
+                    {formatDepartmentCell(employee)}
                   </span>
                 </td>
                 <td className="px-3 py-3 text-xs text-gray-700 max-w-[160px]">
@@ -446,7 +572,7 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
             {canResetPassword && (
               <button
                 onClick={() => {
-                  handleResetPassword(employee.employee_id, employee.full_name, employee.username, employee.email)
+                  handleResetPassword(employee.employee_id, employee.full_name, employee.username, employee.email, employee.phone)
                   setOpenMenuId(null)
                 }}
                 disabled={resettingId === employee.employee_id}
@@ -468,6 +594,25 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
                 <span>Chuyển giao khách hàng</span>
               </button>
             )}
+            {canDeleteEmployeeAsSuperAdmin &&
+              employee.employee_id !== user?.id &&
+              String(employee.role || '').toLowerCase() !== 'super_admin' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void handleDeleteEmployee(employee)
+                  }}
+                  disabled={deletingId === employee.employee_id}
+                  className="w-full flex items-center gap-2 px-4 py-2 text-sm text-red-700 hover:bg-red-50 transition text-left disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {deletingId === employee.employee_id ? (
+                    <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                  ) : (
+                    <Trash2 className="w-4 h-4 shrink-0" />
+                  )}
+                  <span>{deletingId === employee.employee_id ? 'Đang xóa...' : 'Xóa nhân viên'}</span>
+                </button>
+              )}
           </div>
         )
         return createPortal(menu, document.body)
@@ -539,6 +684,12 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
                 <p className="font-semibold text-gray-900">{resetPasswordData.employee.full_name}</p>
                 <p className="text-sm text-gray-600">@{resetPasswordData.employee.username}</p>
                 <p className="text-sm text-gray-600">{resetPasswordData.employee.email}</p>
+                <p className="text-sm text-gray-600">
+                  <span className="text-gray-500">Số điện thoại: </span>
+                  {resetPasswordData.employee.phone != null && String(resetPasswordData.employee.phone).trim()
+                    ? String(resetPasswordData.employee.phone).trim()
+                    : '—'}
+                </p>
               </div>
               
               <div className="mb-4">

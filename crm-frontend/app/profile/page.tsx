@@ -6,16 +6,18 @@ import { Navbar } from '@/components/Navbar'
 import { useAuth } from '@/contexts/AuthContext'
 import { ChangePasswordForm } from '@/components/ChangePasswordForm'
 import { apiClient } from '@/lib/api'
-import { User, Mail, Shield, UserCheck, Calendar, Key, X } from 'lucide-react'
+import { User, Mail, Shield, UserCheck, Calendar, Key, X, Phone } from 'lucide-react'
 
 export default function ProfilePage() {
   const { user } = useAuth()
   const [showChangePassword, setShowChangePassword] = useState(false)
   const [departmentName, setDepartmentName] = useState<string>('')
+  const [phoneDisplay, setPhoneDisplay] = useState<string>('')
 
   useEffect(() => {
     if (!user?.id) {
       setDepartmentName('')
+      setPhoneDisplay('')
       return
     }
     let cancelled = false
@@ -24,6 +26,8 @@ export default function ProfilePage() {
         const res = await apiClient.get(`/api/employees/${user.id}`)
         if (!cancelled && res.data?.success) {
           setDepartmentName(res.data?.data?.department_name || '')
+          const p = res.data?.data?.phone
+          setPhoneDisplay(p != null && String(p).trim() ? String(p).trim() : '')
         }
       } catch (_) {
         if (!cancelled) setDepartmentName('')
@@ -39,10 +43,16 @@ export default function ProfilePage() {
 
   const getRoleLabel = (role: string) => {
     switch (role) {
+      case 'super_admin':
+        return 'Super Admin'
       case 'admin':
         return 'Quản trị viên'
+      case 'director':
+        return 'Lãnh đạo'
       case 'manager':
         return 'Quản lý'
+      case 'leader':
+        return 'Tổ trưởng'
       case 'sales':
         return 'Nhân viên bán hàng'
       default:
@@ -52,10 +62,15 @@ export default function ProfilePage() {
 
   const getRoleColor = (role: string) => {
     switch (role) {
+      case 'super_admin':
+        return 'bg-red-100 text-red-800'
       case 'admin':
         return 'bg-purple-100 text-purple-800'
+      case 'director':
       case 'manager':
         return 'bg-indigo-100 text-indigo-800'
+      case 'leader':
+        return 'bg-cyan-100 text-cyan-800'
       case 'sales':
         return 'bg-blue-100 text-blue-800'
       default:
@@ -118,6 +133,17 @@ export default function ProfilePage() {
                   </div>
                   <p className="text-lg font-semibold text-gray-900">
                     {user.email || 'Chưa cập nhật'}
+                  </p>
+                </div>
+
+                {/* Số điện thoại */}
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Phone className="w-5 h-5 text-gray-400" />
+                    <label className="text-sm font-medium text-gray-500">Số điện thoại</label>
+                  </div>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {phoneDisplay || 'Chưa cập nhật'}
                   </p>
                 </div>
 

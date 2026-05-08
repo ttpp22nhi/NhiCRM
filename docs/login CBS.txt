@@ -1,0 +1,17 @@
+curl --location 'https://cbs.mobifone.vn/api/v1/auth/login' \
+--header 'Content-Type: application/json' \
+--data-raw '{"userName":"nam.vohoai","password":"L@ncns@4567"}'
+
+response:
+{
+    "type": "BEARER",
+    "accessToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJVU0VSIiwibmFtZSI6Ik5BTU5WSCIsImlkIjozNjE5LCJleHAiOjE3NzY3MjMwNDJ9._SwtuLjQojjYx78vE5TeAhzvHJIH3gg6gVe_PdKB5wE",
+    "info": {
+        "id": 3619,
+        "name": "Nguyễn Võ Hoài Nam",
+        "username": "NAMNVH",
+        "status": 1,
+        "adminProduct": false,
+        "email": "nam.vohoai@mobifone.vn"
+    }
+}

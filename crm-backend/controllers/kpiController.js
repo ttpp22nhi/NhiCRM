@@ -7,27 +7,17 @@ import { v4 as uuidv4 } from 'uuid'
 import pool from '../database.js'
 import { getTenantId } from '../utils/tenantHelper.js'
 import { isKpiAssignerRole, isTenantAdminRole } from '../config/rbac.js'
+import {
+  isKpiPeriodActualsLocked,
+  formatKpiConfirmationDeadlineDdMmYyyy,
+} from '../utils/kpiPeriodLock.js'
 
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/
-const VN_TZ_OFFSET_MS = 7 * 60 * 60 * 1000 // Asia/Ho_Chi_Minh (UTC+7)
 
 function parsePeriod(q) {
   const p = q && String(q).trim()
   if (!p || !PERIOD_RE.test(p)) return null
   return p
-}
-
-/** Kỳ hiện tại theo giờ VN, dạng YYYY-MM. */
-function currentPeriodVN() {
-  const d = new Date(Date.now() + VN_TZ_OFFSET_MS)
-  const y = d.getUTCFullYear()
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0')
-  return `${y}-${m}`
-}
-
-/** So sánh kỳ dạng YYYY-MM theo thứ tự từ điển — an toàn vì có padStart. */
-function isPastPeriod(period) {
-  return period < currentPeriodVN()
 }
 
 function toMoney(v) {
@@ -66,7 +56,7 @@ export async function getKpis(req, res) {
   if (!assigner && !isSales) {
     return res.status(403).json({
       success: false,
-      message: 'Chỉ Giám đốc, Quản lý, Admin hoặc Sales mới xem được KPI.',
+      message: 'Chỉ Lãnh đạo, Quản lý, Admin hoặc Sales mới xem được KPI.',
     })
   }
 
@@ -77,7 +67,9 @@ export async function getKpis(req, res) {
                 k.id AS kpi_id, k.period,
                 k.target_revenue_new, k.target_revenue_existing,
                 k.actual_revenue_new, k.actual_revenue_existing,
-                k.approach_count, k.actual_approach_count
+                k.approach_count, k.actual_approach_count,
+                k.target_product_count_new, k.target_product_count_existing,
+                k.actual_product_count_new, k.actual_product_count_existing
          FROM employees e
          LEFT JOIN kpis k ON k.tenant_id = e.tenant_id
            AND k.user_id = e.employee_id AND k.period = $2
@@ -87,6 +79,8 @@ export async function getKpis(req, res) {
       return res.json({
         success: true,
         period,
+        period_actuals_locked: isKpiPeriodActualsLocked(period),
+        confirmation_deadline_ddmmyyyy: formatKpiConfirmationDeadlineDdMmYyyy(period),
         canAssign: false,
         data: r.rows,
       })
@@ -97,7 +91,9 @@ export async function getKpis(req, res) {
               k.id AS kpi_id, k.period,
               k.target_revenue_new, k.target_revenue_existing,
               k.actual_revenue_new, k.actual_revenue_existing,
-              k.approach_count, k.actual_approach_count
+              k.approach_count, k.actual_approach_count,
+              k.target_product_count_new, k.target_product_count_existing,
+              k.actual_product_count_new, k.actual_product_count_existing
        FROM employees e
        LEFT JOIN kpis k ON k.tenant_id = e.tenant_id
          AND k.user_id = e.employee_id AND k.period = $2
@@ -109,6 +105,8 @@ export async function getKpis(req, res) {
     return res.json({
       success: true,
       period,
+      period_actuals_locked: isKpiPeriodActualsLocked(period),
+      confirmation_deadline_ddmmyyyy: formatKpiConfirmationDeadlineDdMmYyyy(period),
       canAssign: true,
       data: r.rows,
     })
@@ -132,7 +130,7 @@ export async function upsertKpis(req, res) {
   if (!isKpiAssignerRole(role)) {
     return res.status(403).json({
       success: false,
-      message: 'Chỉ Giám đốc, Quản lý hoặc Admin mới giao KPI cho Sales.',
+      message: 'Chỉ Lãnh đạo, Quản lý hoặc Admin mới giao KPI cho Sales.',
     })
   }
 
@@ -152,11 +150,11 @@ export async function upsertKpis(req, res) {
     })
   }
 
-  // Qua tháng mới thì KPI tháng cũ bị khoá — chỉ Admin (tenant admin / super admin) mới sửa được.
-  if (isPastPeriod(period) && !isTenantAdminRole(role)) {
+  // Sau hạn ngày 5 (VN) tháng kế sau kỳ: chốt — chỉ Admin sửa chỉ tiêu; actuals không còn recompute.
+  if (isKpiPeriodActualsLocked(period) && !isTenantAdminRole(role)) {
     return res.status(403).json({
       success: false,
-      message: `Kỳ ${period} đã kết thúc. Chỉ Admin mới được chỉnh sửa KPI tháng cũ.`,
+      message: `Kỳ ${period} đã chốt (sau hạn xác nhận ngày 5 tháng kế tiếp, giờ VN). Chỉ Admin mới chỉnh được chỉ tiêu.`,
     })
   }
 
@@ -189,7 +187,9 @@ export async function upsertKpis(req, res) {
       const tn = toMoney(row.target_revenue_new ?? 0)
       const te = toMoney(row.target_revenue_existing ?? 0)
       const ac = toInt(row.approach_count ?? 0)
-      if (tn === null || te === null || ac === null) {
+      const pcn = toInt(row.target_product_count_new ?? 0)
+      const pce = toInt(row.target_product_count_existing ?? 0)
+      if (tn === null || te === null || ac === null || pcn === null || pce === null) {
         await client.query('ROLLBACK')
         return res.status(400).json({
           success: false,
@@ -208,9 +208,11 @@ export async function upsertKpis(req, res) {
             target_revenue_new = $1,
             target_revenue_existing = $2,
             approach_count = $3,
-            updated_at = $4
-           WHERE tenant_id = $5 AND user_id = $6 AND period = $7`,
-          [tn, te, ac, now, tenantId, userId, period]
+            target_product_count_new = $4,
+            target_product_count_existing = $5,
+            updated_at = $6
+           WHERE tenant_id = $7 AND user_id = $8 AND period = $9`,
+          [tn, te, ac, pcn, pce, now, tenantId, userId, period]
         )
       } else {
         await client.query(
@@ -218,9 +220,12 @@ export async function upsertKpis(req, res) {
             id, tenant_id, user_id, period,
             target_revenue_new, target_revenue_existing,
             actual_revenue_new, actual_revenue_existing,
-            approach_count, created_at, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $7, $8, $8)`,
-          [uuidv4(), tenantId, userId, period, tn, te, ac, now]
+            approach_count,
+            target_product_count_new, target_product_count_existing,
+            actual_product_count_new, actual_product_count_existing,
+            created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, 0, 0, $7, $8, $9, 0, 0, $10, $10)`,
+          [uuidv4(), tenantId, userId, period, tn, te, ac, pcn, pce, now]
         )
       }
     }

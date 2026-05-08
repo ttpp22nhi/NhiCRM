@@ -1,12 +1,13 @@
 'use client'
 
-import { Mail, Shield, UserCheck, Calendar, User, CheckCircle, XCircle, MapPin } from 'lucide-react'
+import { Mail, Shield, UserCheck, Calendar, User, CheckCircle, XCircle, MapPin, Phone } from 'lucide-react'
 
 interface Employee {
   employee_id: string
   username: string
   full_name: string
   email: string
+  phone?: string | null
   role: string
   is_active: boolean
   created_at: number | string
@@ -53,7 +54,7 @@ export function EmployeeDetailView({ employee, onClose }: EmployeeDetailViewProp
       case 'admin':
         return 'Quản trị viên'
       case 'director':
-        return 'Giám đốc'
+        return 'Lãnh đạo'
       case 'manager':
         return 'Quản lý'
       case 'leader':
@@ -129,6 +130,19 @@ export function EmployeeDetailView({ employee, onClose }: EmployeeDetailViewProp
                   <label className="text-sm font-medium text-gray-500">Email</label>
                 </div>
                 <p className="text-lg font-semibold text-gray-900">{employee.email}</p>
+              </div>
+
+              {/* Điện thoại — luôn hiển thị (giống các trường liên hệ khác) */}
+              <div className="bg-gray-50 rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Phone className="w-5 h-5 text-gray-400" />
+                  <label className="text-sm font-medium text-gray-500">Số điện thoại</label>
+                </div>
+                <p className="text-lg font-semibold text-gray-900">
+                  {employee.phone != null && String(employee.phone).trim()
+                    ? String(employee.phone).trim()
+                    : 'Chưa cập nhật'}
+                </p>
               </div>
 
               {/* Vai trò */}

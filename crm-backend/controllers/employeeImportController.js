@@ -30,6 +30,13 @@ function normalizeHeader(cell) {
     ['ho ten', 'full_name'],
     ['fullname', 'full_name'],
     ['email', 'email'],
+    ['phone', 'phone'],
+    ['điện thoại', 'phone'],
+    ['dien thoai', 'phone'],
+    ['số điện thoại', 'phone'],
+    ['so dien thoai', 'phone'],
+    ['mobile', 'phone'],
+    ['sdt', 'phone'],
     ['role', 'role'],
     ['vai trò', 'role'],
     ['vai tro', 'role'],
@@ -73,6 +80,7 @@ export async function downloadEmployeeImportTemplate(_req, res) {
       'password',
       'full_name',
       'email',
+      'phone',
       'role',
       'department_id',
       'department_name',
@@ -85,6 +93,7 @@ export async function downloadEmployeeImportTemplate(_req, res) {
       'MatKhau@123',
       'Nguyễn Văn A',
       'a@example.com',
+      '0901234567',
       'sales',
       '',
       'Tên phòng theo hệ thống (nếu không dùng department_id)',
@@ -98,6 +107,7 @@ export async function downloadEmployeeImportTemplate(_req, res) {
       '- role: admin | director | manager | leader | sales (mặc định sales).',
       '- Điền department_id HOẶC department_name (ưu tiên department_id).',
       '- Email có thể để trống.',
+      '- phone (số điện thoại): tùy chọn.',
       '- title (chức danh): tùy chọn, mô tả chức danh hiển thị — VD: Chuyên viên, NVKD.',
       '- rank (cấp bậc): tùy chọn, chuỗi tự quy ước trong công ty (không có danh mục cố định trong hệ thống).',
       '  Có thể ghi mức số (1,2,3), cấp chữ (A,B), hoặc tên cấp (NV1, CVCC…) — để trống nếu không dùng.',
@@ -109,6 +119,7 @@ export async function downloadEmployeeImportTemplate(_req, res) {
       { wch: 14 },
       { wch: 22 },
       { wch: 18 },
+      { wch: 14 },
       { wch: 10 },
       { wch: 36 },
       { wch: 28 },
@@ -287,6 +298,8 @@ export async function importEmployeesFromExcel(req, res) {
       const full_name = cellStr(obj.full_name)
       const emailRaw = cellStr(obj.email)
       const email = emailRaw || null
+      const phoneRaw = cellStr(obj.phone)
+      const phoneVal = phoneRaw ? phoneRaw.slice(0, 30) : null
 
       if (!username || !password || !full_name) {
         errors.push({
@@ -361,7 +374,7 @@ export async function importEmployeesFromExcel(req, res) {
 
       try {
         await pool.query(
-          `INSERT INTO employees (employee_id, username, password_hash, full_name, email, role, department_id, title, rank, territory, tenant_id, is_active, created_at)
+          `INSERT INTO employees (employee_id, username, password_hash, full_name, email, phone, role, department_id, title, rank, territory, tenant_id, is_active, created_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,$13)`,
           [
             employee_id,
@@ -369,6 +382,7 @@ export async function importEmployeesFromExcel(req, res) {
             password_hash,
             full_name,
             email,
+            phoneVal,
             role,
             department_id,
             title,

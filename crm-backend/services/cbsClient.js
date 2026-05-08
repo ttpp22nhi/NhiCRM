@@ -111,15 +111,34 @@ export async function fetchMonthlyReport({
     err.payload = payload
     throw err
   }
-  return Array.isArray(payload?.data) ? payload.data : []
+  const d = payload?.data
+  if (Array.isArray(d)) return d
+  if (Array.isArray(d?.items)) return d.items
+  if (Array.isArray(d?.rows)) return d.rows
+  if (Array.isArray(payload?.items)) return payload.items
+  return []
 }
 
 function formatDDMMYYYY(d) {
   const x = d instanceof Date ? d : new Date(d)
-  const dd = String(x.getDate()).padStart(2, '0')
-  const mm = String(x.getMonth() + 1).padStart(2, '0')
-  const yyyy = x.getFullYear()
+  // Luôn dùng UTC: from/to được tạo bằng Date.UTC — tránh server ở TZ khác VN gửi sai 01/04…/30/04.
+  const dd = String(x.getUTCDate()).padStart(2, '0')
+  const mm = String(x.getUTCMonth() + 1).padStart(2, '0')
+  const yyyy = x.getUTCFullYear()
   return `${dd}/${mm}/${yyyy}`
+}
+
+/** Lấy [from, to] (Date) của tháng yyyy-mm theo lịch (first/last day), dùng UTC date components giống currentVNMonthRange. */
+export function vnMonthRangeFromYyyyMm(yyyyMm) {
+  const raw = String(yyyyMm || '').trim()
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(raw)) return null
+  const [ys, mos] = raw.split('-')
+  const y = parseInt(ys, 10)
+  const m0 = parseInt(mos, 10) - 1
+  if (m0 < 0 || m0 > 11) return null
+  const from = new Date(Date.UTC(y, m0, 1))
+  const to = new Date(Date.UTC(y, m0 + 1, 0))
+  return { from, to, year: y, month: m0 + 1 }
 }
 
 /** Lấy [from, to] (Date) của tháng hiện tại theo giờ VN (GMT+7). */

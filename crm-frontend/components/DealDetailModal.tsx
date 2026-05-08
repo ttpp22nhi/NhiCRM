@@ -1,10 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { X, Edit2, DollarSign, User, Calendar, Package, FileText, StickyNote, Briefcase, CheckSquare, ChevronDown, Receipt } from 'lucide-react'
+import { useEffect, useState, useCallback } from 'react'
+import { X, Edit2, DollarSign, User, Calendar, Package, FileText, StickyNote, Briefcase, CheckSquare, ChevronDown, Receipt, Plus, Clock as ClockIcon } from 'lucide-react'
 import type { Deal } from './KanbanBoard'
 import { DealTimeline } from './DealTimeline'
 import { apiClient } from '@/lib/api'
+import { CreateTaskModal } from './CreateTaskModal'
+import { CompleteTaskModal } from './CompleteTaskModal'
+import { useAuth } from '@/contexts/AuthContext'
+import toast from 'react-hot-toast'
 
 const STAGE_LABELS: Record<string, string> = {
   tiep_can: 'Tiếp cận',
@@ -42,6 +46,18 @@ interface DealDetailModalProps {
   canApprove?: boolean
 }
 
+interface DealTask {
+  task_id: string
+  display_code?: string
+  title: string
+  description?: string | null
+  is_completed: boolean
+  due_date?: number | null
+  priority?: string
+  assigned_to?: string | null
+  assigned_employee_name?: string | null
+}
+
 interface LinkedCbsOrder {
   id: string
   period_ym: string | null
@@ -60,10 +76,17 @@ interface LinkedCbsOrder {
 }
 
 export function DealDetailModal({ deal, onClose, onEdit, onApprove, canApprove }: DealDetailModalProps) {
+  const { user } = useAuth()
   const showApprove = deal.status === 'pending_approval' && canApprove && onApprove
   const [showSuccessDetails, setShowSuccessDetails] = useState(false)
   const [cbsOrders, setCbsOrders] = useState<LinkedCbsOrder[]>([])
   const [loadingCbs, setLoadingCbs] = useState(false)
+  const [tasks, setTasks] = useState<DealTask[]>([])
+  const [loadingTasks, setLoadingTasks] = useState(false)
+  const [showCreateTask, setShowCreateTask] = useState(false)
+  const [employees, setEmployees] = useState<{ employee_id: string; full_name?: string; username?: string }[]>([])
+  const [completingTask, setCompletingTask] = useState<DealTask | null>(null)
+  const [tasksRefresh, setTasksRefresh] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -86,6 +109,37 @@ export function DealDetailModal({ deal, onClose, onEdit, onApprove, canApprove }
       cancelled = true
     }
   }, [deal.deal_id])
+
+  const reloadTasks = useCallback(async () => {
+    setLoadingTasks(true)
+    try {
+      const res = await apiClient.get('/api/tasks', {
+        params: { related_type: 'DEAL', related_id: deal.deal_id },
+      })
+      if (res.data?.success) setTasks(res.data.data || [])
+    } catch {
+      setTasks([])
+    } finally {
+      setLoadingTasks(false)
+    }
+  }, [deal.deal_id])
+
+  useEffect(() => {
+    reloadTasks()
+  }, [reloadTasks, tasksRefresh])
+
+  useEffect(() => {
+    let cancelled = false
+    apiClient
+      .get('/api/employees/assignable')
+      .then((r) => {
+        if (!cancelled && r.data?.success) setEmployees(r.data.data || [])
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const totalCbs = cbsOrders.reduce(
     (sum, o) => sum + Number(o.price_not_vat_round ?? o.price_not_vat ?? 0),
@@ -160,6 +214,12 @@ export function DealDetailModal({ deal, onClose, onEdit, onApprove, canApprove }
                 {deal.confidence_note}
               </div>
             )}
+            {deal.description && String(deal.description).trim() && (
+              <div className="mt-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                <p className="text-xs font-medium text-slate-600 mb-1">Nội dung</p>
+                <p className="text-sm text-gray-900 whitespace-pre-wrap break-words">{String(deal.description).trim()}</p>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-3 text-sm">
@@ -203,17 +263,6 @@ export function DealDetailModal({ deal, onClose, onEdit, onApprove, canApprove }
               </div>
             </div>
 
-            {deal.metadata != null && typeof deal.metadata.task_total === 'number' && deal.metadata.task_total > 0 && (
-              <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
-                <CheckSquare className="w-5 h-5 text-gray-500 flex-shrink-0" />
-                <div>
-                  <p className="text-xs text-gray-500">Công việc</p>
-                  <p className="font-medium text-gray-900">
-                    {deal.metadata.task_completed ?? 0}/{deal.metadata.task_total} công việc đã hoàn thành
-                  </p>
-                </div>
-              </div>
-            )}
 
             {(deal.status === 'cancelled' || deal.status === 'lost') && deal.loss_reason && (
               <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
@@ -282,6 +331,95 @@ export function DealDetailModal({ deal, onClose, onEdit, onApprove, canApprove }
                 </div>
               </div>
             )}
+
+          {/* Công việc liên quan */}
+          <div className="border-t border-gray-200 pt-4 mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <CheckSquare className="w-4 h-4 text-primary-600" />
+                <h3 className="text-sm font-semibold text-gray-900">Công việc của cơ hội</h3>
+                <span className="text-xs text-gray-500">
+                  ({tasks.filter((t) => t.is_completed).length}/{tasks.length})
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateTask(true)}
+                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-primary-600 text-white rounded-md hover:bg-primary-700"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Công việc
+              </button>
+            </div>
+            {loadingTasks ? (
+              <div className="text-xs text-gray-400">Đang tải...</div>
+            ) : tasks.length === 0 ? (
+              <div className="text-xs text-gray-500 italic">
+                Chưa có công việc nào. Bấm “+ Công việc” để tạo việc cần làm cho cơ hội này.
+              </div>
+            ) : (
+              <ul className="space-y-1.5">
+                {tasks.map((t) => (
+                  <li
+                    key={t.task_id}
+                    className={`flex items-start gap-2 p-2 rounded-md border ${
+                      t.is_completed
+                        ? 'bg-green-50 border-green-100'
+                        : 'bg-white border-gray-200'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!!t.is_completed}
+                      onChange={async () => {
+                        if (t.is_completed) return
+                        setCompletingTask(t)
+                      }}
+                      className="mt-0.5"
+                      disabled={t.is_completed}
+                      title={t.is_completed ? 'Đã hoàn thành' : 'Tick để mở form ghi kết quả'}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {t.display_code && (
+                          <span className="text-[10px] font-medium text-gray-500">{t.display_code}</span>
+                        )}
+                        <span
+                          className={`text-sm font-medium text-gray-900 truncate ${
+                            t.is_completed ? 'line-through text-gray-500' : ''
+                          }`}
+                        >
+                          {t.title}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-[11px] text-gray-500 mt-0.5">
+                        {t.assigned_employee_name && (
+                          <span className="inline-flex items-center gap-1">
+                            <User className="w-3 h-3" />
+                            {t.assigned_employee_name}
+                          </span>
+                        )}
+                        {t.due_date && (
+                          <span className="inline-flex items-center gap-1">
+                            <ClockIcon className="w-3 h-3" />
+                            {formatDate(t.due_date)}
+                          </span>
+                        )}
+                      </div>
+                      {t.description && String(t.description).trim() && (
+                        <p
+                          className="text-[11px] text-gray-600 mt-1 whitespace-pre-wrap break-words max-h-20 overflow-y-auto leading-snug"
+                          title="Nội dung công việc"
+                        >
+                          {String(t.description).trim()}
+                        </p>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
 
           {/* Đơn CBS liên kết */}
           {(loadingCbs || cbsOrders.length > 0) && (
@@ -356,11 +494,48 @@ export function DealDetailModal({ deal, onClose, onEdit, onApprove, canApprove }
 
           {/* Workflow (timeline) + File đính kèm */}
           <div className="border-t border-gray-200 pt-4 mt-4">
-            <DealTimeline dealId={deal.deal_id} onRefresh={() => {}} />
+            <DealTimeline
+              key={`tl-${tasksRefresh}`}
+              dealId={deal.deal_id}
+              onRefresh={() => setTasksRefresh((v) => v + 1)}
+            />
           </div>
           </div>
         </div>
       </div>
+
+      {showCreateTask && (
+        <CreateTaskModal
+          onClose={() => setShowCreateTask(false)}
+          onSuccess={() => {
+            setShowCreateTask(false)
+            setTasksRefresh((v) => v + 1)
+          }}
+          employees={employees}
+          userRole={user?.role}
+          presetDeal={{
+            deal_id: deal.deal_id,
+            display_code: deal.display_code,
+            customer_id: deal.customer_id ?? null,
+            customer_name: deal.customer_full_name ?? null,
+            assigned_to: deal.assigned_to ?? null,
+          }}
+        />
+      )}
+
+      {completingTask && (
+        <CompleteTaskModal
+          taskId={completingTask.task_id}
+          taskTitle={completingTask.title}
+          customerName={deal.customer_full_name}
+          onSuccess={() => {
+            setCompletingTask(null)
+            setTasksRefresh((v) => v + 1)
+            toast.success('Đã hoàn thành công việc.')
+          }}
+          onCancel={() => setCompletingTask(null)}
+        />
+      )}
     </div>
   )
 }

@@ -21,6 +21,7 @@ interface Deal {
   quantity?: number | null
   invoice_info?: string | null
   notes?: string | null
+  description?: string | null
   display_code?: string | null
   deal_category?: 'MASS' | 'PROJECT' | string | null
   confidence_level?: 'high' | 'medium' | 'low' | string | null
@@ -86,6 +87,7 @@ export function DealModal({ deal, customerId, onClose, onSuccess }: DealModalPro
     quantity: deal?.quantity ?? '',
     invoice_info: deal?.invoice_info ?? '',
     notes: deal?.notes ?? '',
+    description: deal?.description ?? '',
     deal_category: (deal?.deal_category as 'MASS' | 'PROJECT') || 'MASS',
     confidence_level: (deal?.confidence_level as 'high' | 'medium' | 'low') || 'medium',
     confidence_note: deal?.confidence_note ?? '',
@@ -129,6 +131,7 @@ export function DealModal({ deal, customerId, onClose, onSuccess }: DealModalPro
         quantity: deal.quantity ?? '',
         invoice_info: deal.invoice_info ?? '',
         notes: deal.notes ?? '',
+        description: deal.description ?? '',
         deal_category: category,
         confidence_level: (deal.confidence_level as 'high' | 'medium' | 'low') || 'medium',
         confidence_note: deal.confidence_note ?? '',
@@ -175,6 +178,7 @@ export function DealModal({ deal, customerId, onClose, onSuccess }: DealModalPro
         quantity: formData.quantity !== '' && formData.quantity != null ? Number(formData.quantity) : null,
         invoice_info: formData.invoice_info?.trim() || null,
         notes: formData.notes?.trim() || null,
+        description: formData.description?.trim() || null,
         confidence_level: formData.confidence_level || 'medium',
         confidence_note: formData.confidence_level === 'low' ? (formData.confidence_note?.trim() || null) : (formData.confidence_note?.trim() || null),
         primary_product_code: formData.primary_product_code?.trim() ? formData.primary_product_code.trim().toUpperCase() : null,
@@ -252,6 +256,19 @@ export function DealModal({ deal, customerId, onClose, onSuccess }: DealModalPro
               onChange={(e) => setFormData({ ...formData, title: e.target.value })}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0074BD] focus:border-transparent"
             />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nội dung</label>
+            <textarea
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              placeholder="Mô tả nhu cầu, diễn biến trao đổi, công việc cần làm tiếp theo…"
+              rows={4}
+              maxLength={4000}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-[#0074BD] focus:border-transparent text-sm resize-y min-h-[5rem]"
+            />
+            <p className="text-xs text-gray-400 mt-1 text-right">{formData.description.length} / 4000</p>
           </div>
 
           <div>

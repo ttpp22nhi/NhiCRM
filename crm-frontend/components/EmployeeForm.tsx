@@ -24,7 +24,7 @@ const ROLE_OPTIONS = [
   { value: 'sales', label: 'Nhân viên bán hàng' },
   { value: 'leader', label: 'Tổ trưởng' },
   { value: 'manager', label: 'Quản lý' },
-  { value: 'director', label: 'Giám đốc' },
+  { value: 'director', label: 'Lãnh đạo' },
   { value: 'admin', label: 'Quản trị viên' }
 ]
 
@@ -40,6 +40,7 @@ export function EmployeeForm({ onSuccess, onCancel }: EmployeeFormProps) {
     password: '',
     full_name: '',
     email: '',
+    phone: '',
     role: 'sales',
     department_id: '' as string,
     title: '',
@@ -94,7 +95,8 @@ export function EmployeeForm({ onSuccess, onCancel }: EmployeeFormProps) {
           department_id: formData.department_id || undefined,
           title: formData.title || undefined,
           rank: formData.rank || undefined,
-          territory: formData.territory?.trim() || undefined
+          territory: formData.territory?.trim() || undefined,
+          phone: formData.phone?.trim() || undefined
         }
       )
       toast.success('Tạo tài khoản nhân viên thành công!')
@@ -263,6 +265,24 @@ export function EmployeeForm({ onSuccess, onCancel }: EmployeeFormProps) {
             required
             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
             placeholder="Nhập email"
+          />
+        </div>
+
+        <div className="md:col-span-2">
+          <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-2">
+            Số điện thoại
+          </label>
+          <input
+            id="phone"
+            name="phone"
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            value={formData.phone}
+            onChange={handleChange}
+            maxLength={30}
+            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
+            placeholder="VD: 0901234567 (tùy chọn)"
           />
         </div>
       </div>

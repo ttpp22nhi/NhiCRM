@@ -14,12 +14,17 @@ export function isTenantAdmin(role?: string | null): boolean {
   return (TENANT_ADMIN_ROLES as readonly string[]).includes(role)
 }
 
+/** Chỉ Super Admin cấp hệ thống */
+export function isSuperAdmin(role?: string | null): boolean {
+  return role === 'super_admin'
+}
+
 export function isExecutive(role?: string | null): boolean {
   if (!role) return false
   return (EXECUTIVE_ROLES as readonly string[]).includes(role)
 }
 
-/** Thêm nhân viên (form / import): Admin, Super Admin, Giám đốc, Quản lý — khớp EMPLOYEE_CREATOR_ROLES backend */
+/** Thêm nhân viên (form / import): Admin, Super Admin, Lãnh đạo, Quản lý — khớp EMPLOYEE_CREATOR_ROLES backend */
 export function canCreateEmployees(role?: string | null): boolean {
   if (!role) return false
   return ['admin', 'super_admin', 'director', 'manager'].includes(role)
@@ -35,7 +40,7 @@ export function canOpenAdminSection(role?: string | null): boolean {
   return isTenantAdmin(role) || isExecutive(role) || isTransferApprover(role)
 }
 
-/** Giao chỉ tiêu KPI hàng tháng cho Sales (Giám đốc, Quản lý, Admin, Super Admin trong tenant) */
+/** Giao chỉ tiêu KPI hàng tháng cho Sales (Lãnh đạo, Quản lý, Admin, Super Admin trong tenant) */
 export function canAssignKpi(role?: string | null): boolean {
   if (!role) return false
   return ['manager', 'director', 'admin', 'super_admin'].includes(role)
