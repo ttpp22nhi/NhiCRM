@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
@@ -163,7 +163,7 @@ const EMPTY_COL_FILTERS: ColumnFilters = {
   sellerStatus: 'all',
 }
 
-export default function CbsRevenuePage() {
+function CbsRevenuePageContent() {
   const { user } = useAuth()
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -953,6 +953,25 @@ export default function CbsRevenuePage() {
         />
       </div>
     </ProtectedRoute>
+  )
+}
+
+export default function CbsRevenuePage() {
+  return (
+    <Suspense
+      fallback={
+        <ProtectedRoute>
+          <div className="min-h-screen bg-gray-50">
+            <Navbar />
+            <div className="flex justify-center py-24">
+              <Loader2 className="h-10 w-10 animate-spin text-primary-600" aria-hidden />
+            </div>
+          </div>
+        </ProtectedRoute>
+      }
+    >
+      <CbsRevenuePageContent />
+    </Suspense>
   )
 }
 

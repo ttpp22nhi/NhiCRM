@@ -515,7 +515,7 @@ export function DealDetailModal({ deal, onClose, onEdit, onApprove, canApprove }
           userRole={user?.role}
           presetDeal={{
             deal_id: deal.deal_id,
-            display_code: deal.display_code,
+            display_code: deal.display_code ?? undefined,
             customer_id: deal.customer_id ?? null,
             customer_name: deal.customer_full_name ?? null,
             assigned_to: deal.assigned_to ?? null,
