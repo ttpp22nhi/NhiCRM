@@ -433,7 +433,7 @@ export async function listCbsOrders(req, res) {
         LEFT JOIN deals d
           ON d.deal_id = o.deal_id AND d.tenant_id = o.tenant_id
        WHERE ${where.join(' AND ')}
-       ORDER BY COALESCE(o.payment_date, o.active_date) DESC, o.price_vat DESC
+       ORDER BY COALESCE(o.active_date, o.payment_date) DESC, o.price_vat DESC
        LIMIT 2000`
 
     const r = await pool.query(sql, params)

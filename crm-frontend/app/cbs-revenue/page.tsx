@@ -26,7 +26,9 @@ import {
   Calculator,
   FilterX,
   Info,
+  Download,
 } from 'lucide-react'
+import { saveAs } from 'file-saver'
 import toast from 'react-hot-toast'
 import { CbsConfigModal } from '@/components/CbsConfigModal'
 import { CbsOrderDetailModal, CbsOrderDetail } from '@/components/CbsOrderDetailModal'
@@ -272,9 +274,9 @@ function CbsRevenuePageContent() {
     const nSeller = normalizeVN(f.seller)
 
     return rows.filter((o) => {
-      // Ngày thu
+      // Ngày kích hoạt
       if (fromMs != null || toMs != null) {
-        const dayMs = toDayMs(o.payment_date || o.active_date)
+        const dayMs = toDayMs(o.active_date)
         if (dayMs == null) return false
         if (fromMs != null && dayMs < fromMs) return false
         if (toMs != null && dayMs > toMs) return false
@@ -457,6 +459,91 @@ function CbsRevenuePageContent() {
     }
   }
 
+  const exportExcel = async () => {
+    const data = filteredData
+    if (!data || data.length === 0) {
+      toast.error('Không có dữ liệu để xuất Excel.')
+      return
+    }
+
+    const ExcelJS = (await import('exceljs')).default
+    const wb = new ExcelJS.Workbook()
+    const ws = wb.addWorksheet(`Doanh thu CBS ${period}`)
+
+    const columns = [
+      { header: 'STT', key: 'stt', width: 6 },
+      { header: 'Ngày kích hoạt', key: 'active_date', width: 18 },
+      { header: 'Khách hàng', key: 'customer_name', width: 30 },
+      { header: 'Hợp đồng', key: 'contract_no', width: 18 },
+      { header: 'Serial', key: 'serial', width: 15 },
+      { header: 'Sản phẩm', key: 'product_name', width: 30 },
+      { header: 'Giá (VAT)', key: 'price_vat', width: 15 },
+      { header: 'Giá (chưa VAT)', key: 'price_not_vat_round', width: 15 },
+      { header: 'VAT', key: 'vat', width: 12 },
+      { header: 'NV CBS', key: 'cbs_staff', width: 20 },
+      { header: 'Đối tác', key: 'partner', width: 20 },
+      { header: 'Người bán', key: 'claimed_by_name', width: 22 },
+      { header: 'Trạng thái', key: 'claim_status', width: 14 },
+      { header: 'Người duyệt', key: 'approved_by_name', width: 22 },
+      { header: 'Ngày thanh toán', key: 'payment_date', width: 18 },
+      { header: 'Loại KH', key: 'customer_type', width: 12 },
+      { header: 'Mã KH (CBS)', key: 'external_id1', width: 15 },
+      { header: 'Mã SP chính', key: 'primary_product_code', width: 15 },
+      { header: 'Mã SP', key: 'masp', width: 12 },
+      { header: 'Loại HĐ', key: 'contract_type', width: 12 },
+    ]
+    ws.columns = columns
+
+    data.forEach((o, idx) => {
+      ws.addRow({
+        stt: idx + 1,
+        active_date: formatDateVN(o.active_date),
+        customer_name: o.customer_name || '',
+        contract_no: o.contract_no || '',
+        serial: o.serial || '',
+        product_name: o.product_name || '',
+        price_vat: Number(o.price_vat) || 0,
+        price_not_vat_round: Number(o.price_not_vat_round) || 0,
+        vat: Number(o.vat) || 0,
+        cbs_staff: o.cbs_staff || '',
+        partner: o.partner || '',
+        claimed_by_name: o.claimed_by_name || '',
+        claim_status: o.claim_status === 'approved' ? 'Đã duyệt'
+          : o.claim_status === 'pending' ? 'Chờ duyệt'
+          : 'Chưa xác nhận',
+        approved_by_name: o.approved_by_name || '',
+        payment_date: formatDateVN(o.payment_date),
+        customer_type: o.customer_type || '',
+        external_id1: o.external_id1 || '',
+        primary_product_code: o.primary_product_code || '',
+        masp: o.masp || '',
+        contract_type: o.contract_type || '',
+      })
+    })
+
+    // Style header row: bold + wrap
+    const headerRow = ws.getRow(1)
+    headerRow.font = { bold: true }
+    headerRow.alignment = { wrapText: true, vertical: 'middle' }
+
+    // Wrap text for all data rows
+    ws.eachRow({ includeEmpty: false }, (row, rowNum) => {
+      if (rowNum === 1) return
+      row.alignment = { wrapText: true, vertical: 'top' }
+    })
+
+    const buf = await wb.xlsx.writeBuffer()
+    const blob = new Blob([buf], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    const now = new Date()
+    const dd = String(now.getDate()).padStart(2, '0')
+    const mm = String(now.getMonth() + 1).padStart(2, '0')
+    const yyyy = now.getFullYear()
+    saveAs(blob, `Doanh_thu_CBS_${dd}-${mm}-${yyyy}.xlsx`)
+    toast.success(`Đã xuất ${data.length} dòng ra Excel.`)
+  }
+
   if (!user || !canAccess) return null
 
   const summary = resp?.summary
@@ -537,6 +624,16 @@ function CbsRevenuePageContent() {
                   Tính lại KPI
                 </button>
               )}
+              <button
+                type="button"
+                onClick={exportExcel}
+                disabled={!filteredData || filteredData.length === 0}
+                className="inline-flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
+                title="Xuất dữ liệu đang hiển thị ra file Excel"
+              >
+                <Download className="w-4 h-4" />
+                Xuất Excel
+              </button>
               {canManage && (
                 <button
                   type="button"
@@ -705,7 +802,7 @@ function CbsRevenuePageContent() {
                   <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                     <tr className="text-xs font-semibold text-gray-600 uppercase">
                       <th className="px-2 py-3 text-center whitespace-nowrap w-12">STT</th>
-                      <th className="px-3 py-3 text-left whitespace-nowrap">Ngày thu</th>
+                      <th className="px-3 py-3 text-left whitespace-nowrap">Ngày kích hoạt</th>
                       <th className="px-3 py-3 text-left">Khách hàng</th>
                       <th className="px-3 py-3 text-left">Sản phẩm</th>
                       <th className="px-3 py-3 text-left">Hợp đồng</th>
@@ -834,7 +931,7 @@ function CbsRevenuePageContent() {
                             {idx + 1}
                           </td>
                           <td className="px-3 py-2 text-xs text-gray-700 whitespace-nowrap">
-                            {formatDateVN(o.payment_date || o.active_date)}
+                            {formatDateVN(o.active_date)}
                           </td>
                           <td className="px-3 py-2 text-sm">
                             <div
