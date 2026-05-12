@@ -427,6 +427,10 @@ function CbsRevenuePageContent() {
 
   const recomputeKpi = async () => {
     if (!canAssignSeller) return
+    const confirmed = window.confirm(
+      'Tính lại KPI sẽ ghi đè toàn bộ chỉ tiêu Thực hiện (actual) của mọi nhân viên dựa trên đơn CBS đã duyệt hiện tại.\n\nBạn có chắc chắn muốn tiếp tục?'
+    )
+    if (!confirmed) return
     setRecomputing(true)
     try {
       const r = await apiClient.post<{ success: boolean; message: string }>(
@@ -613,8 +617,8 @@ function CbsRevenuePageContent() {
                   type="button"
                   onClick={recomputeKpi}
                   disabled={recomputing}
-                  className="inline-flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
-                  title="Tính lại Thực hiện KPI tháng từ các đơn CBS đã duyệt"
+                  className="inline-flex items-center gap-2 bg-white border border-red-300 text-red-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-red-50 disabled:opacity-50"
+                  title="Ghi đè lại toàn bộ KPI Thực hiện từ đơn CBS đã duyệt — thao tác không hoàn tác được"
                 >
                   {recomputing ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
