@@ -2,7 +2,8 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import { register, login, changePassword, getEmployees, getSalesEmployees, getAssignableEmployeesList, getEmployeeById, resetPassword, updateEmployee, deleteEmployee, transferCustomers, getTransferStats } from './controllers/authController.js';
+import cookieParser from 'cookie-parser';
+import { register, login, getMe, changePassword, getEmployees, getSalesEmployees, getAssignableEmployeesList, getEmployeeById, resetPassword, updateEmployee, deleteEmployee, transferCustomers, getTransferStats } from './controllers/authController.js';
 import { downloadEmployeeImportTemplate, importEmployeesFromExcel } from './controllers/employeeImportController.js';
 import { uploadEmployeeImportExcel } from './middleware/uploadEmployeeImport.js';
 import { verifyToken, extractTenant, requireTenant, checkTenantSubscription, verifyTenantAdmin, verifyExecutive, verifyStrictAdmin, verifySuperAdmin, verifyEmployeeCreator } from './middleware/auth.js';
@@ -61,8 +62,9 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-Id'],
 }));
 
-// Middleware xử lý JSON
+// Middleware xử lý JSON & Cookie
 app.use(express.json());
+app.use(cookieParser());
 
 /**
  * Swagger API Documentation
@@ -133,6 +135,11 @@ app.get('/swagger.json', (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 app.post('/api/auth/login', login);
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie('token', { httpOnly: true, sameSite: 'lax', path: '/' });
+  res.json({ success: true, message: 'Đã đăng xuất.' });
+});
+app.get('/api/auth/me', verifyToken, getMe);
 
 /**
  * PROTECTED ROUTES (Yêu cầu Token)

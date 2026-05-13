@@ -22,9 +22,7 @@ import {
   Search,
   ArrowUp,
   ArrowDown,
-  ArrowUpDown,
   X,
-  Package,
   Wallet,
   Download,
 } from 'lucide-react'
@@ -40,6 +38,8 @@ interface KpiRow {
   full_name: string
   username: string
   territory?: string | null
+  department_id?: string | null
+  department_name?: string | null
   kpi_id: string | null
   period: string | null
   target_revenue_new: string | number | null
@@ -146,9 +146,6 @@ type SortKey =
   | 'actual_existing'
   | 'actual_total'
   | 'actual_approach'
-  | 'actual_product_new'
-  | 'actual_product_existing'
-  | 'actual_product_total'
 
 type SortDir = 'asc' | 'desc'
 
@@ -169,6 +166,8 @@ export default function KpiPage() {
   const [saving, setSaving] = useState(false)
   const [displayMode, setDisplayMode] = useState<DisplayMode>('number')
   const [employeeFilter, setEmployeeFilter] = useState('')
+  const [departmentFilter, setDepartmentFilter] = useState('')
+  const [departments, setDepartments] = useState<{ id: string; name: string; parent_id: string | null; type: string }[]>([])
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [exportingReport, setExportingReport] = useState(false)
@@ -229,15 +228,47 @@ export default function KpiPage() {
     load()
   }, [load])
 
+  useEffect(() => {
+    apiClient
+      .get<{ success: boolean; data: { id: string; name: string; parent_id: string | null; type: string }[] }>('/api/departments/flat')
+      .then((res) => {
+        if (res.data.success) setDepartments(res.data.data || [])
+      })
+      .catch(() => {})
+  }, [])
+
   const updateRow = (employeeId: string, field: keyof KpiRow, value: string) => {
     setRows((prev) =>
       prev.map((r) => (r.employee_id === employeeId ? { ...r, [field]: value } : r))
     )
   }
 
+  // Build set of department IDs including children for tree filter
+  const filteredDeptIds = useMemo(() => {
+    if (!departmentFilter) return null
+    if (departmentFilter === '__unassigned__') return '__unassigned__'
+    const ids = new Set<string>()
+    const collect = (parentId: string) => {
+      ids.add(parentId)
+      for (const d of departments) {
+        if (d.parent_id === parentId) collect(d.id)
+      }
+    }
+    collect(departmentFilter)
+    return ids
+  }, [departmentFilter, departments])
+
   const displayRows = useMemo(() => {
     const nFilter = normalizeVN(employeeFilter)
     let list = rows
+
+    // Department tree filter
+    if (filteredDeptIds === '__unassigned__') {
+      list = list.filter((r) => !r.department_id)
+    } else if (filteredDeptIds) {
+      list = list.filter((r) => r.department_id && filteredDeptIds.has(r.department_id))
+    }
+
     if (nFilter) {
       list = list.filter((r) => {
         const hay = normalizeVN(
@@ -277,29 +308,6 @@ export default function KpiPage() {
                 Math.floor(num(r.approach_count))
               )
             : Math.floor(num(r.actual_approach_count))
-        case 'actual_product_new':
-          return displayMode === 'percent'
-            ? achievementRatio(
-                Math.floor(num(r.actual_product_count_new)),
-                Math.floor(num(r.target_product_count_new))
-              )
-            : Math.floor(num(r.actual_product_count_new))
-        case 'actual_product_existing':
-          return displayMode === 'percent'
-            ? achievementRatio(
-                Math.floor(num(r.actual_product_count_existing)),
-                Math.floor(num(r.target_product_count_existing))
-              )
-            : Math.floor(num(r.actual_product_count_existing))
-        case 'actual_product_total': {
-          const a =
-            Math.floor(num(r.actual_product_count_new)) +
-            Math.floor(num(r.actual_product_count_existing))
-          const t =
-            Math.floor(num(r.target_product_count_new)) +
-            Math.floor(num(r.target_product_count_existing))
-          return displayMode === 'percent' ? achievementRatio(a, t) : a
-        }
         default:
           return 0
       }
@@ -320,7 +328,7 @@ export default function KpiPage() {
       return (na - nb) * sign
     })
     return sorted
-  }, [rows, employeeFilter, sortKey, sortDir, displayMode])
+  }, [rows, employeeFilter, filteredDeptIds, sortKey, sortDir, displayMode])
 
   const handleExportReport = async () => {
     if (displayRows.length === 0) {
@@ -341,16 +349,13 @@ export default function KpiPage() {
           full_name: r.full_name || '',
           username: r.username || '',
           territory: String(r.territory || '').trim() || '—',
+          department_name: r.department_name || '',
           target_revenue_new: num(r.target_revenue_new),
           actual_revenue_new: num(r.actual_revenue_new),
           target_revenue_existing: num(r.target_revenue_existing),
           actual_revenue_existing: num(r.actual_revenue_existing),
           approach_target: Math.floor(num(r.approach_count)),
           approach_actual: Math.floor(num(r.actual_approach_count)),
-          target_product_new: Math.floor(num(r.target_product_count_new)),
-          actual_product_new: Math.floor(num(r.actual_product_count_new)),
-          target_product_existing: Math.floor(num(r.target_product_count_existing)),
-          actual_product_existing: Math.floor(num(r.actual_product_count_existing)),
         })),
       })
       toast.success('Đã tải file Excel.')
@@ -373,8 +378,6 @@ export default function KpiPage() {
           target_revenue_new: num(r.target_revenue_new),
           target_revenue_existing: num(r.target_revenue_existing),
           approach_count: Math.floor(num(r.approach_count)),
-          target_product_count_new: Math.floor(num(r.target_product_count_new)),
-          target_product_count_existing: Math.floor(num(r.target_product_count_existing)),
         })),
       })
       toast.success('Đã lưu chỉ tiêu KPI.')
@@ -504,7 +507,7 @@ export default function KpiPage() {
               <Lock className="w-4 h-4 mt-0.5 flex-shrink-0" />
               <div>
                 <strong>Kỳ {period} đã chốt</strong> (quá hạn ngày 5 tháng kế tiếp kỳ). Chỉ{' '}
-                <strong>Admin</strong> được phép chỉnh chỉ tiêu. Thực tế (doanh thu, tiếp cận, sản phẩm) không còn
+                <strong>Admin</strong> được phép chỉnh chỉ tiêu. Thực tế (doanh thu, tiếp cận) không còn
                 cập nhật tự động — tổng hợp quý/năm từ các tháng đã chốt giữ nguyên.
               </div>
             </div>
@@ -512,7 +515,7 @@ export default function KpiPage() {
 
           {/* Thanh filter / sort */}
           <div className="bg-white rounded-xl shadow border border-gray-200 p-3 mb-3 flex flex-col sm:flex-row gap-3 sm:items-center">
-            <div className="relative flex-1">
+            <div className="relative flex-1 min-w-0">
               <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="search"
@@ -532,6 +535,22 @@ export default function KpiPage() {
                 </button>
               )}
             </div>
+            {departments.length > 0 && (
+              <select
+                value={departmentFilter}
+                onChange={(e) => setDepartmentFilter(e.target.value)}
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 min-w-[200px]"
+                title="Lọc theo phòng/tổ"
+              >
+                <option value="">Tất cả phòng/tổ</option>
+                <option value="__unassigned__">Chưa gán phòng/tổ</option>
+                {departments.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.type === 'team' ? `└ ${d.name}` : d.name}
+                  </option>
+                ))}
+              </select>
+            )}
             <div className="text-xs text-gray-500 flex items-center gap-2">
               <span>
                 Hiển thị <strong className="text-gray-900">{displayRows.length}</strong>
@@ -565,112 +584,103 @@ export default function KpiPage() {
               </p>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full divide-y divide-gray-200 text-xs">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <SortableTh
-                        align="left"
-                        title="Nhân viên"
-                        sortKey="name"
-                        current={sortKey}
-                        dir={sortDir}
-                        onToggle={toggleSort}
-                      />
-                      <SortableTh
-                        align="left"
-                        title="Địa bàn"
-                        sortKey="territory"
-                        current={sortKey}
-                        dir={sortDir}
-                        onToggle={toggleSort}
-                      />
-                      <SortableTh
-                        align="right"
-                        title="DT — mới"
-                        sub={
-                          canEditTargets
-                            ? `Chỉ tiêu / ${displayMode === 'percent' ? '% đạt' : 'Thực hiện'}`
-                            : displayMode === 'percent' ? '% đạt chỉ tiêu' : '(VNĐ)'
-                        }
-                        sortKey="actual_new"
-                        current={sortKey}
-                        dir={sortDir}
-                        onToggle={toggleSort}
-                      />
-                      <SortableTh
-                        align="right"
-                        title="DT — hiện hữu"
-                        sub={
-                          canEditTargets
-                            ? `Chỉ tiêu / ${displayMode === 'percent' ? '% đạt' : 'Thực hiện'}`
-                            : displayMode === 'percent' ? '% đạt chỉ tiêu' : '(VNĐ)'
-                        }
-                        sortKey="actual_existing"
-                        current={sortKey}
-                        dir={sortDir}
-                        onToggle={toggleSort}
-                      />
-                      <SortableTh
-                        align="right"
-                        title="DT — tổng"
-                        sub={displayMode === 'percent' ? '% đạt tổng' : '(VNĐ)'}
-                        sortKey="actual_total"
-                        current={sortKey}
-                        dir={sortDir}
-                        onToggle={toggleSort}
-                        headerBg="bg-primary-50/60"
-                        strong
-                      />
-                      <SortableTh
-                        align="right"
-                        title="Tiếp cận"
-                        sub={
-                          canEditTargets
-                            ? `Mục tiêu / ${displayMode === 'percent' ? '% đạt' : 'Thực hiện'}`
-                            : displayMode === 'percent' ? '% đạt mục tiêu' : '(lần)'
-                        }
-                        sortKey="actual_approach"
-                        current={sortKey}
-                        dir={sortDir}
-                        onToggle={toggleSort}
-                      />
-                      <SortableTh
-                        align="right"
-                        title="SP — mới"
-                        sub={
-                          canEditTargets
-                            ? `Chỉ tiêu / ${displayMode === 'percent' ? '% đạt' : 'Thực hiện'}`
-                            : displayMode === 'percent' ? '% đạt chỉ tiêu' : '(SP)'
-                        }
-                        sortKey="actual_product_new"
-                        current={sortKey}
-                        dir={sortDir}
-                        onToggle={toggleSort}
-                      />
-                      <SortableTh
-                        align="right"
-                        title="SP — hiện hữu"
-                        sub={
-                          canEditTargets
-                            ? `Chỉ tiêu / ${displayMode === 'percent' ? '% đạt' : 'Thực hiện'}`
-                            : displayMode === 'percent' ? '% đạt chỉ tiêu' : '(SP)'
-                        }
-                        sortKey="actual_product_existing"
-                        current={sortKey}
-                        dir={sortDir}
-                        onToggle={toggleSort}
-                      />
-                      <SortableTh
-                        align="right"
-                        title="SP — tổng"
-                        sub={displayMode === 'percent' ? '% đạt tổng' : '(SP)'}
-                        sortKey="actual_product_total"
-                        current={sortKey}
-                        dir={sortDir}
-                        onToggle={toggleSort}
-                        headerBg="bg-primary-50/60"
-                        strong
-                      />
+                <table className="w-full divide-y divide-gray-200 text-sm border-collapse">
+                  <thead className="sticky top-0 z-10">
+                    {/* Group header row */}
+                    <tr className="bg-gray-100 border-b border-gray-300">
+                      <th
+                        rowSpan={2}
+                        className="px-3 py-2 text-left text-xs font-semibold text-gray-700 align-middle border-r border-gray-200 cursor-pointer hover:text-primary-700 select-none"
+                        onClick={() => toggleSort('name')}
+                        title="Sắp xếp theo tên"
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          Nhân viên
+                          {sortKey === 'name' && (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                        </span>
+                      </th>
+                      <th
+                        rowSpan={2}
+                        className="px-3 py-2 text-left text-xs font-semibold text-gray-700 align-middle border-r border-gray-200 cursor-pointer hover:text-primary-700 select-none"
+                        onClick={() => toggleSort('territory')}
+                        title="Sắp xếp theo địa bàn"
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          Địa bàn
+                          {sortKey === 'territory' && (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                        </span>
+                      </th>
+                      <th
+                        colSpan={2}
+                        className="px-3 py-2 text-center text-xs font-semibold text-gray-700 border-r border-gray-200 cursor-pointer hover:text-primary-700 select-none"
+                        onClick={() => toggleSort('actual_new')}
+                        title="Sắp xếp theo DT mới"
+                      >
+                        <span className="inline-flex items-center gap-1 justify-center">
+                          Doanh thu — KH mới
+                          {sortKey === 'actual_new' && (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                        </span>
+                      </th>
+                      <th
+                        colSpan={2}
+                        className="px-3 py-2 text-center text-xs font-semibold text-gray-700 border-r border-gray-200 cursor-pointer hover:text-primary-700 select-none"
+                        onClick={() => toggleSort('actual_existing')}
+                        title="Sắp xếp theo DT hiện hữu"
+                      >
+                        <span className="inline-flex items-center gap-1 justify-center">
+                          Doanh thu — KH hiện hữu
+                          {sortKey === 'actual_existing' && (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                        </span>
+                      </th>
+                      <th
+                        colSpan={2}
+                        className="px-3 py-2 text-center text-xs font-bold text-primary-700 bg-primary-50/60 border-r border-gray-200 cursor-pointer hover:text-primary-800 select-none"
+                        onClick={() => toggleSort('actual_total')}
+                        title="Sắp xếp theo DT tổng"
+                      >
+                        <span className="inline-flex items-center gap-1 justify-center">
+                          Doanh thu — Tổng
+                          {sortKey === 'actual_total' && (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                        </span>
+                      </th>
+                      <th
+                        colSpan={2}
+                        className="px-3 py-2 text-center text-xs font-semibold text-gray-700 cursor-pointer hover:text-primary-700 select-none"
+                        onClick={() => toggleSort('actual_approach')}
+                        title="Sắp xếp theo tiếp cận"
+                      >
+                        <span className="inline-flex items-center gap-1 justify-center">
+                          Tiếp cận
+                          {sortKey === 'actual_approach' && (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                        </span>
+                      </th>
+                    </tr>
+                    {/* Sub-column header row */}
+                    <tr className="bg-gray-50 border-b border-gray-200">
+                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-gray-500 border-r border-gray-100">
+                        Chỉ tiêu
+                      </th>
+                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-gray-500 border-r border-gray-200">
+                        Thực hiện
+                      </th>
+                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-gray-500 border-r border-gray-100">
+                        Chỉ tiêu
+                      </th>
+                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-gray-500 border-r border-gray-200">
+                        Thực hiện
+                      </th>
+                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-primary-600 bg-primary-50/40 border-r border-gray-100">
+                        Chỉ tiêu
+                      </th>
+                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-primary-600 bg-primary-50/40 border-r border-gray-200">
+                        Thực hiện
+                      </th>
+                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-gray-500 border-r border-gray-100">
+                        Mục tiêu
+                      </th>
+                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-gray-500">
+                        Thực hiện
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
@@ -681,24 +691,20 @@ export default function KpiPage() {
                       const actualExisting = num(r.actual_revenue_existing)
                       const totalTarget = targetNew + targetExisting
                       const totalActual = actualNew + actualExisting
-                      const productTargetNew = Math.floor(num(r.target_product_count_new))
-                      const productTargetExisting = Math.floor(num(r.target_product_count_existing))
-                      const productActualNew = Math.floor(num(r.actual_product_count_new))
-                      const productActualExisting = Math.floor(num(r.actual_product_count_existing))
-                      const productTargetTotal = productTargetNew + productTargetExisting
-                      const productActualTotal = productActualNew + productActualExisting
+                      const approachTarget = Math.floor(num(r.approach_count))
+                      const approachActual = Math.floor(num(r.actual_approach_count))
                       return (
-                      <tr key={r.employee_id} className="hover:bg-gray-50/80">
-                        <td className="px-2 py-2 align-top">
-                          <div className="flex items-start gap-1">
+                      <tr key={r.employee_id} className="hover:bg-gray-50/80 transition-colors">
+                        <td className="px-3 py-1.5 align-middle border-r border-gray-100">
+                          <div className="flex items-center gap-2">
                             <div className="min-w-0 flex-1">
                               <div
-                                className="font-medium text-gray-900 text-xs leading-tight truncate max-w-[10rem]"
+                                className="font-semibold text-gray-900 text-sm leading-snug truncate max-w-[14rem]"
                                 title={r.full_name}
                               >
                                 {r.full_name}
                               </div>
-                              <div className="text-[10px] text-gray-500 truncate max-w-[10rem]">
+                              <div className="text-xs text-gray-500 truncate max-w-[14rem]">
                                 @{r.username}
                               </div>
                             </div>
@@ -713,85 +719,102 @@ export default function KpiPage() {
                                   }).toString()
                                   router.push(`/cbs-revenue?${qs}`)
                                 }}
-                                className="shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-md text-primary-600 hover:text-primary-700 hover:bg-primary-50 transition"
-                                title={`Xem các đơn CBS đã duyệt của ${r.full_name} trong kỳ ${period} (nguồn tính KPI thực hiện)`}
+                                className="shrink-0 inline-flex items-center justify-center w-6 h-6 rounded-md text-primary-600 hover:text-primary-700 hover:bg-primary-100 transition"
+                                title={`Xem các đơn CBS đã duyệt của ${r.full_name} trong kỳ ${period}`}
                                 aria-label="Mở đơn CBS đóng góp KPI"
                               >
-                                <Wallet className="w-3.5 h-3.5" />
+                                <Wallet className="w-4 h-4" />
                               </button>
                             )}
                           </div>
                         </td>
-                        <td className="px-2 py-2 align-top">
+                        <td className="px-3 py-1.5 align-middle border-r border-gray-100">
                           {r.territory && String(r.territory).trim() ? (
                             <span
-                              className="inline-flex items-center rounded-full bg-primary-50 text-primary-700 border border-primary-200 px-1.5 py-0.5 text-[10px] font-medium max-w-[8rem] truncate"
+                              className="inline-flex items-center rounded-full bg-primary-50 text-primary-700 border border-primary-200 px-2 py-0.5 text-xs font-medium max-w-[10rem] truncate"
                               title={String(r.territory).trim()}
                             >
                               {String(r.territory).trim()}
                             </span>
                           ) : (
-                            <span className="text-[10px] text-gray-400 italic">Chưa gán</span>
+                            <span className="text-xs text-gray-400 italic">Chưa gán</span>
                           )}
                         </td>
-                        <MergedMoneyCell
-                          canEdit={canEditTargets}
-                          targetStr={String(r.target_revenue_new ?? '')}
-                          onTargetChange={(v) => updateRow(r.employee_id, 'target_revenue_new', v)}
-                          actual={actualNew}
-                          target={targetNew}
-                          mode={displayMode}
-                        />
-                        <MergedMoneyCell
-                          canEdit={canEditTargets}
-                          targetStr={String(r.target_revenue_existing ?? '')}
-                          onTargetChange={(v) => updateRow(r.employee_id, 'target_revenue_existing', v)}
-                          actual={actualExisting}
-                          target={targetExisting}
-                          mode={displayMode}
-                        />
-                        <td className="px-2 py-2 text-right align-top bg-primary-50/30">
-                          <AchievementCell
-                            actual={totalActual}
-                            target={totalTarget}
-                            mode={displayMode}
-                            bold
-                          />
+                        {/* DT mới — Chỉ tiêu */}
+                        <td className="px-3 py-1.5 text-right align-middle border-r border-gray-50">
+                          {canEditTargets ? (
+                            <div className="relative ml-auto w-32">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete="off"
+                                value={formatThousandsVN(String(r.target_revenue_new ?? ''))}
+                                title="Chỉ tiêu DT mới (VNĐ)"
+                                onChange={(e) => updateRow(r.employee_id, 'target_revenue_new', digitsOnly(e.target.value))}
+                                className="w-full border border-gray-300 rounded-lg pl-2 pr-6 py-1.5 text-sm text-right tabular-nums focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                              />
+                              <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs text-gray-400">₫</span>
+                            </div>
+                          ) : (
+                            <span className="text-sm font-medium text-gray-900 tabular-nums">{formatVND(targetNew)}</span>
+                          )}
                         </td>
-                        <MergedCountCell
-                          canEdit={canEditTargets}
-                          target={r.approach_count}
-                          onTargetChange={(v) => updateRow(r.employee_id, 'approach_count', v)}
-                          actual={Math.floor(num(r.actual_approach_count))}
-                          targetNum={Math.floor(num(r.approach_count))}
-                          mode={displayMode}
-                          unit="lần"
-                        />
-                        <MergedProductCell
-                          canEdit={canEditTargets}
-                          target={r.target_product_count_new}
-                          onTargetChange={(v) => updateRow(r.employee_id, 'target_product_count_new', v)}
-                          actual={productActualNew}
-                          targetNum={productTargetNew}
-                          mode={displayMode}
-                          title="Số sản phẩm bán cho KH mới"
-                        />
-                        <MergedProductCell
-                          canEdit={canEditTargets}
-                          target={r.target_product_count_existing}
-                          onTargetChange={(v) => updateRow(r.employee_id, 'target_product_count_existing', v)}
-                          actual={productActualExisting}
-                          targetNum={productTargetExisting}
-                          mode={displayMode}
-                          title="Số sản phẩm bán cho KH hiện hữu"
-                        />
-                        <td className="px-2 py-2 text-right align-top bg-primary-50/30">
-                          <AchievementProductCell
-                            actual={productActualTotal}
-                            target={productTargetTotal}
-                            mode={displayMode}
-                            bold
-                          />
+                        {/* DT mới — Thực hiện */}
+                        <td className="px-3 py-1.5 text-right align-middle border-r border-gray-200">
+                          <AchievementCell actual={actualNew} target={targetNew} mode={displayMode} />
+                        </td>
+                        {/* DT hiện hữu — Chỉ tiêu */}
+                        <td className="px-3 py-1.5 text-right align-middle border-r border-gray-50">
+                          {canEditTargets ? (
+                            <div className="relative ml-auto w-32">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete="off"
+                                value={formatThousandsVN(String(r.target_revenue_existing ?? ''))}
+                                title="Chỉ tiêu DT hiện hữu (VNĐ)"
+                                onChange={(e) => updateRow(r.employee_id, 'target_revenue_existing', digitsOnly(e.target.value))}
+                                className="w-full border border-gray-300 rounded-lg pl-2 pr-6 py-1.5 text-sm text-right tabular-nums focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                              />
+                              <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs text-gray-400">₫</span>
+                            </div>
+                          ) : (
+                            <span className="text-sm font-medium text-gray-900 tabular-nums">{formatVND(targetExisting)}</span>
+                          )}
+                        </td>
+                        {/* DT hiện hữu — Thực hiện */}
+                        <td className="px-3 py-1.5 text-right align-middle border-r border-gray-200">
+                          <AchievementCell actual={actualExisting} target={targetExisting} mode={displayMode} />
+                        </td>
+                        {/* DT tổng — Chỉ tiêu */}
+                        <td className="px-3 py-1.5 text-right align-middle bg-primary-50/20 border-r border-gray-50">
+                          <span className="text-sm font-bold text-gray-900 tabular-nums">{formatVND(totalTarget)}</span>
+                        </td>
+                        {/* DT tổng — Thực hiện */}
+                        <td className="px-3 py-1.5 text-right align-middle bg-primary-50/20 border-r border-gray-200">
+                          <AchievementCell actual={totalActual} target={totalTarget} mode={displayMode} bold />
+                        </td>
+                        {/* Tiếp cận — Mục tiêu */}
+                        <td className="px-3 py-1.5 text-right align-middle border-r border-gray-50">
+                          {canEditTargets ? (
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={r.approach_count ?? ''}
+                              onChange={(e) => updateRow(r.employee_id, 'approach_count', e.target.value)}
+                              title="Mục tiêu tiếp cận (lần)"
+                              className="w-20 ml-auto border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-right tabular-nums block focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                            />
+                          ) : (
+                            <span className="text-sm font-medium text-gray-900 tabular-nums">
+                              {approachTarget} <span className="text-gray-400 font-normal text-xs">lần</span>
+                            </span>
+                          )}
+                        </td>
+                        {/* Tiếp cận — Thực hiện */}
+                        <td className="px-3 py-1.5 text-right align-middle">
+                          <AchievementCountCell actual={approachActual} target={approachTarget} mode={displayMode} />
                         </td>
                       </tr>
                     )
@@ -816,15 +839,6 @@ export default function KpiPage() {
             </span>
             <span className="block">
               <strong>Tiếp cận:</strong> lần (số nguyên không âm).
-            </span>
-            <span className="block">
-              <strong>Sản phẩm đã bán:</strong> tách <em>mới</em> / <em>hiện hữu</em> theo phân loại
-              khách hàng. Mỗi khách hàng tính là 1 sản phẩm, kể cả cùng mã bán cho nhiều khách (bán
-              1 sản phẩm cho 5 khách = 5). Thực tế tổng hợp từ:
-              (1) deal <strong>Thành công</strong> trong kỳ — tính theo <em>số lượng</em> nhập trên
-              deal, mặc định = 1 nếu để trống, nhóm theo <em>kpi_customer_kind</em> của khách; và
-              (2) mỗi đơn CBS đã duyệt (không gắn deal) = 1 sản phẩm, ưu tiên snapshot
-              <em>kpi_kind_at_approve</em> tại thời điểm duyệt.
             </span>
             <span className="block">
               <strong>Hiển thị kết quả:</strong> chuyển giữa <em>Số</em> (VNĐ thực thu) và{' '}
@@ -893,199 +907,6 @@ function AchievementCell({
   )
 }
 
-/**
- * Ô gộp "Chỉ tiêu + Thực hiện" cho cột tiền (VNĐ).
- * - Khi canEdit: input target ở trên, achievement (actual/%) ở dưới.
- * - Khi read-only: chỉ hiện target + actual (2 dòng).
- * Dùng cho DT-mới, DT-hiện hữu.
- */
-function MergedMoneyCell({
-  canEdit,
-  targetStr,
-  onTargetChange,
-  actual,
-  target,
-  mode,
-}: {
-  canEdit: boolean
-  targetStr: string
-  onTargetChange: (v: string) => void
-  actual: number
-  target: number
-  mode: DisplayMode
-}) {
-  return (
-    <td className="px-2 py-2 text-right align-top">
-      {canEdit ? (
-        <div className="relative ml-auto w-32">
-          <input
-            type="text"
-            inputMode="numeric"
-            autoComplete="off"
-            value={formatThousandsVN(targetStr)}
-            title="Chỉ tiêu (VNĐ)"
-            onChange={(e) => onTargetChange(digitsOnly(e.target.value))}
-            className="w-full border border-gray-300 rounded-md pl-1.5 pr-6 py-1 text-xs text-right tabular-nums"
-          />
-          <span className="pointer-events-none absolute inset-y-0 right-1.5 flex items-center text-[10px] text-gray-400">
-            ₫
-          </span>
-        </div>
-      ) : (
-        <div className="text-[11px] font-medium text-gray-900 tabular-nums mb-0.5">
-          {formatVND(target)}
-        </div>
-      )}
-      <div className="mt-1">
-        <AchievementCell actual={actual} target={target} mode={mode} />
-      </div>
-    </td>
-  )
-}
-
-/** Ô gộp "Mục tiêu + Thực hiện" cho cột số lần tiếp cận. */
-function MergedCountCell({
-  canEdit,
-  target,
-  onTargetChange,
-  actual,
-  targetNum,
-  mode,
-  unit,
-}: {
-  canEdit: boolean
-  target: string | number | null
-  onTargetChange: (v: string) => void
-  actual: number
-  targetNum: number
-  mode: DisplayMode
-  unit: string
-}) {
-  return (
-    <td className="px-2 py-2 text-right align-top">
-      {canEdit ? (
-        <input
-          type="number"
-          min={0}
-          step={1}
-          value={target ?? ''}
-          onChange={(e) => onTargetChange(e.target.value)}
-          title={`Mục tiêu (${unit})`}
-          className="w-16 ml-auto border border-gray-300 rounded-md px-1.5 py-1 text-xs text-right tabular-nums block"
-        />
-      ) : (
-        <div className="text-[11px] font-medium text-gray-900 tabular-nums mb-0.5">
-          {targetNum} <span className="text-gray-500 font-normal">{unit}</span>
-        </div>
-      )}
-      <div className="mt-1">
-        <AchievementCountCell actual={actual} target={targetNum} mode={mode} />
-      </div>
-    </td>
-  )
-}
-
-/** Ô gộp "Chỉ tiêu + Thực hiện" cho cột số sản phẩm (SP). */
-function MergedProductCell({
-  canEdit,
-  target,
-  onTargetChange,
-  actual,
-  targetNum,
-  mode,
-  title,
-}: {
-  canEdit: boolean
-  target: string | number | null
-  onTargetChange: (v: string) => void
-  actual: number
-  targetNum: number
-  mode: DisplayMode
-  title: string
-}) {
-  return (
-    <td className="px-2 py-2 text-right align-top">
-      {canEdit ? (
-        <input
-          type="number"
-          min={0}
-          step={1}
-          value={target ?? ''}
-          onChange={(e) => onTargetChange(e.target.value)}
-          title={title}
-          className="w-16 ml-auto border border-gray-300 rounded-md px-1.5 py-1 text-xs text-right tabular-nums block"
-        />
-      ) : (
-        <div className="text-[11px] font-medium text-gray-900 tabular-nums mb-0.5">
-          {targetNum} <span className="text-gray-500 font-normal">SP</span>
-        </div>
-      )}
-      <div className="mt-1">
-        <AchievementProductCell actual={actual} target={targetNum} mode={mode} />
-      </div>
-    </td>
-  )
-}
-
-function SortableTh({
-  title,
-  sub,
-  sortKey,
-  current,
-  dir,
-  onToggle,
-  align = 'left',
-  headerBg,
-  strong,
-}: {
-  title: string
-  sub?: string
-  sortKey: SortKey
-  current: SortKey | null
-  dir: SortDir
-  onToggle: (k: SortKey) => void
-  align?: 'left' | 'right' | 'center'
-  headerBg?: string
-  strong?: boolean
-}) {
-  const active = current === sortKey
-  const alignCls = align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
-  const icon = active ? (
-    dir === 'asc' ? (
-      <ArrowUp className="w-3 h-3" />
-    ) : (
-      <ArrowDown className="w-3 h-3" />
-    )
-  ) : (
-    <ArrowUpDown className="w-3 h-3 opacity-40" />
-  )
-  return (
-    <th
-      className={`px-2 py-2 text-[11px] font-semibold ${
-        strong ? 'text-gray-700' : 'text-gray-600'
-      } ${headerBg || ''} ${alignCls}`}
-    >
-      <button
-        type="button"
-        onClick={() => onToggle(sortKey)}
-        className={`inline-flex items-center gap-1 hover:text-primary-700 transition select-none ${
-          align === 'right' ? 'flex-row-reverse ml-auto' : ''
-        } ${active ? 'text-primary-700' : ''}`}
-        title={`Sắp xếp theo "${title}"`}
-      >
-        {icon}
-        <span className="flex flex-col leading-tight">
-          <span className="uppercase whitespace-nowrap">{title}</span>
-          {sub && (
-            <span className="normal-case font-normal text-gray-500 mt-0.5 text-[9px] whitespace-nowrap">
-              {sub}
-            </span>
-          )}
-        </span>
-      </button>
-    </th>
-  )
-}
 
 function AchievementCountCell({
   actual,
@@ -1112,39 +933,3 @@ function AchievementCountCell({
   )
 }
 
-function AchievementProductCell({
-  actual,
-  target,
-  mode,
-  bold,
-}: {
-  actual: number
-  target: number
-  mode: DisplayMode
-  bold?: boolean
-}) {
-  const tone = achievementTone(actual, target)
-  const primary =
-    mode === 'percent'
-      ? formatPercent(actual, target)
-      : `${Math.max(0, Math.floor(actual)).toLocaleString('vi-VN')} SP`
-  const secondary =
-    mode === 'percent'
-      ? `${Math.max(0, Math.floor(actual)).toLocaleString('vi-VN')} SP`
-      : target > 0
-      ? formatPercent(actual, target)
-      : 'Chưa có CT'
-  return (
-    <div className="flex flex-col items-end leading-tight">
-      <span
-        className={`tabular-nums text-xs inline-flex items-center gap-0.5 ${
-          bold ? 'font-bold' : 'font-semibold'
-        } ${tone}`}
-      >
-        <Package className="w-3 h-3 opacity-60" />
-        {primary}
-      </span>
-      <span className="text-[10px] text-gray-400 tabular-nums mt-0.5">{secondary}</span>
-    </div>
-  )
-}

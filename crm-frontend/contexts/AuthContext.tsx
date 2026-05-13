@@ -1,7 +1,7 @@
 'use client'
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
-import { apiClient } from '@/lib/api'
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
+import { apiClient, setApiUser } from '@/lib/api'
 
 type RoleType = 'super_admin' | 'admin' | 'director' | 'manager' | 'leader' | 'sales'
 
@@ -19,9 +19,7 @@ interface RegisterOptions {
   department_id?: string
   title?: string
   rank?: string
-  /** Địa bàn phụ trách (text tự do) */
   territory?: string
-  /** Số điện thoại (tùy chọn) */
   phone?: string
 }
 
@@ -29,32 +27,59 @@ interface AuthContextType {
   user: User | null
   token: string | null
   loading: boolean
-  login: (username: string, password: string, domain?: string) => Promise<void>
+  login: (username: string, password: string, domain?: string) => Promise<User>
   register: (username: string, password: string, full_name: string, email: string, options?: RegisterOptions) => Promise<void>
   logout: () => void
-  /** Chỉ Super Admin: chọn tenant để "vào công ty" (tenantId) hoặc thoát (null). */
   switchTenant: (tenantId: string | null) => void
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+
+const SESSION_USER_KEY = '_crm_u'
+
+function cacheUser(u: User | null) {
+  try {
+    if (u) sessionStorage.setItem(SESSION_USER_KEY, JSON.stringify(u))
+    else sessionStorage.removeItem(SESSION_USER_KEY)
+  } catch {}
+}
+
+function getCachedUser(): User | null {
+  try {
+    const raw = sessionStorage.getItem(SESSION_USER_KEY)
+    return raw ? (JSON.parse(raw) as User) : null
+  } catch { return null }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [token, setToken] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    // Kiểm tra token trong localStorage khi app khởi động
-    const storedToken = localStorage.getItem('token')
-    const storedUser = localStorage.getItem('user')
-    
-    if (storedToken && storedUser) {
-      setToken(storedToken)
-      setUser(JSON.parse(storedUser))
-      apiClient.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`
-    }
-    setLoading(false)
+  const applyUser = useCallback((u: User | null) => {
+    setUser(u)
+    setApiUser(u ? { role: u.role, tenant_id: u.tenant_id } : null)
+    setToken(u ? 'httpOnly' : null)
+    cacheUser(u)
   }, [])
+
+  useEffect(() => {
+    localStorage.removeItem('user')
+
+    const cached = getCachedUser()
+    if (cached) {
+      applyUser(cached)
+      setLoading(false)
+      return
+    }
+
+    apiClient.get('/api/auth/me')
+      .then((res) => {
+        if (res.data.success && res.data.user) applyUser(res.data.user as User)
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [applyUser])
 
   const login = async (username: string, password: string, domain?: string) => {
     try {
@@ -66,7 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
 
       if (response.data.success) {
-        const { token: newToken, employee } = response.data
+        const { employee } = response.data
         const userData: User = {
           id: employee.id,
           username: employee.username,
@@ -75,22 +100,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           role: employee.role,
           tenant_id: employee.tenant_id ?? null,
         }
-
-        setToken(newToken)
-        setUser(userData)
-        localStorage.setItem('token', newToken)
-        localStorage.setItem('user', JSON.stringify(userData))
-        apiClient.defaults.headers.common['Authorization'] = `Bearer ${newToken}`
+        applyUser(userData)
+        return userData
       } else {
         throw new Error(response.data.message || 'Đăng nhập thất bại')
       }
     } catch (error: any) {
-      // Xử lý các loại lỗi khác nhau
       let message = 'Đăng nhập thất bại'
-      
+
       if (error.response) {
-        // Lỗi từ server (có response)
-        // Xử lý các status code khác nhau
         if (error.response.status === 401) {
           message = error.response.data?.message || 'Tên đăng nhập hoặc mật khẩu không đúng'
         } else if (error.response.status === 403) {
@@ -99,13 +117,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           message = error.response.data?.message || 'Đăng nhập thất bại'
         }
       } else if (error.request) {
-        // Request đã được gửi nhưng không nhận được response (backend không chạy hoặc network error)
         message = 'Không thể kết nối đến server. Vui lòng kiểm tra lại kết nối mạng hoặc đảm bảo backend đang chạy.'
       } else {
-        // Lỗi khác
         message = error.message || 'Đăng nhập thất bại'
       }
-      
+
       throw new Error(message)
     }
   }
@@ -140,19 +156,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const logout = () => {
-    setToken(null)
-    setUser(null)
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    delete apiClient.defaults.headers.common['Authorization']
+  const logout = async () => {
+    try {
+      await apiClient.post('/api/auth/logout')
+    } catch (_) {}
+    applyUser(null)
   }
 
   const switchTenant = (tenantId: string | null) => {
     if (!user || user.role !== 'super_admin') return
-    const next = { ...user, tenant_id: tenantId ?? undefined }
-    setUser(next)
-    localStorage.setItem('user', JSON.stringify(next))
+    const next: User = { ...user, tenant_id: tenantId ?? undefined }
+    applyUser(next)
   }
 
   return (
@@ -169,7 +183,3 @@ export function useAuth() {
   }
   return context
 }
-
-
-
-

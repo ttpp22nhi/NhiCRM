@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import Link from 'next/link'
@@ -11,7 +11,6 @@ import toast from 'react-hot-toast'
 const REMEMBER_KEY = 'login_remember_me'
 const REMEMBER_USERNAME_KEY = 'login_remember_username'
 const REMEMBER_DOMAIN_KEY = 'login_remember_domain'
-const REMEMBER_PASSWORD_KEY = 'login_remember_password'
 
 function getStored(key: string): string {
   if (typeof window === 'undefined') return ''
@@ -48,14 +47,13 @@ export default function LoginPage() {
     if (savedRemember) {
       const savedUsername = getStored(REMEMBER_USERNAME_KEY)
       const savedDomain = getStored(REMEMBER_DOMAIN_KEY)
-      const savedPassword = getStored(REMEMBER_PASSWORD_KEY)
       if (savedUsername) setUsername(savedUsername)
       if (savedDomain) setDomain(savedDomain)
-      if (savedPassword) setPassword(savedPassword)
     } else {
       const sessionUser = typeof window !== 'undefined' ? sessionStorage.getItem('login_username') : null
       if (sessionUser) setUsername(sessionUser)
     }
+    localStorage.removeItem('login_remember_password')
   }, [])
 
   // Đồng bộ username vào sessionStorage khi đang không dùng "ghi nhớ" (để tránh mất dữ liệu khi refresh)
@@ -64,41 +62,60 @@ export default function LoginPage() {
     if (username) sessionStorage.setItem('login_username', username)
   }, [username, rememberMe])
 
+  // Detect browser autofill: trình duyệt điền password trước khi React mount xong
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const uInput = document.getElementById('username') as HTMLInputElement
+      const pInput = document.getElementById('password') as HTMLInputElement
+      if (uInput?.value && !username) setUsername(uInput.value)
+      if (pInput?.value && !password) setPassword(pInput.value)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    e.stopPropagation() // Ngăn chặn event bubbling
+    e.stopPropagation()
     
-    // Lưu giá trị hiện tại vào biến để đảm bảo không bị mất
-    const currentUsername = username
-    const currentPassword = password
+    // Đọc trực tiếp từ DOM để lấy cả giá trị autofill mà React state chưa nhận
+    const uEl = document.getElementById('username') as HTMLInputElement
+    const pEl = document.getElementById('password') as HTMLInputElement
+    const currentUsername = uEl?.value || username
+    const currentPassword = pEl?.value || password
     const currentDomain = domain.trim() || undefined
     
     setError('')
     setLoading(true)
 
     try {
-      await login(currentUsername, currentPassword, currentDomain)
+      const loggedInUser = await login(currentUsername, currentPassword, currentDomain)
       sessionStorage.removeItem('login_username')
       if (rememberMe) {
         localStorage.setItem(REMEMBER_KEY, '1')
         localStorage.setItem(REMEMBER_USERNAME_KEY, currentUsername)
         localStorage.setItem(REMEMBER_DOMAIN_KEY, domain.trim())
-        localStorage.setItem(REMEMBER_PASSWORD_KEY, currentPassword)
       } else {
         localStorage.setItem(REMEMBER_KEY, '0')
         localStorage.removeItem(REMEMBER_USERNAME_KEY)
         localStorage.removeItem(REMEMBER_DOMAIN_KEY)
-        localStorage.removeItem(REMEMBER_PASSWORD_KEY)
       }
       toast.success('Đăng nhập thành công!')
-      // Super Admin không có tenant_id → vào trang Hệ thống (quản lý tenants)
-      const storedUser = localStorage.getItem('user')
-      const parsed = storedUser ? JSON.parse(storedUser) : null
+
+      // Yêu cầu trình duyệt lưu mật khẩu (Chrome, Edge)
+      if (window.PasswordCredential) {
+        try {
+          const cred = new window.PasswordCredential({
+            id: currentUsername,
+            password: currentPassword,
+          })
+          await navigator.credentials.store(cred)
+        } catch (_) {}
+      }
+
       const targetPath =
-        parsed?.role === 'super_admin' && (parsed?.tenant_id == null || parsed?.tenant_id === '')
+        loggedInUser.role === 'super_admin' && (!loggedInUser.tenant_id)
           ? '/system/tenants'
           : '/dashboard'
-      // Dùng window.location để tải lại trang, tránh race: ProtectedRoute mount trước khi context cập nhật và đẩy về /login
       if (typeof window !== 'undefined') {
         window.location.href = targetPath
       } else {
@@ -170,6 +187,7 @@ export default function LoginPage() {
             <div className="relative">
               <input
                 id="domain"
+                name="domain"
                 type="text"
                 value={domain}
                 onChange={(e) => setDomain(e.target.value)}
@@ -193,6 +211,7 @@ export default function LoginPage() {
               <User className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
               <input
                 id="username"
+                name="username"
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
@@ -216,6 +235,7 @@ export default function LoginPage() {
               <Lock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
               <input
                 id="password"
+                name="password"
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -251,9 +271,10 @@ export default function LoginPage() {
               className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
             />
             <label htmlFor="remember" className="ml-2 text-sm text-gray-700">
-              Ghi nhớ thông tin đăng nhập (domain, tên đăng nhập, mật khẩu) — lưu trên thiết bị này
+              Ghi nhớ domain và tên đăng nhập
             </label>
           </div>
+          <p className="text-xs text-gray-400 -mt-4">Mật khẩu được trình duyệt quản lý — hãy nhấn &quot;Lưu mật khẩu&quot; khi trình duyệt hỏi.</p>
 
           <button
             type="submit"

@@ -8,12 +8,13 @@ import {
 
 /**
  * Middleware xác thực mã Token (JWT)
- * Kiểm tra Header Authorization: Bearer <token>
+ * Ưu tiên: httpOnly cookie > Authorization header (backward-compat)
  */
 export const verifyToken = (req, res, next) => {
+  const tokenFromCookie = req.cookies?.token;
   const authHeader = req.headers['authorization'];
-  // Token thường có dạng "Bearer ABCXYZ..."
-  const token = authHeader && authHeader.split(' ')[1];
+  const tokenFromHeader = authHeader && authHeader.split(' ')[1];
+  const token = tokenFromCookie || tokenFromHeader;
 
   if (!token) {
     return res.status(401).json({
@@ -26,10 +27,12 @@ export const verifyToken = (req, res, next) => {
     const secret = process.env.JWT_SECRET || 'crm_secret_key_2025';
     const decoded = jwt.verify(token, secret);
 
-    // Gán thông tin user vào request để các controller sau có thể sử dụng
     req.user = decoded;
     next();
   } catch (error) {
+    if (tokenFromCookie) {
+      res.clearCookie('token', { httpOnly: true, sameSite: 'lax', path: '/' });
+    }
     return res.status(403).json({
       success: false,
       message: 'Mã xác thực không hợp lệ hoặc đã hết hạn.'

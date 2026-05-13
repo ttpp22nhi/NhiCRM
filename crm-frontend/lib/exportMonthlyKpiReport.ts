@@ -4,7 +4,6 @@ import {
   base64ToImageId,
   createStandardWorkbook,
   drawBarChartBase64,
-  finalizeDataSheet,
   saveWorkbook,
   styleTableHeader,
 } from './reportWorkbook'
@@ -13,16 +12,13 @@ export interface MonthlyKpiExportInputRow {
   full_name: string
   username: string
   territory: string
+  department_name: string
   target_revenue_new: number
   actual_revenue_new: number
   target_revenue_existing: number
   actual_revenue_existing: number
   approach_target: number
   approach_actual: number
-  target_product_new: number
-  actual_product_new: number
-  target_product_existing: number
-  actual_product_existing: number
 }
 
 function pctLabel(actual: number, target: number): string {
@@ -30,6 +26,11 @@ function pctLabel(actual: number, target: number): string {
   const p = (actual / target) * 100
   if (!Number.isFinite(p)) return '—'
   return `${p.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}%`
+}
+
+function formatVND(n: number): string {
+  if (!n) return '0'
+  return n.toLocaleString('vi-VN')
 }
 
 export interface MonthlyKpiReportPayload {
@@ -59,10 +60,6 @@ export async function exportMonthlyKpiReport(payload: MonthlyKpiReportPayload) {
   const aRev = sum((r) => r.actual_revenue_new + r.actual_revenue_existing)
   const tAp = sum((r) => r.approach_target)
   const aAp = sum((r) => r.approach_actual)
-  const tPn = sum((r) => r.target_product_new)
-  const aPn = sum((r) => r.actual_product_new)
-  const tPe = sum((r) => r.target_product_existing)
-  const aPe = sum((r) => r.actual_product_existing)
 
   applyReportHeader(
     dashboardSheet,
@@ -81,12 +78,12 @@ export async function exportMonthlyKpiReport(payload: MonthlyKpiReportPayload) {
   const summaryItems: Array<{ label: string; value: string | number }> = [
     { label: 'Kỳ báo cáo', value: payload.period },
     { label: 'Số nhân viên', value: rows.length },
-    { label: 'Tổng chỉ tiêu doanh thu (VNĐ)', value: tRev },
-    { label: 'Tổng thực hiện doanh thu (VNĐ)', value: aRev },
+    { label: 'Tổng chỉ tiêu doanh thu (VNĐ)', value: formatVND(tRev) },
+    { label: 'Tổng thực hiện doanh thu (VNĐ)', value: formatVND(aRev) },
+    { label: '% đạt doanh thu', value: pctLabel(aRev, tRev) },
     { label: 'Tổng chỉ tiêu tiếp cận (lần)', value: tAp },
     { label: 'Tổng thực hiện tiếp cận (lần)', value: aAp },
-    { label: 'Tổng chỉ tiêu SP (mới + HH)', value: tPn + tPe },
-    { label: 'Tổng thực hiện SP (mới + HH)', value: aPn + aPe },
+    { label: '% đạt tiếp cận', value: pctLabel(aAp, tAp) },
   ]
   if (payload.filterNote) {
     summaryItems.push({ label: 'Ghi chú lọc', value: payload.filterNote })
@@ -107,33 +104,6 @@ export async function exportMonthlyKpiReport(payload: MonthlyKpiReportPayload) {
   }
 
   dataSheet.name = 'KPI_theo_NV'
-  const headers = [
-    'STT',
-    'Họ tên',
-    'Username',
-    'Địa bàn',
-    'CT DT KH mới (đ)',
-    'TH DT KH mới (đ)',
-    '% đạt DT mới',
-    'CT DT KH HH (đ)',
-    'TH DT KH HH (đ)',
-    '% đạt DT HH',
-    'CT DT tổng (đ)',
-    'TH DT tổng (đ)',
-    '% đạt DT tổng',
-    'CT tiếp cận',
-    'TH tiếp cận',
-    '% đạt tiếp cận',
-    'CT SP mới',
-    'TH SP mới',
-    '% đạt SP mới',
-    'CT SP HH',
-    'TH SP HH',
-    '% đạt SP HH',
-    'CT SP tổng',
-    'TH SP tổng',
-    '% đạt SP tổng',
-  ]
 
   applyReportHeader(
     dataSheet,
@@ -146,22 +116,58 @@ export async function exportMonthlyKpiReport(payload: MonthlyKpiReportPayload) {
       dealCategory: null,
       generatedAt: Date.now(),
     },
-    'Y'
+    'Q'
   )
 
-  const headerRow = dataSheet.getRow(4)
-  headerRow.values = headers
-  styleTableHeader(headerRow, 'FF0F766E')
+  // Row 4: Group header (merged cells)
+  const groupRow = dataSheet.getRow(4)
+  groupRow.values = [
+    'STT', 'Họ tên', 'Username', 'Phòng/Tổ', 'Địa bàn',
+    'Doanh thu — KH mới', '', '',
+    'Doanh thu — KH hiện hữu', '', '',
+    'Doanh thu — Tổng', '', '',
+    'Tiếp cận', '', '',
+  ]
+  dataSheet.mergeCells('F4:H4')
+  dataSheet.mergeCells('I4:K4')
+  dataSheet.mergeCells('L4:N4')
+  dataSheet.mergeCells('O4:Q4')
+  groupRow.eachCell((cell) => {
+    cell.font = { bold: true, size: 10 }
+    cell.alignment = { horizontal: 'center', vertical: 'middle' }
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0F766E' } }
+    cell.font = { bold: true, size: 10, color: { argb: 'FFFFFFFF' } }
+  })
+  // First 5 cells don't need white text
+  for (let c = 1; c <= 5; c++) {
+    const cell = groupRow.getCell(c)
+    cell.font = { bold: true, size: 10, color: { argb: 'FFFFFFFF' } }
+  }
 
+  // Row 5: Sub-column header
+  const subRow = dataSheet.getRow(5)
+  subRow.values = [
+    '', '', '', '', '',
+    'Chỉ tiêu', 'Thực hiện', '% đạt',
+    'Chỉ tiêu', 'Thực hiện', '% đạt',
+    'Chỉ tiêu', 'Thực hiện', '% đạt',
+    'Mục tiêu', 'Thực hiện', '% đạt',
+  ]
+  subRow.eachCell((cell) => {
+    cell.font = { bold: true, size: 9 }
+    cell.alignment = { horizontal: 'center', vertical: 'middle' }
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } }
+  })
+
+  // Data rows start at row 6
   rows.forEach((r, idx) => {
     const tTot = r.target_revenue_new + r.target_revenue_existing
     const aTot = r.actual_revenue_new + r.actual_revenue_existing
-    const tPt = r.target_product_new + r.target_product_existing
-    const aPt = r.actual_product_new + r.actual_product_existing
     dataSheet.addRow([
       idx + 1,
       r.full_name,
       r.username,
+      r.department_name || '—',
       r.territory,
       r.target_revenue_new,
       r.actual_revenue_new,
@@ -175,29 +181,37 @@ export async function exportMonthlyKpiReport(payload: MonthlyKpiReportPayload) {
       r.approach_target,
       r.approach_actual,
       pctLabel(r.approach_actual, r.approach_target),
-      r.target_product_new,
-      r.actual_product_new,
-      pctLabel(r.actual_product_new, r.target_product_new),
-      r.target_product_existing,
-      r.actual_product_existing,
-      pctLabel(r.actual_product_existing, r.target_product_existing),
-      tPt,
-      aPt,
-      pctLabel(aPt, tPt),
     ])
   })
 
-  const lastRow = 4 + rows.length
-  const moneyCols = ['E', 'F', 'H', 'I', 'K', 'L']
-  for (let i = 5; i <= lastRow; i += 1) {
+  // Format money columns
+  const lastRow = 5 + rows.length
+  const moneyCols = ['F', 'G', 'I', 'J', 'L', 'M']
+  for (let i = 6; i <= lastRow; i += 1) {
     moneyCols.forEach((col) => {
       dataSheet.getCell(`${col}${i}`).numFmt = '#,##0'
     })
   }
 
-  finalizeDataSheet(dataSheet, 'A4', 'Y4', 4)
+  // Column widths
+  const colWidths = [5, 22, 14, 18, 14, 16, 16, 10, 16, 16, 10, 16, 16, 10, 10, 10, 10]
+  colWidths.forEach((w, i) => {
+    dataSheet.getColumn(i + 1).width = w
+  })
+
+  // Wrap text for all data cells
+  for (let i = 6; i <= lastRow; i++) {
+    const row = dataSheet.getRow(i)
+    row.alignment = { wrapText: true, vertical: 'top' }
+  }
+
+  dataSheet.views = [{ state: 'frozen', ySplit: 5 }]
 
   const safePeriod = payload.period.replace(/[^\d-]/g, '_')
-  const fileName = `Bao_cao_KPI_thang_${safePeriod}_${new Date().toISOString().slice(0, 10)}.xlsx`
+  const now = new Date()
+  const dd = String(now.getDate()).padStart(2, '0')
+  const mm = String(now.getMonth() + 1).padStart(2, '0')
+  const yyyy = now.getFullYear()
+  const fileName = `Bao_cao_KPI_thang_${safePeriod}_${dd}-${mm}-${yyyy}.xlsx`
   await saveWorkbook(workbook, fileName)
 }

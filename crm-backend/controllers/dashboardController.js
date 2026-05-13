@@ -392,6 +392,7 @@ export const getDashboardAnalytics = async (req, res) => {
         const massProjectCalls = [
           analytics.getMassDealCountTrend(tenantId, scopeOptions, dateRange),
           analytics.getMassGrowthRate(tenantId, scopeOptions, dateRange),
+          analytics.getMassServiceBreakdown(tenantId, scopeOptions, dateRange),
           analytics.getProjectWeightValue(tenantId, scopeOptions, dateRange),
           analytics.getTopOpportunities(tenantId, scopeOptions, 10, dateRange)
         ]
@@ -406,6 +407,7 @@ export const getDashboardAnalytics = async (req, res) => {
           pipelineHealth,
           massDealCountTrend,
           massGrowthRate,
+          massServiceBreakdown,
           projectWeightValue,
           topOpportunities,
           monthlyKpiLeaderboard
@@ -429,7 +431,7 @@ export const getDashboardAnalytics = async (req, res) => {
           pipelineHealth,
           scopeLabel: getScopeLabel(scopeOptions, queryScopePath, canUseScopePath, role),
           dateRange,
-          massStats: { dealCountTrend: massDealCountTrend, growthRate: massGrowthRate },
+          massStats: { dealCountTrend: massDealCountTrend, growthRate: massGrowthRate, serviceBreakdown: massServiceBreakdown },
           projectStats: { totalWeightValue: projectWeightValue, topOpportunities },
           monthlyKpiLeaderboard
         }

@@ -88,6 +88,7 @@ export async function getKpis(req, res) {
 
     const r = await pool.query(
       `SELECT e.employee_id, e.full_name, e.username, e.territory,
+              e.department_id, d.name AS department_name,
               k.id AS kpi_id, k.period,
               k.target_revenue_new, k.target_revenue_existing,
               k.actual_revenue_new, k.actual_revenue_existing,
@@ -95,6 +96,7 @@ export async function getKpis(req, res) {
               k.target_product_count_new, k.target_product_count_existing,
               k.actual_product_count_new, k.actual_product_count_existing
        FROM employees e
+       LEFT JOIN departments d ON d.id = e.department_id AND d.tenant_id = e.tenant_id
        LEFT JOIN kpis k ON k.tenant_id = e.tenant_id
          AND k.user_id = e.employee_id AND k.period = $2
        WHERE e.tenant_id = $1 AND e.role = 'sales' AND e.is_active = true

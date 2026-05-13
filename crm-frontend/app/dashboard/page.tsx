@@ -76,6 +76,7 @@ interface DashboardAnalytics {
   massStats?: {
     dealCountTrend: Array<{ month: number; year: number; label: string; count: number }>
     growthRate: { thisMonthCount: number; lastMonthCount: number; growthRate: number }
+    serviceBreakdown?: Array<{ service_name: string; deal_count: number; total_amount: number }>
   }
   projectStats?: {
     totalWeightValue: number
@@ -176,6 +177,8 @@ const DEAL_STAGE_LABEL: Record<string, string> = {
   thuong_thao: 'Thương thảo',
   thanh_cong: 'Thành công',
 }
+
+const PIE_COLORS = ['#0369a1', '#0f766e', '#7c3aed', '#c2410c', '#b91c1c', '#0d9488', '#4338ca', '#a16207', '#be185d', '#059669', '#6d28d9', '#d97706', '#e11d48', '#047857', '#4f46e5']
 
 const canFilterByDepartment = (role: string) => role === 'admin' || role === 'super_admin'
 
@@ -779,7 +782,7 @@ export default function DashboardPage() {
 
           {/* MASS & PROJECT: API luôn trả hai khối riêng (không phụ thuộc ô lọc Loại hình trên header) */}
           {(data.massStats || data.projectStats) && (
-            <div className="mb-8 grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div className="mb-8 grid grid-cols-1 gap-6">
               {data.massStats && (
                 <div className="bg-white rounded-xl shadow p-6 border border-gray-100">
                   <div className="flex items-start gap-3 mb-4">
@@ -829,6 +832,75 @@ export default function DashboardPage() {
                   ) : (
                     <div className="flex items-center justify-center h-40 text-sm text-gray-500 border border-dashed border-gray-200 rounded-lg">
                       Không có deal MASS được tạo trong khoảng ngày đã chọn.
+                    </div>
+                  )}
+                  {data.massStats.serviceBreakdown && data.massStats.serviceBreakdown.length > 0 && (
+                    <div className="mt-6">
+                      <h4 className="text-sm font-semibold text-gray-800 mb-1">Tỉ trọng theo Sản phẩm (CBS)</h4>
+                      <p className="text-xs text-gray-500 mb-3">Phân bổ đơn CBS theo tên sản phẩm trong khoảng ngày đã chọn.</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Pie: Doanh thu */}
+                        <div>
+                          <p className="text-xs font-medium text-gray-600 text-center mb-1">Tỉ trọng doanh thu</p>
+                          <ResponsiveContainer width="100%" height={280}>
+                            <PieChart>
+                              <Pie
+                                data={data.massStats.serviceBreakdown}
+                                dataKey="total_amount"
+                                nameKey="service_name"
+                                cx="50%"
+                                cy="50%"
+                                outerRadius={95}
+                                label={(props: { name?: string; percent?: number }) =>
+                                  `${(props.name || '').length > 14 ? (props.name || '').slice(0, 13) + '…' : props.name}: ${((props.percent || 0) * 100).toFixed(0)}%`
+                                }
+                                labelLine
+                              >
+                                {data.massStats.serviceBreakdown.map((_, idx) => (
+                                  <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                                ))}
+                              </Pie>
+                              <Tooltip
+                                formatter={(v: number | string | undefined, _name: string | undefined, props: any) => [
+                                  formatCurrency(Number(v ?? 0)),
+                                  props?.payload?.service_name || '',
+                                ]}
+                              />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                        {/* Donut: Số lượng */}
+                        <div>
+                          <p className="text-xs font-medium text-gray-600 text-center mb-1">Tỉ trọng số lượng</p>
+                          <ResponsiveContainer width="100%" height={280}>
+                            <PieChart>
+                              <Pie
+                                data={data.massStats.serviceBreakdown}
+                                dataKey="deal_count"
+                                nameKey="service_name"
+                                cx="50%"
+                                cy="50%"
+                                innerRadius={55}
+                                outerRadius={95}
+                                label={(props: { name?: string; value?: number; percent?: number }) =>
+                                  `${(props.name || '').length > 14 ? (props.name || '').slice(0, 13) + '…' : props.name}: ${props.value} (${((props.percent || 0) * 100).toFixed(0)}%)`
+                                }
+                                labelLine
+                              >
+                                {data.massStats.serviceBreakdown.map((_, idx) => (
+                                  <Cell key={idx} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                                ))}
+                              </Pie>
+                              <Tooltip
+                                formatter={(v: number | string | undefined, _name: string | undefined, props: any) => [
+                                  `${Number(v ?? 0)} đơn`,
+                                  props?.payload?.service_name || '',
+                                ]}
+                              />
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1429,7 +1501,7 @@ export default function DashboardPage() {
           {/* Employee detail modal */}
           {employeeDetail && (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-              <div className="w-full max-w-4xl bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
+              <div className="w-full max-w-4xl max-h-[90vh] bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden flex flex-col">
                 <div className="flex items-start justify-between p-6 border-b">
                   <div className="min-w-0">
                     <h3 className="text-xl font-semibold text-gray-900 truncate">
@@ -1453,7 +1525,7 @@ export default function DashboardPage() {
                     <Loader2 className="w-5 h-5 animate-spin mr-2" /> Đang tải...
                   </div>
                 ) : (
-                  <div className="p-6 space-y-6">
+                  <div className="p-6 space-y-6 overflow-y-auto">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       <div className="rounded-xl border border-gray-100 bg-gray-50 p-4">
                         <div className="text-xs text-gray-500">Doanh thu Won</div>
@@ -1482,7 +1554,7 @@ export default function DashboardPage() {
                       <div className="rounded-xl border border-gray-100 p-4">
                         <h4 className="font-semibold text-gray-900 mb-2">Deal cần chú ý</h4>
                         {employeeDetail.dealsNeedingAttention?.length ? (
-                          <ul className="space-y-2">
+                          <ul className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
                             {employeeDetail.dealsNeedingAttention.slice(0, 10).map((deal) => (
                               <li key={deal.deal_id} className="flex items-center justify-between gap-3 py-2 border-b border-gray-100 last:border-0">
                                 <div className="min-w-0">
@@ -1510,14 +1582,14 @@ export default function DashboardPage() {
                       <div className="rounded-xl border border-gray-100 p-4">
                         <h4 className="font-semibold text-gray-900 mb-2">Task quá hạn</h4>
                         {employeeDetail.overdueTasks?.length ? (
-                          <ul className="space-y-2">
+                          <ul className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
                             {employeeDetail.overdueTasks.slice(0, 20).map((t) => (
                               <li key={t.task_id} className="py-2 border-b border-gray-100 last:border-0">
                                 <div className="text-sm font-medium text-gray-900">
                                   {t.display_code || t.task_id} — {t.title}
                                 </div>
                                 <div className="text-xs text-gray-500 mt-0.5">
-                                  Due: {t.due_date ? new Date(t.due_date).toLocaleDateString('vi-VN') : '-'}
+                                  Due: {t.due_date ? new Date(t.due_date).toLocaleDateString('vi-VN') : 'Chưa có hạn'}
                                 </div>
                               </li>
                             ))}

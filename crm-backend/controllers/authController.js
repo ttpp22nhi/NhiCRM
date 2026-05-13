@@ -238,7 +238,15 @@ export const login = async (req, res) => {
     };
 
     const token = jwt.sign(payload, process.env.JWT_SECRET || 'crm_secret_key_2025', {
-      expiresIn: '24h' // Token có hiệu lực trong 1 ngày
+      expiresIn: '8h'
+    });
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 8 * 60 * 60 * 1000,
+      path: '/',
     });
 
     res.json({
@@ -257,6 +265,37 @@ export const login = async (req, res) => {
   } catch (error) {
     console.error('Lỗi Login:', error);
     res.status(500).json({ success: false, message: 'Lỗi hệ thống khi đăng nhập.' });
+  }
+};
+
+/**
+ * GET /api/auth/me — trả thông tin user hiện tại từ DB (luôn mới nhất).
+ */
+export const getMe = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT employee_id, username, full_name, email, role, tenant_id
+       FROM employees WHERE employee_id = $1 AND is_active = true`,
+      [req.user.id]
+    );
+    if (!result.rows.length) {
+      return res.status(401).json({ success: false, message: 'Tài khoản không tồn tại hoặc bị khóa.' });
+    }
+    const emp = result.rows[0];
+    res.json({
+      success: true,
+      user: {
+        id: emp.employee_id,
+        username: emp.username,
+        full_name: emp.full_name,
+        email: emp.email,
+        role: emp.role,
+        tenant_id: emp.tenant_id || null,
+      },
+    });
+  } catch (error) {
+    console.error('Lỗi getMe:', error);
+    res.status(500).json({ success: false, message: 'Lỗi hệ thống.' });
   }
 };
 

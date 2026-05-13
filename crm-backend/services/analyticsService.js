@@ -713,6 +713,41 @@ export async function getTopOpportunities(tenantId, scopeOptions, limit = 10, da
 }
 
 /**
+ * MASS: Tỉ trọng theo Tên dịch vụ (product_name) từ CBS revenue orders.
+ */
+export async function getMassServiceBreakdown(tenantId, scopeOptions, dateRange = null) {
+  const { fromTs, toTs } = normalizeDateRange(dateRange)
+  const params = [tenantId]
+  let whereClause = `o.tenant_id = $1`
+
+  if (fromTs != null) {
+    params.push(fromTs)
+    whereClause += ` AND COALESCE(o.active_date, o.payment_date) >= $${params.length}`
+  }
+  if (toTs != null) {
+    params.push(toTs)
+    whereClause += ` AND COALESCE(o.active_date, o.payment_date) <= $${params.length}`
+  }
+
+  const result = await pool.query(
+    `SELECT COALESCE(NULLIF(TRIM(o.product_name), ''), 'Chưa xác định') AS service_name,
+            COUNT(*)::int AS order_count,
+            COALESCE(SUM(o.price_vat), 0)::numeric AS total_amount
+     FROM cbs_revenue_orders o
+     WHERE ${whereClause}
+     GROUP BY 1
+     ORDER BY order_count DESC
+     LIMIT 15`,
+    params
+  )
+  return (result.rows || []).map((r) => ({
+    service_name: r.service_name,
+    deal_count: parseInt(r.order_count, 10) || 0,
+    total_amount: parseFloat(r.total_amount) || 0,
+  }))
+}
+
+/**
  * KPI nhân viên để xuất báo cáo Excel.
  * - Phạm vi theo scopeOptions của dashboard
  * - dealCategory: null | MASS | PROJECT

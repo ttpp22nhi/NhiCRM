@@ -265,10 +265,8 @@ export function DealTimeline({ dealId, onRefresh }: DealTimelineProps) {
 
   const handleDownload = async (fileId: string, fileName: string) => {
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
-      const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000'
-      const res = await fetch(`${baseURL}/api/deals/download/${fileId}`, {
-        headers: { Authorization: `Bearer ${token}` }
+      const res = await fetch(`/api/deals/download/${fileId}`, {
+        credentials: 'include',
       })
       if (!res.ok) throw new Error('Tải thất bại')
       const blob = await res.blob()
