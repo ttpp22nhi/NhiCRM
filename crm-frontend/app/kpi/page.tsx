@@ -838,7 +838,9 @@ export default function KpiPage() {
               <strong>Địa bàn:</strong> lấy từ hồ sơ nhân viên — giúp phân bổ chỉ tiêu theo khu vực.
             </span>
             <span className="block">
-              <strong>Tiếp cận:</strong> lần (số nguyên không âm).
+              <strong>Tiếp cận:</strong> lần — mỗi deal tạo trong kỳ; cộng thêm mỗi khách có CBS
+              đã duyệt trong kỳ nếu <em>chưa</em> trùng khách trên deal (theo mã KH, MST, SĐT
+              hoặc tên DN).
             </span>
             <span className="block">
               <strong>Hiển thị kết quả:</strong> chuyển giữa <em>Số</em> (VNĐ thực thu) và{' '}

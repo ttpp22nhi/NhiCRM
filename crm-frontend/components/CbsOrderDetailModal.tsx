@@ -109,13 +109,18 @@ function Row({
   )
 }
 
+type CbsOrderDetailView = CbsOrderDetail & {
+  _children?: CbsOrderDetail[]
+  _childCount?: number
+}
+
 export function CbsOrderDetailModal({
   open,
   order,
   onClose,
 }: {
   open: boolean
-  order: CbsOrderDetail | null
+  order: CbsOrderDetailView | null
   onClose: () => void
 }) {
   useEffect(() => {
@@ -132,7 +137,9 @@ export function CbsOrderDetailModal({
   const sellerDisplay = order.claimed_by_name || order.claimed_by || null
   const approverDisplay = order.approved_by_name || order.approved_by || null
   const statusLabel =
-    order.claim_status === 'approved'
+    order.claim_status === 'mixed'
+      ? 'Nhiều trạng thái (theo dòng)'
+      : order.claim_status === 'approved'
       ? 'Đã xác nhận'
       : order.claim_status === 'pending'
       ? 'Chờ duyệt'
@@ -140,13 +147,17 @@ export function CbsOrderDetailModal({
       ? 'Đã tích'
       : 'Chưa có người bán'
   const statusTone =
-    order.claim_status === 'approved'
+    order.claim_status === 'mixed'
+      ? 'bg-sky-50 text-sky-800 border-sky-200'
+      : order.claim_status === 'approved'
       ? 'bg-green-50 text-green-700 border-green-200'
       : order.claim_status === 'pending'
       ? 'bg-amber-50 text-amber-700 border-amber-200'
       : order.claimed_by
       ? 'bg-primary-50 text-primary-700 border-primary-200'
       : 'bg-gray-100 text-gray-600 border-gray-200'
+  const lineItems =
+    order._children && order._children.length > 1 ? order._children : null
 
   return (
     <div
@@ -209,19 +220,63 @@ export function CbsOrderDetailModal({
             <Row label="Loại hợp đồng" value={order.contract_type} />
           </section>
 
-          <section>
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">
-              Sản phẩm / Dịch vụ
-            </h4>
-            <Row
-              label="Mã dịch vụ"
-              value={order.masp || order.primary_product_code}
-              mono
-            />
-            <Row label="Mã sản phẩm" value={order.product_code} mono />
-            <Row label="Tên dịch vụ" value={order.product_name} strong />
-            <Row label="Số Serial" value={order.serial} mono />
-          </section>
+          {lineItems ? (
+            <section>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
+                Chi tiết từng dòng ({lineItems.length})
+              </h4>
+              <div className="overflow-x-auto border border-gray-200 rounded-lg">
+                <table className="min-w-full text-xs">
+                  <thead className="bg-gray-50 text-gray-600">
+                    <tr>
+                      <th className="px-2 py-2 text-left font-semibold">Sản phẩm</th>
+                      <th className="px-2 py-2 text-left font-semibold">Serial</th>
+                      <th className="px-2 py-2 text-right font-semibold">Giá (VAT)</th>
+                      <th className="px-2 py-2 text-left font-semibold">Người bán</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {lineItems.map((line) => (
+                      <tr key={line.id}>
+                        <td className="px-2 py-2 text-gray-800">
+                          <div className="font-medium">{line.product_name || '—'}</div>
+                          <div className="text-gray-500">{line.product_code || ''}</div>
+                        </td>
+                        <td className="px-2 py-2 text-gray-600 tabular-nums">{line.serial || '—'}</td>
+                        <td className="px-2 py-2 text-right tabular-nums font-medium">
+                          {formatVND(line.price_vat)}
+                        </td>
+                        <td className="px-2 py-2 text-gray-600">
+                          {line.claimed_by_name || line.claimed_by || '—'}
+                          {line.claim_status === 'pending' && (
+                            <span className="ml-1 text-amber-700">(chờ duyệt)</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="mt-2 text-[11px] text-gray-500">
+                Giá trị hợp đồng bên dưới là tổng các dòng. KPI sản phẩm:{' '}
+                <strong>1 chỉ tiêu / hợp đồng</strong> khi đã duyệt.
+              </p>
+            </section>
+          ) : (
+            <section>
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">
+                Sản phẩm / Dịch vụ
+              </h4>
+              <Row
+                label="Mã dịch vụ"
+                value={order.masp || order.primary_product_code}
+                mono
+              />
+              <Row label="Mã sản phẩm" value={order.product_code} mono />
+              <Row label="Tên dịch vụ" value={order.product_name} strong />
+              <Row label="Số Serial" value={order.serial} mono />
+            </section>
+          )}
 
           <section>
             <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-1">

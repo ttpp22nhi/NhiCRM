@@ -31,18 +31,17 @@ import {
 import { saveAs } from 'file-saver'
 import toast from 'react-hot-toast'
 import { CbsConfigModal } from '@/components/CbsConfigModal'
-import { CbsOrderDetailModal, CbsOrderDetail } from '@/components/CbsOrderDetailModal'
-
-interface CbsOrder extends CbsOrderDetail {
-  claimed_by_username?: string | null
-  claimed_by_territory?: string | null
-  claimed_by_role?: string | null
-}
+import { CbsOrderDetailModal } from '@/components/CbsOrderDetailModal'
+import {
+  groupCbsOrdersByContract,
+  type CbsOrderGroup,
+  type CbsOrderRow,
+} from '@/lib/cbsRevenueGrouping'
 
 interface ListResp {
   success: boolean
   period: string
-  data: CbsOrder[]
+  data: CbsOrderRow[]
   summary: {
     total: number
     total_vat: number
@@ -205,7 +204,7 @@ function CbsRevenuePageContent() {
   const [configOpen, setConfigOpen] = useState(false)
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
   const [salesList, setSalesList] = useState<SalesEmployee[]>([])
-  const [detailOrder, setDetailOrder] = useState<CbsOrder | null>(null)
+  const [detailOrder, setDetailOrder] = useState<CbsOrderGroup | null>(null)
 
   const load = useCallback(async () => {
     if (!canAccess) return
@@ -260,8 +259,12 @@ function CbsRevenuePageContent() {
     [salesList]
   )
 
+  const groupedAll = useMemo(
+    () => groupCbsOrdersByContract((resp?.data || []) as CbsOrderRow[]),
+    [resp]
+  )
+
   const filteredData = useMemo(() => {
-    const rows = resp?.data || []
     const f = columnFilters
     const fromMs = dateInputToMs(f.dateFrom, false)
     const toMs = dateInputToMs(f.dateTo, true)
@@ -273,10 +276,9 @@ function CbsRevenuePageContent() {
     const nCbsStaff = normalizeVN(f.cbsStaff)
     const nSeller = normalizeVN(f.seller)
 
-    return rows.filter((o) => {
-      // Ngày kích hoạt
+    return groupedAll.filter((g) => {
       if (fromMs != null || toMs != null) {
-        const dayMs = toDayMs(o.active_date)
+        const dayMs = toDayMs(g.active_date)
         if (dayMs == null) return false
         if (fromMs != null && dayMs < fromMs) return false
         if (toMs != null && dayMs > toMs) return false
@@ -284,50 +286,62 @@ function CbsRevenuePageContent() {
 
       if (nCustomer) {
         const hay = normalizeVN(
-          `${o.customer_name || ''} ${o.customer_type || ''} ${o.external_id1 || ''}`
+          `${g.customer_name || ''} ${g.customer_type || ''} ${g.external_id1 || ''}`
         )
         if (!hay.includes(nCustomer)) return false
       }
       if (nProduct) {
-        const hay = normalizeVN(`${o.product_name || ''} ${o.product_code || ''} ${o.masp || ''}`)
-        if (!hay.includes(nProduct)) return false
+        const match = g._children.some((c) => {
+          const hay = normalizeVN(
+            `${c.product_name || ''} ${c.product_code || ''} ${c.masp || ''}`
+          )
+          return hay.includes(nProduct)
+        })
+        if (!match) return false
       }
       if (nContract) {
-        const hay = normalizeVN(`${o.contract_no || ''} ${o.contract_type || ''}`)
+        const hay = normalizeVN(`${g.contract_no || ''} ${g.contract_type || ''}`)
         if (!hay.includes(nContract)) return false
       }
       if (nCbsStaff) {
-        const hay = normalizeVN(`${o.cbs_staff || ''} ${o.partner || ''}`)
-        if (!hay.includes(nCbsStaff)) return false
+        const match = g._children.some((c) => {
+          const hay = normalizeVN(`${c.cbs_staff || ''} ${c.partner || ''}`)
+          return hay.includes(nCbsStaff)
+        })
+        if (!match) return false
       }
 
       if (minPrice != null && Number.isFinite(minPrice)) {
-        if (Number(o.price_vat || 0) < minPrice) return false
+        if (Number(g.price_vat || 0) < minPrice) return false
       }
       if (maxPrice != null && Number.isFinite(maxPrice)) {
-        if (Number(o.price_vat || 0) > maxPrice) return false
+        if (Number(g.price_vat || 0) > maxPrice) return false
       }
 
       if (nSeller) {
         const hay = normalizeVN(
-          `${o.claimed_by_name || ''} ${o.claimed_by_username || ''} ${o.claimed_by_territory || ''}`
+          `${g.claimed_by_name || ''} ${g.claimed_by_username || ''} ${g.claimed_by_territory || ''}`
         )
         if (!hay.includes(nSeller)) return false
       }
 
       if (f.sellerStatus !== 'all') {
+        const statuses = g._children.map((c) => c.claim_status)
+        const hasClaimed = g._children.some((c) => c.claimed_by)
         if (f.sellerStatus === 'unclaimed') {
-          if (o.claimed_by) return false
+          if (hasClaimed) return false
         } else if (f.sellerStatus === 'pending') {
-          if (o.claim_status !== 'pending') return false
+          if (!statuses.includes('pending')) return false
         } else if (f.sellerStatus === 'approved') {
-          if (o.claim_status !== 'approved') return false
+          if (!g._children.every((c) => c.claim_status === 'approved' && c.claimed_by)) {
+            return false
+          }
         }
       }
 
       return true
     })
-  }, [resp, columnFilters])
+  }, [groupedAll, columnFilters])
 
   const hasActiveColumnFilter = useMemo(() => {
     const f = columnFilters
@@ -350,80 +364,79 @@ function CbsRevenuePageContent() {
   }
   const clearColumnFilters = () => setColumnFilters(EMPTY_COL_FILTERS)
 
-  const setBusy = (id: string, on: boolean) => {
+  const setBusy = (key: string, on: boolean) => {
     setBusyIds((prev) => {
       const next = new Set(prev)
-      if (on) next.add(id)
-      else next.delete(id)
+      if (on) next.add(key)
+      else next.delete(key)
       return next
     })
   }
 
-  // Sales tự tích đơn của mình (pending)
-  const claimSelf = async (id: string) => {
-    setBusy(id, true)
+  const runOnGroup = async (
+    group: CbsOrderGroup,
+    fn: (id: string) => Promise<void>,
+    successMsg: string,
+    targetIds?: string[]
+  ) => {
+    const ids = targetIds ?? group._childIds
+    if (ids.length === 0) {
+      toast.error('Không có dòng phù hợp để xử lý.')
+      return
+    }
+    setBusy(group._groupKey, true)
+    let ok = 0
+    let fail = 0
     try {
-      const r = await apiClient.post<{ success: boolean; message?: string }>(
-        `/api/cbs/revenue/${id}/claim`
-      )
-      toast.success(r.data.message || 'Đã gửi yêu cầu, chờ duyệt.')
-      await load()
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Không thể tích đơn.')
+      for (const id of ids) {
+        try {
+          await fn(id)
+          ok++
+        } catch {
+          fail++
+        }
+      }
+      if (ok > 0) {
+        const suffix = ids.length > 1 ? ` (${ok}/${ids.length} dòng)` : ''
+        toast.success(`${successMsg}${suffix}`)
+        await load()
+      }
+      if (fail > 0) {
+        toast.error(
+          fail === ids.length
+            ? 'Thao tác thất bại.'
+            : `${fail} dòng không xử lý được (có thể đã được gán trước đó).`
+        )
+      }
     } finally {
-      setBusy(id, false)
+      setBusy(group._groupKey, false)
     }
   }
 
-  // Non-sales gán người bán (tự động duyệt)
-  const assignSeller = async (id: string, sellerId: string) => {
-    setBusy(id, true)
-    try {
-      const r = await apiClient.post<{ success: boolean; message?: string }>(
-        `/api/cbs/revenue/${id}/claim`,
-        { seller_id: sellerId }
-      )
-      toast.success(r.data.message || 'Đã gán người bán.')
-      await load()
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Không thể gán người bán.')
-    } finally {
-      setBusy(id, false)
-    }
-  }
+  const claimSelf = (group: CbsOrderGroup) =>
+    runOnGroup(group, async (id) => {
+      await apiClient.post(`/api/cbs/revenue/${id}/claim`)
+    }, 'Đã gửi yêu cầu, chờ duyệt.')
 
-  // Non-sales duyệt pending claim
-  const approve = async (id: string) => {
-    setBusy(id, true)
-    try {
-      const r = await apiClient.post<{ success: boolean; message?: string }>(
-        `/api/cbs/revenue/${id}/approve`
-      )
-      toast.success(r.data.message || 'Đã duyệt đơn hàng.')
-      await load()
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Không thể duyệt đơn.')
-    } finally {
-      setBusy(id, false)
-    }
-  }
+  const assignSeller = (group: CbsOrderGroup, sellerId: string) =>
+    runOnGroup(group, async (id) => {
+      await apiClient.post(`/api/cbs/revenue/${id}/claim`, { seller_id: sellerId })
+    }, 'Đã gán người bán.')
 
-  const unclaim = async (id: string) => {
-    setBusy(id, true)
-    try {
+  const approve = (group: CbsOrderGroup) =>
+    runOnGroup(
+      group,
+      async (id) => {
+        await apiClient.post(`/api/cbs/revenue/${id}/approve`)
+      },
+      'Đã duyệt đơn hàng.',
+      group._children.filter((c) => c.claim_status === 'pending').map((c) => c.id)
+    )
+
+  const unclaim = (group: CbsOrderGroup) =>
+    runOnGroup(group, async (id) => {
       await apiClient.post(`/api/cbs/revenue/${id}/unclaim`)
-      toast.success('Đã gỡ người bán.')
-      await load()
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { message?: string } } }
-      toast.error(err.response?.data?.message || 'Không thể gỡ.')
-    } finally {
-      setBusy(id, false)
-    }
-  }
+    }, 'Đã gỡ người bán.')
 
   const recomputeKpi = async () => {
     if (!canAssignSeller) return
@@ -585,7 +598,9 @@ function CbsRevenuePageContent() {
                   Đồng bộ định kỳ 06:00 và 18:00 (giờ VN) theo <strong>tháng hiện tại</strong>. Nút{' '}
                   <strong>Đồng bộ ngay</strong> lấy đúng <strong>Kỳ</strong> bạn chọn ở ô tháng bên cạnh (ví dụ
                   tháng 4). Sales tích đơn của mình ở trạng thái <strong>chờ duyệt</strong>; quản lý xác nhận
-                  người bán.
+                  người bán. Các dòng cùng <strong>số hợp đồng</strong> hiển thị gộp một dòng (tiền
+                  cộng dồn; KPI tiếp cận: <strong>1 lần / khách CBS</strong> (không trùng deal
+                  cùng kỳ); sản phẩm: <strong>1 / hợp đồng</strong> khi đã duyệt).
                 </p>
               </div>
             </div>
@@ -791,8 +806,8 @@ function CbsRevenuePageContent() {
               <>
                 {hasActiveColumnFilter && (
                   <div className="px-3 py-2 text-xs text-gray-600 border-b border-gray-100 bg-amber-50/60">
-                    Đang lọc <strong className="text-gray-900">{filteredData.length}</strong>/
-                    {resp.data.length} đơn theo cột.
+                    Đang lọc <strong className="text-gray-900">{filteredData.length}</strong> hợp
+                    đồng / {groupedAll.length} (tổng {resp.data.length} dòng CBS) theo cột.
                     {filteredData.length === 0 && (
                       <span className="ml-2 text-red-600">Không có dòng nào khớp bộ lọc.</span>
                     )}
@@ -924,10 +939,10 @@ function CbsRevenuePageContent() {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {filteredData.map((o, idx) => {
-                      const busy = busyIds.has(o.id)
+                      const busy = busyIds.has(o._groupKey)
                       return (
                         <tr
-                          key={o.id}
+                          key={o._groupKey}
                           className="hover:bg-gray-50/80 cursor-pointer"
                           onClick={() => setDetailOrder(o)}
                         >
@@ -957,7 +972,12 @@ function CbsRevenuePageContent() {
                               {o.product_name || '—'}
                             </div>
                             <div className="text-xs text-gray-500">
-                              {o.product_code || ''}
+                              <span>{o.product_code || ''}</span>
+                              {o._childCount > 1 ? (
+                                <span className="text-[10px] font-medium text-primary-700 bg-primary-50 px-1.5 py-0.5 rounded ml-1">
+                                  {o._childCount} dòng
+                                </span>
+                              ) : null}
                             </div>
                           </td>
                           <td className="px-3 py-2 text-xs text-gray-600">
@@ -998,10 +1018,10 @@ function CbsRevenuePageContent() {
                               myId={user.id}
                               canAssignSeller={canAssignSeller}
                               sellerOptions={sellerOptions}
-                              onClaimSelf={() => claimSelf(o.id)}
-                              onAssign={(sid) => assignSeller(o.id, sid)}
-                              onApprove={() => approve(o.id)}
-                              onUnclaim={() => unclaim(o.id)}
+                              onClaimSelf={() => claimSelf(o)}
+                              onAssign={(sid) => assignSeller(o, sid)}
+                              onApprove={() => approve(o)}
+                              onUnclaim={() => unclaim(o)}
                             />
                           </td>
                           <td
@@ -1089,7 +1109,7 @@ function SellerCell({
   onApprove,
   onUnclaim,
 }: {
-  order: CbsOrder
+  order: CbsOrderGroup
   busy: boolean
   myId: string
   canAssignSeller: boolean
@@ -1100,7 +1120,8 @@ function SellerCell({
   onUnclaim: () => void
 }) {
   const mine = order.claimed_by && order.claimed_by === myId
-  const isPending = order.claim_status === 'pending'
+  const isMixed = order.claim_status === 'mixed'
+  const isPending = order.claim_status === 'pending' || isMixed
   const isApproved = order.claim_status === 'approved'
 
   if (canAssignSeller) {
@@ -1163,7 +1184,12 @@ function SellerCell({
                 : 'text-gray-400'
             }`}
           >
-            {isPending ? (
+            {isMixed ? (
+              <>
+                <Info className="w-3 h-3" />
+                Nhiều trạng thái
+              </>
+            ) : isPending ? (
               <>
                 <Clock className="w-3 h-3" />
                 Chờ duyệt
@@ -1232,7 +1258,12 @@ function SellerCell({
   if (mine) {
     return (
       <div className="flex flex-col items-center gap-1">
-        {isPending ? (
+        {isMixed ? (
+          <span className="inline-flex items-center gap-1 text-xs font-semibold bg-sky-50 text-sky-800 border border-sky-200 px-2.5 py-1 rounded-full">
+            <Info className="w-3.5 h-3.5" />
+            Hợp đồng nhiều dòng — xem chi tiết
+          </span>
+        ) : isPending ? (
           <>
             <span className="inline-flex items-center gap-1 text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 px-2.5 py-1 rounded-full">
               <Clock className="w-3.5 h-3.5" />
