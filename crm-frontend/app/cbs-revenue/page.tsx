@@ -363,6 +363,38 @@ function CbsRevenuePageContent() {
     setColumnFilters((prev) => ({ ...prev, [key]: value }))
   }
   const clearColumnFilters = () => setColumnFilters(EMPTY_COL_FILTERS)
+  const jumpToSummaryList = useCallback(
+    (target: 'all' | 'mine' | 'claimed' | 'pending' | 'unclaimed') => {
+      if (target === 'all') {
+        setOwner('all')
+        setColumnFilters((prev) => ({ ...prev, sellerStatus: 'all' }))
+        return
+      }
+      if (target === 'mine') {
+        setOwner('mine')
+        setColumnFilters((prev) => ({ ...prev, sellerStatus: 'all' }))
+        return
+      }
+      if (target === 'claimed') {
+        setOwner('all')
+        setColumnFilters((prev) => ({ ...prev, sellerStatus: 'approved' }))
+        return
+      }
+      if (target === 'pending') {
+        if (canAssignSeller) {
+          setOwner('pending')
+          setColumnFilters((prev) => ({ ...prev, sellerStatus: 'all' }))
+        } else {
+          setOwner('all')
+          setColumnFilters((prev) => ({ ...prev, sellerStatus: 'pending' }))
+        }
+        return
+      }
+      setOwner('unclaimed')
+      setColumnFilters((prev) => ({ ...prev, sellerStatus: 'unclaimed' }))
+    },
+    [canAssignSeller]
+  )
 
   const setBusy = (key: string, on: boolean) => {
     setBusyIds((prev) => {
@@ -676,33 +708,47 @@ function CbsRevenuePageContent() {
               label="Tổng đơn"
               hint="Số dòng trong CRM có mã kỳ = Kỳ (sau lọc tab / tìm kiếm API)"
               value={summary?.total ?? 0}
+              tone="primary"
+              onClick={() => jumpToSummaryList('all')}
+              clickHint="Bấm để xem tất cả"
             />
             <Card
               label="Tổng doanh thu (VAT)"
               value={formatVND(summary?.total_vat ?? 0)}
               strong
+              tone="success"
+              onClick={() => jumpToSummaryList('all')}
+              clickHint="Bấm để xem tất cả"
             />
             <Card
               label="Đơn của tôi"
               value={summary?.mine ?? 0}
               tone="primary"
+              onClick={() => jumpToSummaryList('mine')}
+              clickHint="Bấm để lọc Của tôi"
             />
             <Card
               label="Đã xác nhận"
               value={summary?.claimed ?? 0}
               tone="success"
+              onClick={() => jumpToSummaryList('claimed')}
+              clickHint="Bấm để lọc Đã duyệt"
             />
             {canAssignSeller && (
               <Card
                 label="Chờ duyệt"
                 value={summary?.pending ?? 0}
                 tone="warn"
+                onClick={() => jumpToSummaryList('pending')}
+                clickHint="Bấm để lọc Chờ duyệt"
               />
             )}
             <Card
               label="Chưa có người bán"
               value={summary?.unclaimed ?? 0}
-              tone="warn"
+              tone="alert"
+              onClick={() => jumpToSummaryList('unclaimed')}
+              clickHint="Bấm để lọc Chưa có người bán"
             />
           </div>
 
@@ -1320,24 +1366,68 @@ function Card({
   tone,
   strong,
   hint,
+  onClick,
+  clickHint,
 }: {
   label: string
   value: number | string
-  tone?: 'primary' | 'success' | 'warn'
+  tone?: 'primary' | 'success' | 'warn' | 'alert'
   strong?: boolean
   hint?: string
+  onClick?: () => void
+  clickHint?: string
 }) {
   const toneClass =
     tone === 'primary'
-      ? 'text-primary-700'
+      ? 'text-primary-900'
       : tone === 'success'
-      ? 'text-green-700'
+      ? 'text-green-900'
       : tone === 'warn'
-      ? 'text-amber-700'
+      ? 'text-amber-900'
+      : tone === 'alert'
+      ? 'text-red-900'
       : 'text-gray-900'
+  const bgClass =
+    tone === 'primary'
+      ? 'bg-primary-100'
+      : tone === 'success'
+      ? 'bg-green-100'
+      : tone === 'warn'
+      ? 'bg-amber-100'
+      : tone === 'alert'
+      ? 'bg-red-100'
+      : 'bg-white'
+  const labelClass =
+    tone === 'primary'
+      ? 'text-primary-900'
+      : tone === 'success'
+      ? 'text-green-900'
+      : tone === 'warn'
+      ? 'text-amber-900'
+      : tone === 'alert'
+      ? 'text-red-900'
+      : 'text-gray-500'
+  const borderClass =
+    tone === 'primary'
+      ? 'border-primary-300'
+      : tone === 'success'
+      ? 'border-green-300'
+      : tone === 'warn'
+      ? 'border-amber-300'
+      : tone === 'alert'
+      ? 'border-red-300'
+      : 'border-gray-200'
   return (
-    <div className="bg-white rounded-xl shadow border border-gray-200 p-3">
-      <div className="text-[11px] uppercase tracking-wider text-gray-500">
+    <button
+      type="button"
+      onClick={onClick}
+      className={`${bgClass} ${borderClass} rounded-xl shadow border p-3 text-left w-full ${
+        onClick ? 'hover:border-primary-300 hover:shadow-md transition' : ''
+      }`}
+      title={clickHint}
+      disabled={!onClick}
+    >
+      <div className={`text-[11px] uppercase tracking-wider ${labelClass}`}>
         {label}
       </div>
       <div
@@ -1352,6 +1442,11 @@ function Card({
           {hint}
         </p>
       ) : null}
-    </div>
+      {onClick ? (
+        <p className="mt-1 text-[10px] text-primary-600 font-medium normal-case">
+          {clickHint || 'Bấm để xem danh sách'}
+        </p>
+      ) : null}
+    </button>
   )
 }
