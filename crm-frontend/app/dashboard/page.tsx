@@ -964,18 +964,18 @@ export default function DashboardPage() {
             <div className="mb-8 bg-white rounded-xl shadow p-6 border border-gray-100">
               <h3 className="text-lg font-semibold text-gray-900 mb-2">Tiến độ KPI — tổng toàn Sales (tenant)</h3>
               <p className="text-xs text-gray-500 mb-3">
-                Gộp chỉ tiêu và thực đạt từ KPI tháng: <strong>mọi tháng</strong> có trong khoảng ngày lọc,{' '}
+                Gộp kế hoạch và thực đạt từ KPI tháng: <strong>mọi tháng</strong> có trong khoảng ngày lọc,{' '}
                 <strong>toàn tenant</strong> (không lọc theo đơn vị / Loại hình MASS–Dự án). Khác với khối so sánh KPI nhân
                 viên bên dưới.
               </p>
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
-                  <p className="text-sm text-gray-500">Chỉ tiêu: {formatCurrency(data.kpiProgress.targetValue)}</p>
+                  <p className="text-sm text-gray-500">Kế hoạch: {formatCurrency(data.kpiProgress.targetValue)}</p>
                   <p className="text-sm text-gray-500">Thực đạt: {formatCurrency(data.kpiProgress.actualRevenue)}</p>
                 </div>
                 <div className="text-right">
                   <p className="text-2xl font-bold text-primary-600">{data.kpiProgress.progressPercent}%</p>
-                  <p className="text-xs text-gray-500">đạt chỉ tiêu</p>
+                  <p className="text-xs text-gray-500">đạt kế hoạch</p>
                 </div>
               </div>
               <div className="mt-2 h-2 bg-gray-200 rounded-full overflow-hidden">
@@ -1031,17 +1031,17 @@ export default function DashboardPage() {
                 <div className="rounded-lg border border-emerald-100 bg-emerald-50/60 p-4">
                   <p className="text-xs font-medium text-emerald-800 uppercase tracking-wide">Đạt / vượt (≥100%)</p>
                   <p className="text-2xl font-bold text-emerald-700 mt-1">{kpiLbDerived.summary.atOrOver100}</p>
-                  <p className="text-xs text-emerald-700/80 mt-0.5">Có chỉ tiêu doanh thu</p>
+                  <p className="text-xs text-emerald-700/80 mt-0.5">Có kế hoạch doanh thu</p>
                 </div>
                 <div className="rounded-lg border border-amber-100 bg-amber-50/60 p-4">
                   <p className="text-xs font-medium text-amber-900 uppercase tracking-wide">Dưới 100%</p>
                   <p className="text-2xl font-bold text-amber-800 mt-1">{kpiLbDerived.summary.below100WithTarget}</p>
-                  <p className="text-xs text-amber-800/80 mt-0.5">Có chỉ tiêu, chưa đủ</p>
+                  <p className="text-xs text-amber-800/80 mt-0.5">Có kế hoạch, chưa đủ</p>
                 </div>
                 <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                  <p className="text-xs font-medium text-slate-600 uppercase tracking-wide">Chưa giao CT DT</p>
+                  <p className="text-xs font-medium text-slate-600 uppercase tracking-wide">Chưa giao KH DT</p>
                   <p className="text-2xl font-bold text-slate-800 mt-1">{kpiLbDerived.summary.noTarget}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">Chờ giao chỉ tiêu / kỳ mới</p>
+                  <p className="text-xs text-slate-500 mt-0.5">Chờ giao kế hoạch / kỳ mới</p>
                 </div>
               </div>
 
@@ -1076,7 +1076,7 @@ export default function DashboardPage() {
                 <div>
                   <h4 className="text-sm font-semibold text-gray-800 mb-1">Top 10 thực hiện doanh thu KPI (VNĐ)</h4>
                   <p className="text-xs text-gray-500 mb-3">
-                    So sánh nhanh chỉ tiêu vs thực hiện trên 10 người dẫn đầu; toàn bộ nằm ở bảng phía dưới.
+                    So sánh nhanh kế hoạch vs thực hiện trên 10 người dẫn đầu; toàn bộ nằm ở bảng phía dưới.
                   </p>
                   <ResponsiveContainer width="100%" height={300}>
                     <BarChart data={kpiLbDerived.top10Revenue} layout="vertical" margin={{ left: 4, right: 12 }}>
@@ -1086,7 +1086,7 @@ export default function DashboardPage() {
                       <Tooltip
                         formatter={(value: number | string | undefined, name: string | undefined) => [
                           formatCurrency(Number(value ?? 0)),
-                          name === 'target_revenue_total' ? 'Chỉ tiêu' : 'Thực hiện',
+                          name === 'target_revenue_total' ? 'Kế hoạch' : 'Thực hiện',
                         ]}
                         labelFormatter={(_, payload) => {
                           const p = (payload?.[0]?.payload ?? {}) as { full_name?: string }
@@ -1095,7 +1095,7 @@ export default function DashboardPage() {
                       />
                       <Legend
                         formatter={(value) =>
-                          value === 'target_revenue_total' ? 'Chỉ tiêu' : value === 'actual_revenue_total' ? 'Thực hiện' : String(value)
+                          value === 'target_revenue_total' ? 'Kế hoạch' : value === 'actual_revenue_total' ? 'Thực hiện' : String(value)
                         }
                       />
                       <Bar dataKey="target_revenue_total" name="target_revenue_total" fill="#94a3b8" radius={[0, 3, 3, 0]} barSize={11} />
@@ -1110,7 +1110,7 @@ export default function DashboardPage() {
                   <div>
                     <h4 className="text-sm font-semibold text-gray-800">Bảng chi tiết theo nhân viên</h4>
                     <p className="text-xs text-gray-500 mt-0.5">
-                      SP: chỉ tiêu / thực hiện <strong>số lượng</strong> sản phẩm (mới + hiện hữu).
+                      SP: kế hoạch / thực hiện <strong>số lượng</strong> sản phẩm (mới + hiện hữu).
                     </p>
                   </div>
                   <div className="relative max-w-md w-full sm:w-72">

@@ -259,7 +259,7 @@ export function CbsOrderDetailModal({
               </div>
               <p className="mt-2 text-[11px] text-gray-500">
                 Giá trị hợp đồng bên dưới là tổng các dòng. KPI sản phẩm:{' '}
-                <strong>1 chỉ tiêu / hợp đồng</strong> khi đã duyệt.
+                <strong>1 kế hoạch / hợp đồng</strong> khi đã duyệt.
               </p>
             </section>
           ) : (

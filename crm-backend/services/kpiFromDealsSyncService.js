@@ -163,9 +163,7 @@ export async function recomputeKpiActuals(tenantId, userId, period) {
   if (isKpiPeriodActualsLocked(period)) return
 
   // (1) Doanh thu từ Deal thắng — phân loại theo kpi_customer_kind của customer.
-  //     Đồng thời tính số lượng sản phẩm bán ra tách theo loại KH:
-  //     SUM(COALESCE(quantity, 1)) group by NEW/EXISTING — mỗi deal tối thiểu
-  //     = 1 sản phẩm (cùng mã bán cho 5 khách = 5).
+     //     Đồng thời đếm số hợp đồng (deal thắng = 1 HĐ) tách theo loại KH NEW/EXISTING.
   const dealsRes = await pool.query(
     `SELECT
        COALESCE(SUM(
@@ -183,12 +181,12 @@ export async function recomputeKpiActuals(tenantId, userId, period) {
        COALESCE(SUM(
          CASE
            WHEN UPPER(TRIM(COALESCE(c.kpi_customer_kind, 'NEW'))) = 'EXISTING' THEN 0
-           ELSE COALESCE(d.quantity, 1)
+           ELSE 1
          END
        ), 0) AS product_new,
        COALESCE(SUM(
          CASE
-           WHEN UPPER(TRIM(COALESCE(c.kpi_customer_kind, 'NEW'))) = 'EXISTING' THEN COALESCE(d.quantity, 1)
+           WHEN UPPER(TRIM(COALESCE(c.kpi_customer_kind, 'NEW'))) = 'EXISTING' THEN 1
            ELSE 0
          END
        ), 0) AS product_existing

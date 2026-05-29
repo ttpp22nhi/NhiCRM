@@ -56,6 +56,14 @@ interface CustomerListProps {
   getSelectedCount?: () => number
 }
 
+interface TableColumnFilters {
+  customer: string
+  contact: string
+  taxCode: string
+  type: string
+  caretaker: string
+}
+
 export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedCount }: CustomerListProps) {
   const { user } = useAuth()
   const router = useRouter()
@@ -87,6 +95,13 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
   const [showDealModal, setShowDealModal] = useState(false)
   const [selectedCustomerForDeal, setSelectedCustomerForDeal] = useState<string | null>(null)
   const [pendingTransferCustomers, setPendingTransferCustomers] = useState<Set<string>>(new Set())
+  const [tableFilters, setTableFilters] = useState<TableColumnFilters>({
+    customer: '',
+    contact: '',
+    taxCode: '',
+    type: '',
+    caretaker: '',
+  })
   const typeFilterRef = useRef<HTMLDivElement>(null)
   const caretakerFilterRef = useRef<HTMLDivElement>(null)
   const hasAdminLikeAccess =
@@ -115,6 +130,43 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
     () => assignableEmployees.find((e) => e.employee_id === assignedToFilter),
     [assignableEmployees, assignedToFilter]
   )
+
+  const filteredTableCustomers = useMemo(() => {
+    const normalize = (v: string | null | undefined) => String(v || '').toLowerCase().trim()
+    const fCustomer = normalize(tableFilters.customer)
+    const fContact = normalize(tableFilters.contact)
+    const fTaxCode = normalize(tableFilters.taxCode)
+    const fType = normalize(tableFilters.type)
+    const fCaretaker = normalize(tableFilters.caretaker)
+
+    return customers.filter((c) => {
+      if (fCustomer) {
+        const hay = normalize(`${c.full_name} ${c.company_name}`)
+        if (!hay.includes(fCustomer)) return false
+      }
+      if (fContact) {
+        const hay = normalize(`${c.phone} ${c.email} ${c.address}`)
+        if (!hay.includes(fContact)) return false
+      }
+      if (fTaxCode) {
+        const hay = normalize(c.tax_code)
+        if (!hay.includes(fTaxCode)) return false
+      }
+      if (fType) {
+        const hay = normalize(
+          `${getCustomerTypeLabel(c.customer_type)} ${labelKpiCustomerKind(inferKpiCustomerKind(c))}`
+        )
+        if (!hay.includes(fType)) return false
+      }
+      if (fCaretaker) {
+        const hay = normalize(
+          `${c.assigned_employee_name} ${c.assigned_employee_username} ${c.assigned_employee_email}`
+        )
+        if (!hay.includes(fCaretaker)) return false
+      }
+      return true
+    })
+  }, [customers, tableFilters])
 
   // Danh sách tất cả các loại khách hàng
   const customerTypes = [
@@ -307,12 +359,21 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
   }
 
   const handleSelectAll = () => {
-    if (selectedCustomerIds.size === customers.length) {
-      // Bỏ chọn tất cả
-      setSelectedCustomerIds(new Set())
+    const visibleIds = filteredTableCustomers.map((c) => c.customer_id)
+    const allVisibleSelected =
+      visibleIds.length > 0 && visibleIds.every((id) => selectedCustomerIds.has(id))
+    if (allVisibleSelected) {
+      setSelectedCustomerIds((prev) => {
+        const next = new Set(prev)
+        visibleIds.forEach((id) => next.delete(id))
+        return next
+      })
     } else {
-      // Chọn tất cả
-      setSelectedCustomerIds(new Set(customers.map(c => c.customer_id)))
+      setSelectedCustomerIds((prev) => {
+        const next = new Set(prev)
+        visibleIds.forEach((id) => next.add(id))
+        return next
+      })
     }
   }
 
@@ -345,8 +406,12 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
   }
 
   const selectedCustomers = customers.filter(c => selectedCustomerIds.has(c.customer_id))
-  const isAllSelected = customers.length > 0 && selectedCustomerIds.size === customers.length
-  const isIndeterminate = selectedCustomerIds.size > 0 && selectedCustomerIds.size < customers.length
+  const visibleCustomerIds = filteredTableCustomers.map((c) => c.customer_id)
+  const selectedVisibleCount = visibleCustomerIds.filter((id) => selectedCustomerIds.has(id)).length
+  const isAllSelected =
+    visibleCustomerIds.length > 0 && selectedVisibleCount === visibleCustomerIds.length
+  const isIndeterminate =
+    selectedVisibleCount > 0 && selectedVisibleCount < visibleCustomerIds.length
 
   // Expose method to parent component via window (simple approach)
   useEffect(() => {
@@ -505,21 +570,22 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
     <div className="space-y-6">
       {/* Thanh tìm kiếm và lọc */}
       <div className="bg-white rounded-lg shadow p-2">
-        <div className="flex flex-col sm:flex-row gap-2 items-center">
+        <div className="flex flex-wrap gap-2 items-center">
           {/* Input tìm kiếm */}
-          <div className="flex-1 relative w-full sm:w-auto">
+          <div className="relative w-full lg:flex-1 lg:min-w-[22rem]">
             <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Tìm kiếm..."
+              placeholder="Tìm theo tên KH, tên công ty, số điện thoại, mã số thuế..."
+              title="Tìm theo: Tên khách hàng, Tên công ty, Số điện thoại, Mã số thuế"
               className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
             />
           </div>
 
           {/* Multi-select loại khách hàng */}
-          <div className="sm:w-64 relative" ref={typeFilterRef}>
+          <div className="w-full sm:w-64 relative" ref={typeFilterRef}>
             <button
               type="button"
               onClick={() => setShowTypeFilter(!showTypeFilter)}
@@ -622,10 +688,7 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
           </div>
 
           {assignableEmployees.length > 0 && (
-            <div
-              ref={caretakerFilterRef}
-              className="w-full sm:min-w-[16rem] sm:max-w-sm flex flex-col gap-1"
-            >
+            <div ref={caretakerFilterRef} className="w-full sm:min-w-[16rem] sm:max-w-sm flex flex-col gap-1">
               {assignedToFilter ? (
                 <div className="flex items-center gap-2 flex-wrap text-xs text-gray-700">
                   <span className="text-gray-500 shrink-0">Đang lọc NV chăm sóc:</span>
@@ -753,6 +816,10 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
             <span className="sm:hidden">Excel</span>
           </button>
         </div>
+        <p className="mt-2 text-[11px] text-gray-500 leading-4">
+          Tìm theo: <strong>Tên khách hàng</strong>, <strong>Tên công ty</strong>,{' '}
+          <strong>Số điện thoại</strong>, <strong>Mã số thuế</strong>.
+        </p>
       </div>
 
       {/* Bảng khách hàng */}
@@ -783,7 +850,7 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
       ) : (
         <div className="bg-white rounded-lg shadow overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200 text-xs">
+        <table className="min-w-full table-fixed divide-y divide-gray-200 text-xs">
           <thead className="bg-gray-50">
             <tr>
               <th className="px-2 py-1.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-10">
@@ -799,13 +866,16 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
                   />
                 </div>
               </th>
-              <th className="px-2 py-1.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="px-2 py-1.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[30%]">
                 Khách hàng
               </th>
               <th className="px-2 py-1.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                 Liên hệ
               </th>
-              <th className="px-2 py-1.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="px-2 py-1.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[15ch] whitespace-nowrap">
+                MST
+              </th>
+              <th className="px-2 py-1.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[16%]">
                 Loại
               </th>
               <th className="px-2 py-1.5 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -818,9 +888,59 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
                 Thao tác
               </th>
             </tr>
+            <tr className="bg-white border-t border-gray-100">
+              <th className="px-2 py-1.5" />
+              <th className="px-2 py-1.5">
+                <input
+                  type="text"
+                  value={tableFilters.customer}
+                  onChange={(e) => setTableFilters((p) => ({ ...p, customer: e.target.value }))}
+                  placeholder="Tên KH / công ty"
+                  className="w-full border border-gray-200 rounded px-2 py-1 text-xs"
+                />
+              </th>
+              <th className="px-2 py-1.5">
+                <input
+                  type="text"
+                  value={tableFilters.contact}
+                  onChange={(e) => setTableFilters((p) => ({ ...p, contact: e.target.value }))}
+                  placeholder="SĐT / email / địa chỉ"
+                  className="w-full border border-gray-200 rounded px-2 py-1 text-xs"
+                />
+              </th>
+              <th className="px-2 py-1.5">
+                <input
+                  type="text"
+                  value={tableFilters.taxCode}
+                  onChange={(e) => setTableFilters((p) => ({ ...p, taxCode: e.target.value }))}
+                  placeholder="MST"
+                  className="w-full border border-gray-200 rounded px-2 py-1 text-xs"
+                />
+              </th>
+              <th className="px-2 py-1.5">
+                <input
+                  type="text"
+                  value={tableFilters.type}
+                  onChange={(e) => setTableFilters((p) => ({ ...p, type: e.target.value }))}
+                  placeholder="Loại KH / KPI"
+                  className="w-full border border-gray-200 rounded px-2 py-1 text-xs"
+                />
+              </th>
+              <th className="px-2 py-1.5">
+                <input
+                  type="text"
+                  value={tableFilters.caretaker}
+                  onChange={(e) => setTableFilters((p) => ({ ...p, caretaker: e.target.value }))}
+                  placeholder="NV chăm sóc"
+                  className="w-full border border-gray-200 rounded px-2 py-1 text-xs"
+                />
+              </th>
+              <th className="px-2 py-1.5" />
+              <th className="px-2 py-1.5" />
+            </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {customers.map((customer) => (
+            {filteredTableCustomers.map((customer) => (
               <tr key={customer.customer_id} className="hover:bg-gray-50 transition">
                 <td className="px-2 py-2">
                   <input
@@ -841,7 +961,7 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
                       <div className="flex items-center gap-1.5">
                         <button
                           onClick={() => router.push(`/customers/${customer.customer_id}`)}
-                          className="text-xs font-medium text-primary-600 hover:text-primary-700 truncate text-left transition"
+                          className="text-xs font-medium text-primary-600 hover:text-primary-700 text-left transition whitespace-normal break-words"
                         >
                           {customer.full_name}
                         </button>
@@ -853,9 +973,9 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
                         )}
                       </div>
                       {customer.company_name && (
-                        <div className="text-xs text-gray-500 truncate flex items-center gap-1" title={customer.company_name}>
-                          <Building className="w-3 h-3 flex-shrink-0" />
-                          <span className="truncate">{customer.company_name}</span>
+                        <div className="text-xs text-gray-500 flex items-start gap-1" title={customer.company_name}>
+                          <Building className="w-3 h-3 flex-shrink-0 mt-0.5" />
+                          <span className="whitespace-normal break-words">{customer.company_name}</span>
                         </div>
                       )}
                     </div>
@@ -881,12 +1001,17 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
                     )}
                   </div>
                 </td>
+                <td className="px-2 py-2 text-xs text-gray-700 w-[15ch] whitespace-nowrap">
+                  <span className="font-mono inline-block w-[15ch] whitespace-nowrap">
+                    {customer.tax_code || '—'}
+                  </span>
+                </td>
                 <td className="px-2 py-2">
                   <div className="space-y-1">
-                    <span className="px-1.5 py-0.5 inline-flex text-xs leading-4 font-semibold rounded bg-blue-100 text-blue-800">
+                    <span className="px-1.5 py-0.5 inline-flex whitespace-nowrap text-xs leading-4 font-semibold rounded bg-blue-100 text-blue-800">
                       {getCustomerTypeLabel(customer.customer_type)}
                     </span>
-                    <span className="ml-0 block sm:inline sm:ml-1 px-1.5 py-0.5 text-xs font-medium rounded bg-emerald-50 text-emerald-800">
+                    <span className="ml-0 block sm:inline sm:ml-1 px-1.5 py-0.5 text-xs font-medium rounded bg-emerald-50 text-emerald-800 whitespace-nowrap">
                       {labelKpiCustomerKind(inferKpiCustomerKind(customer))}
                     </span>
                     <div className="text-xs text-gray-500">{customer.source}</div>
@@ -958,6 +1083,13 @@ export function CustomerList({ refreshKey = 0, onBulkTransferClick, getSelectedC
                 </td>
               </tr>
             ))}
+            {filteredTableCustomers.length === 0 && (
+              <tr>
+                <td colSpan={8} className="px-3 py-6 text-center text-xs text-gray-500">
+                  Không có khách hàng nào khớp bộ lọc trong bảng.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

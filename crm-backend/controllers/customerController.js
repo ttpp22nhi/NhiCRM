@@ -192,7 +192,7 @@ export const createCustomer = async (req, res) => {
  * - Sales: Thấy khách hàng do mình phụ trách (assigned_to)
  * 
  * Query parameters:
- * - search: Tìm kiếm theo tên, email, phone, company_name (không phân biệt hoa thường)
+ * - search: Tìm kiếm theo tên khách hàng, tên công ty, số điện thoại, mã số thuế (không phân biệt hoa thường)
  * - type: Lọc theo loại khách hàng (customer_type) - có thể gửi nhiều lần để chọn nhiều loại
  * - page: Số trang hiện tại (mặc định là 1)
  * - limit: Số lượng bản ghi mỗi trang (mặc định là 10)
@@ -243,14 +243,14 @@ export const getCustomers = async (req, res) => {
     conditions.push(`c.tenant_id = $1`);
     conditions.push(`(${accessClause})`);
 
-    // Tìm kiếm: Tìm trong full_name, email, phone, company_name
+    // Tìm kiếm: Tên KH, tên công ty, số điện thoại, mã số thuế
     if (search && search.trim() !== '') {
       const searchPattern = `%${search.trim()}%`;
       conditions.push(`(
         c.full_name ILIKE $${paramIndex} OR
-        c.email ILIKE $${paramIndex} OR
         c.phone ILIKE $${paramIndex} OR
-        c.company_name ILIKE $${paramIndex}
+        c.company_name ILIKE $${paramIndex} OR
+        c.tax_code ILIKE $${paramIndex}
       )`);
       values.push(searchPattern);
       paramIndex++;
@@ -344,6 +344,7 @@ export const updateCustomer = async (req, res) => {
     company_name,
     tax_code,
     source,
+    active_status,
     assigned_to // Chỉ dùng cho admin/manager
   } = req.body;
 
@@ -354,7 +355,7 @@ export const updateCustomer = async (req, res) => {
 
     // 1. Kiểm tra khách hàng có tồn tại, thuộc tenant và chưa bị xóa
     const checkCustomer = await pool.query(
-      'SELECT assigned_to, deleted_at, kpi_customer_kind FROM customers WHERE customer_id = $1 AND tenant_id = $2',
+      'SELECT assigned_to, deleted_at, kpi_customer_kind, active_status FROM customers WHERE customer_id = $1 AND tenant_id = $2',
       [id, tenantId]
     );
     if (checkCustomer.rows.length === 0) {
@@ -404,6 +405,17 @@ export const updateCustomer = async (req, res) => {
     }
 
     const now = Date.now();
+    let nextActiveStatus = Number(customer.active_status ?? 1);
+    if (active_status !== undefined) {
+      const parsed = Number(active_status);
+      if (![0, 1].includes(parsed)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Trạng thái hoạt động chỉ nhận 0 (không hoạt động) hoặc 1 (hoạt động).'
+        });
+      }
+      nextActiveStatus = parsed;
+    }
     const existingKpi = checkCustomer.rows[0].kpi_customer_kind
     const nextKpiKind =
       kpi_customer_kind !== undefined
@@ -412,15 +424,15 @@ export const updateCustomer = async (req, res) => {
 
     const updateQuery = `
       UPDATE customers 
-      SET full_name = $1, email = $2, phone = $3, address = $4, customer_type = $5, kpi_customer_kind = $6, company_name = $7, tax_code = $8, source = $9, assigned_to = $10, updated_at = $11
-      WHERE customer_id = $12 AND tenant_id = $13 AND deleted_at IS NULL
+      SET full_name = $1, email = $2, phone = $3, address = $4, customer_type = $5, kpi_customer_kind = $6, company_name = $7, tax_code = $8, source = $9, active_status = $10, assigned_to = $11, updated_at = $12
+      WHERE customer_id = $13 AND tenant_id = $14 AND deleted_at IS NULL
       RETURNING *;
     `;
 
     const values = [
       full_name, email || '', phone, address || '', customer_type || 'individual',
       nextKpiKind,
-      company_name || '', tax_code || '', source || 'Direct', finalAssignedTo, now, id, tenantId
+      company_name || '', tax_code || '', source || 'Direct', nextActiveStatus, finalAssignedTo, now, id, tenantId
     ];
     const result = await pool.query(updateQuery, values);
     if (result.rows.length === 0) {

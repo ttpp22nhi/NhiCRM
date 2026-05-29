@@ -27,6 +27,7 @@ interface Customer {
   tax_code: string
   source: string
   assigned_to?: string
+  active_status?: number | string | null
 }
 
 interface EditCustomerFormProps {
@@ -48,6 +49,8 @@ export function EditCustomerForm({ customer, onSuccess, onCancel }: EditCustomer
     tax_code: customer.tax_code || '',
     source: customer.source || 'Direct',
     assigned_to: customer.assigned_to || '', // Chỉ dùng cho admin/manager
+    active_status:
+      Number(customer.active_status) === 0 ? '0' : '1',
   })
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loadingEmployees, setLoadingEmployees] = useState(false)
@@ -304,6 +307,22 @@ export function EditCustomerForm({ customer, onSuccess, onCancel }: EditCustomer
           </div>
         </>
       )}
+
+      <div>
+        <label htmlFor="active_status" className="block text-sm font-medium text-gray-700 mb-2">
+          Trạng thái hoạt động
+        </label>
+        <select
+          id="active_status"
+          name="active_status"
+          value={formData.active_status}
+          onChange={handleChange}
+          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition"
+        >
+          <option value="1">1 - Hoạt động</option>
+          <option value="0">0 - Không hoạt động</option>
+        </select>
+      </div>
 
       <div>
         <label htmlFor="source" className="block text-sm font-medium text-gray-700 mb-2">

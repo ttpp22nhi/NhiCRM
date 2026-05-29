@@ -33,7 +33,12 @@ import { getDepartments, getDepartmentsFlat, getDepartmentById, createDepartment
 import { getRolePermissions, getPermissionMatrix, upsertRolePermission } from './controllers/permissionController.js';
 import { getOrganizationLevels, updateOrganizationLevel, createOrganizationLevel, deleteOrganizationLevel, moveOrganizationLevel } from './controllers/organizationLevelController.js';
 import { getTenants, getTenantById, createTenant, updateTenant, getMySubscription } from './controllers/tenantController.js';
-import { getKpis, upsertKpis } from './controllers/kpiController.js';
+import {
+  getKpis,
+  upsertKpis,
+  getKpiColumnVisibility,
+  upsertKpiColumnVisibility,
+} from './controllers/kpiController.js';
 import {
   getCbsConfig,
   upsertCbsConfig,
@@ -824,6 +829,8 @@ app.get('/api/reports/task-activity-log', verifyToken, extractTenant, requireTen
 app.get('/api/tenant/subscription', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getMySubscription);
 
 /** KPI hàng tháng: xem (Sales: của mình; Lãnh đạo/Quản lý/Admin: toàn bộ Sales) — giao chỉ tiêu qua PUT */
+app.get('/api/kpis/column-visibility', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getKpiColumnVisibility);
+app.put('/api/kpis/column-visibility', verifyToken, extractTenant, requireTenant, checkTenantSubscription, upsertKpiColumnVisibility);
 app.get('/api/kpis', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getKpis);
 app.put('/api/kpis', verifyToken, extractTenant, requireTenant, checkTenantSubscription, upsertKpis);
 

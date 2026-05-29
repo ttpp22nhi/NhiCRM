@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS public.customers (
   company_name VARCHAR(255) NULL,
   tax_code VARCHAR(50) NULL,
   source VARCHAR(100) NULL,
+  active_status SMALLINT NOT NULL DEFAULT 1,
   created_at INT8 NULL,
   updated_at INT8 NULL,
   assigned_to VARCHAR(50) NULL,
@@ -322,6 +323,24 @@ CREATE INDEX IF NOT EXISTS idx_cbs_revenue_orders_payment_date ON public.cbs_rev
 CREATE INDEX IF NOT EXISTS idx_cbs_revenue_orders_customer ON public.cbs_revenue_orders (tenant_id, customer_id) WHERE customer_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_cbs_revenue_orders_deal ON public.cbs_revenue_orders (tenant_id, deal_id) WHERE deal_id IS NOT NULL;
 
+-- ============================================
+-- TENANT KPI COLUMN SETTINGS (add_tenant_kpi_column_settings.sql)
+-- ============================================
+CREATE TABLE IF NOT EXISTS public.tenant_kpi_column_settings (
+  tenant_id VARCHAR(50) NOT NULL,
+  column_visibility JSONB NOT NULL DEFAULT '{
+    "territory": true,
+    "revenueNew": true,
+    "revenueExisting": true,
+    "revenueTotal": true,
+    "contracts": true,
+    "approach": true
+  }'::jsonb,
+  updated_at INT8 NULL,
+  updated_by VARCHAR(50) NULL,
+  CONSTRAINT tenant_kpi_column_settings_pkey PRIMARY KEY (tenant_id)
+);
+
 -- (Các bảng: tenants, employees, departments, organization_levels, customers, deals,
 --  tasks, interactions, notifications, role_permissions, transfer_requests, transfer_approval_logs,
---  cbs_config, cbs_revenue_orders)
+--  cbs_config, cbs_revenue_orders, tenant_kpi_column_settings)

@@ -6,7 +6,36 @@
 import { v4 as uuidv4 } from 'uuid'
 import pool from '../database.js'
 import { getTenantId } from '../utils/tenantHelper.js'
-import { isKpiAssignerRole, isTenantAdminRole } from '../config/rbac.js'
+import { isKpiAssignerRole, isTenantAdminRole, isKpiViewerRole } from '../config/rbac.js'
+
+const DEFAULT_KPI_COLUMN_VISIBILITY = {
+  territory: true,
+  revenueNew: true,
+  revenueExisting: true,
+  revenueTotal: true,
+  contracts: true,
+  approach: true,
+}
+
+const KPI_COLUMN_KEYS = Object.keys(DEFAULT_KPI_COLUMN_VISIBILITY)
+
+function normalizeKpiColumnVisibility(input) {
+  const out = { ...DEFAULT_KPI_COLUMN_VISIBILITY }
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    for (const key of KPI_COLUMN_KEYS) {
+      if (typeof input[key] === 'boolean') out[key] = input[key]
+    }
+    // Cấu hình cũ: contractNew / contractExisting / contractTotal → bật nhóm contracts
+    if (
+      input.contractNew === true ||
+      input.contractExisting === true ||
+      input.contractTotal === true
+    ) {
+      out.contracts = true
+    }
+  }
+  return out
+}
 import {
   isKpiPeriodActualsLocked,
   formatKpiConfirmationDeadlineDdMmYyyy,
@@ -123,7 +152,7 @@ export async function getKpis(req, res) {
 
 /**
  * PUT /api/kpis
- * Body: { period: "YYYY-MM", items: [{ user_id, target_revenue_new, target_revenue_existing, approach_count }] }
+ * Body: { period: "YYYY-MM", items: [{ user_id, target_revenue_new, target_revenue_existing, approach_count, target_contract_count }] }
  */
 export async function upsertKpis(req, res) {
   const tenantId = getTenantId(req)
@@ -189,9 +218,17 @@ export async function upsertKpis(req, res) {
       const tn = toMoney(row.target_revenue_new ?? 0)
       const te = toMoney(row.target_revenue_existing ?? 0)
       const ac = toInt(row.approach_count ?? 0)
-      const pcn = toInt(row.target_product_count_new ?? 0)
-      const pce = toInt(row.target_product_count_existing ?? 0)
-      if (tn === null || te === null || ac === null || pcn === null || pce === null) {
+      // Chỉ tiêu HĐ: 1 số lượng chung (không tách mới/hiện hữu)
+      let pcn = null
+      if (row.target_contract_count !== undefined && row.target_contract_count !== null && row.target_contract_count !== '') {
+        pcn = toInt(row.target_contract_count)
+      } else {
+        const pn = toInt(row.target_product_count_new ?? 0) ?? 0
+        const pe = toInt(row.target_product_count_existing ?? 0) ?? 0
+        pcn = pn + pe
+      }
+      const pce = 0
+      if (tn === null || te === null || ac === null || pcn === null) {
         await client.query('ROLLBACK')
         return res.status(400).json({
           success: false,
@@ -243,5 +280,94 @@ export async function upsertKpis(req, res) {
     })
   } finally {
     client.release()
+  }
+}
+
+/**
+ * GET /api/kpis/column-visibility
+ * Mọi user được xem KPI trong tenant đọc cấu hình cột chung.
+ */
+export async function getKpiColumnVisibility(req, res) {
+  const tenantId = getTenantId(req)
+  const role = String(req.user?.role || '').toLowerCase()
+
+  if (!isKpiViewerRole(role)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Không có quyền xem cấu hình cột KPI.',
+    })
+  }
+
+  try {
+    const r = await pool.query(
+      `SELECT column_visibility, updated_at, updated_by
+       FROM tenant_kpi_column_settings
+       WHERE tenant_id = $1`,
+      [tenantId]
+    )
+
+    const column_visibility = normalizeKpiColumnVisibility(
+      r.rows[0]?.column_visibility
+    )
+
+    return res.json({
+      success: true,
+      data: {
+        column_visibility,
+        updated_at: r.rows[0]?.updated_at ?? null,
+        updated_by: r.rows[0]?.updated_by ?? null,
+      },
+    })
+  } catch (err) {
+    console.error('getKpiColumnVisibility:', err)
+    return res.status(500).json({
+      success: false,
+      message: 'Không thể tải cấu hình cột KPI.',
+    })
+  }
+}
+
+/**
+ * PUT /api/kpis/column-visibility
+ * Body: { column_visibility: { territory, revenueNew, ... } }
+ * Chỉ Admin tenant được cập nhật — áp dụng cho toàn bộ user trong tenant.
+ */
+export async function upsertKpiColumnVisibility(req, res) {
+  const tenantId = getTenantId(req)
+  const role = String(req.user?.role || '').toLowerCase()
+  const myId = req.user?.id
+
+  if (!isTenantAdminRole(role)) {
+    return res.status(403).json({
+      success: false,
+      message: 'Chỉ Admin mới cấu hình hiển thị cột KPI.',
+    })
+  }
+
+  const column_visibility = normalizeKpiColumnVisibility(req.body?.column_visibility)
+  const now = Date.now()
+
+  try {
+    await pool.query(
+      `INSERT INTO tenant_kpi_column_settings (tenant_id, column_visibility, updated_at, updated_by)
+       VALUES ($1, $2::jsonb, $3, $4)
+       ON CONFLICT (tenant_id) DO UPDATE SET
+         column_visibility = EXCLUDED.column_visibility,
+         updated_at = EXCLUDED.updated_at,
+         updated_by = EXCLUDED.updated_by`,
+      [tenantId, JSON.stringify(column_visibility), now, myId || null]
+    )
+
+    return res.json({
+      success: true,
+      message: 'Đã lưu cấu hình cột KPI.',
+      data: { column_visibility, updated_at: now, updated_by: myId || null },
+    })
+  } catch (err) {
+    console.error('upsertKpiColumnVisibility:', err)
+    return res.status(500).json({
+      success: false,
+      message: 'Không thể lưu cấu hình cột KPI.',
+    })
   }
 }

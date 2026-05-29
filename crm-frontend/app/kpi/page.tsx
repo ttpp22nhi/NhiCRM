@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef, type ReactElement } from 'react'
 import { useRouter } from 'next/navigation'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
@@ -25,6 +25,7 @@ import {
   X,
   Wallet,
   Download,
+  SlidersHorizontal,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { exportMonthlyKpiReport } from '@/lib/exportMonthlyKpiReport'
@@ -50,6 +51,8 @@ interface KpiRow {
   actual_approach_count?: string | number | null
   target_product_count_new: string | number | null
   target_product_count_existing: string | number | null
+  /** Chỉ tiêu HĐ (1 số) — form UI; lưu DB qua target_product_count_new, existing = 0 */
+  target_contract_count?: string | number | null
   actual_product_count_new?: string | number | null
   actual_product_count_existing?: string | number | null
 }
@@ -123,8 +126,8 @@ function achievementTone(actual: number, target: number): string {
   return 'text-red-600'
 }
 
-function formatCount(n: number): string {
-  return `${Math.max(0, Math.floor(n)).toLocaleString('vi-VN')} lần`
+function formatCount(n: number, unit = 'lần'): string {
+  return `${Math.max(0, Math.floor(n)).toLocaleString('vi-VN')} ${unit}`
 }
 
 
@@ -145,9 +148,62 @@ type SortKey =
   | 'actual_new'
   | 'actual_existing'
   | 'actual_total'
+  | 'actual_contract_new'
+  | 'actual_contract_existing'
+  | 'actual_contract_total'
   | 'actual_approach'
 
 type SortDir = 'asc' | 'desc'
+
+interface ColumnVisibility {
+  territory: boolean
+  revenueNew: boolean
+  revenueExisting: boolean
+  revenueTotal: boolean
+  contracts: boolean
+  approach: boolean
+}
+
+const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
+  territory: true,
+  revenueNew: true,
+  revenueExisting: true,
+  revenueTotal: true,
+  contracts: true,
+  approach: true,
+}
+
+const COLUMN_OPTIONS: { key: keyof ColumnVisibility; label: string }[] = [
+  { key: 'territory', label: 'Địa bàn' },
+  { key: 'contracts', label: 'Hợp đồng' },
+  { key: 'revenueTotal', label: 'Doanh thu — Tổng' },
+  { key: 'revenueNew', label: 'Doanh thu — KH mới' },
+  { key: 'revenueExisting', label: 'Doanh thu — KH hiện hữu' },
+  { key: 'approach', label: 'Tiếp cận' },
+]
+
+/** Gộp cấu hình cũ (contractNew/Existing/Total) và đảm bảo nhóm HĐ hiện đủ cột nhập. */
+function resolveColumnVisibility(raw?: Partial<ColumnVisibility> & Record<string, boolean>): ColumnVisibility {
+  const merged: ColumnVisibility = { ...DEFAULT_COLUMN_VISIBILITY, ...raw }
+  const legacyContracts =
+    raw?.contracts === true ||
+    raw?.contractNew === true ||
+    raw?.contractExisting === true ||
+    raw?.contractTotal === true
+  if (legacyContracts) merged.contracts = true
+  return merged
+}
+
+function contractTargetFromRow(r: KpiRow): number {
+  if (r.target_contract_count !== undefined && r.target_contract_count !== null && r.target_contract_count !== '') {
+    return Math.floor(num(r.target_contract_count))
+  }
+  return Math.floor(num(r.target_product_count_new) + num(r.target_product_count_existing))
+}
+
+function contractActualFromRow(r: KpiRow): number {
+  return Math.floor(num(r.actual_product_count_new) + num(r.actual_product_count_existing))
+}
 
 function achievementRatio(actual: number, target: number): number {
   if (!target || target <= 0) return actual > 0 ? Infinity : 0
@@ -171,6 +227,92 @@ export default function KpiPage() {
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [exportingReport, setExportingReport] = useState(false)
+  const [columnVisibility, setColumnVisibility] = useState<ColumnVisibility>(
+    DEFAULT_COLUMN_VISIBILITY
+  )
+  const [columnConfigOpen, setColumnConfigOpen] = useState(false)
+  const [savingColumnConfig, setSavingColumnConfig] = useState(false)
+  const columnConfigRef = useRef<HTMLDivElement>(null)
+
+  const persistColumnVisibility = useCallback(async (next: ColumnVisibility) => {
+    setSavingColumnConfig(true)
+    try {
+      await apiClient.put('/api/kpis/column-visibility', {
+        column_visibility: next,
+      })
+      setColumnVisibility(next)
+      toast.success('Đã lưu cấu hình cột.')
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { message?: string } } }
+      toast.error(err.response?.data?.message || 'Lưu cấu hình cột thất bại.')
+    } finally {
+      setSavingColumnConfig(false)
+    }
+  }, [])
+
+  // Tải cấu hình hiển thị cột chung của tenant (admin thiết lập, mọi user dùng chung).
+  useEffect(() => {
+    if (!user || !canAccessKpiPage(user.role)) return
+    apiClient
+      .get<{ success: boolean; data?: { column_visibility?: Partial<ColumnVisibility> } }>(
+        '/api/kpis/column-visibility'
+      )
+      .then((res) => {
+        if (res.data.success && res.data.data?.column_visibility) {
+          setColumnVisibility(
+            resolveColumnVisibility(res.data.data.column_visibility as Partial<ColumnVisibility>)
+          )
+        }
+      })
+      .catch(() => {
+        // Giữ mặc định nếu API lỗi.
+      })
+  }, [user])
+
+  // Đóng popover cấu hình cột khi click ra ngoài.
+  useEffect(() => {
+    if (!columnConfigOpen) return
+    const onClick = (e: MouseEvent) => {
+      if (columnConfigRef.current && !columnConfigRef.current.contains(e.target as Node)) {
+        setColumnConfigOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [columnConfigOpen])
+
+  const toggleColumn = (key: keyof ColumnVisibility) => {
+    const next = { ...columnVisibility, [key]: !columnVisibility[key] }
+    void persistColumnVisibility(next)
+  }
+
+  const resetColumns = () => {
+    void persistColumnVisibility(DEFAULT_COLUMN_VISIBILITY)
+  }
+
+  const hiddenColumnCount = COLUMN_OPTIONS.filter(
+    (o) => !columnVisibility[o.key]
+  ).length
+
+  /** Độ rộng tối thiểu cột — bảng scroll ngang khi màn hình hẹp. */
+  const tableColGroup = useMemo(() => {
+    const cols: ReactElement[] = []
+    cols.push(<col key="stt" style={{ width: 44, minWidth: 44 }} />)
+    cols.push(<col key="emp" style={{ width: 180, minWidth: 180 }} />)
+    if (columnVisibility.territory) {
+      cols.push(<col key="ter" style={{ width: 120, minWidth: 120 }} />)
+    }
+    const addPair = (key: string) => {
+      cols.push(<col key={`${key}-t`} style={{ width: 118, minWidth: 118 }} />)
+      cols.push(<col key={`${key}-a`} style={{ width: 118, minWidth: 118 }} />)
+    }
+    if (columnVisibility.contracts) addPair('ct')
+    if (columnVisibility.revenueTotal) addPair('rt')
+    if (columnVisibility.revenueNew) addPair('rn')
+    if (columnVisibility.revenueExisting) addPair('re')
+    if (columnVisibility.approach) addPair('ap')
+    return <colgroup>{cols}</colgroup>
+  }, [columnVisibility])
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -207,6 +349,9 @@ export default function KpiPage() {
             target_revenue_existing: revenueToInput(row.target_revenue_existing),
             actual_revenue_new: revenueToInput(row.actual_revenue_new),
             actual_revenue_existing: revenueToInput(row.actual_revenue_existing),
+            target_contract_count: String(
+              Math.floor(num(row.target_product_count_new) + num(row.target_product_count_existing))
+            ),
           }))
         )
       }
@@ -301,6 +446,13 @@ export default function KpiPage() {
           const t = num(r.target_revenue_new) + num(r.target_revenue_existing)
           return displayMode === 'percent' ? achievementRatio(a, t) : a
         }
+        case 'actual_contract_new':
+        case 'actual_contract_existing':
+        case 'actual_contract_total': {
+          const a = contractActualFromRow(r)
+          const t = contractTargetFromRow(r)
+          return displayMode === 'percent' ? achievementRatio(a, t) : a
+        }
         case 'actual_approach':
           return displayMode === 'percent'
             ? achievementRatio(
@@ -354,6 +506,10 @@ export default function KpiPage() {
           actual_revenue_new: num(r.actual_revenue_new),
           target_revenue_existing: num(r.target_revenue_existing),
           actual_revenue_existing: num(r.actual_revenue_existing),
+          target_product_count_new: contractTargetFromRow(r),
+          actual_product_count_new: contractActualFromRow(r),
+          target_product_count_existing: 0,
+          actual_product_count_existing: 0,
           approach_target: Math.floor(num(r.approach_count)),
           approach_actual: Math.floor(num(r.actual_approach_count)),
         })),
@@ -378,9 +534,10 @@ export default function KpiPage() {
           target_revenue_new: num(r.target_revenue_new),
           target_revenue_existing: num(r.target_revenue_existing),
           approach_count: Math.floor(num(r.approach_count)),
+          target_contract_count: contractTargetFromRow(r),
         })),
       })
-      toast.success('Đã lưu chỉ tiêu KPI.')
+      toast.success('Đã lưu kế hoạch KPI.')
       await load()
     } catch (e: unknown) {
       const err = e as { response?: { data?: { message?: string } } }
@@ -396,28 +553,30 @@ export default function KpiPage() {
 
   return (
     <ProtectedRoute>
-      <div className="min-h-screen bg-gray-50">
+      <div className="h-screen flex flex-col bg-gray-50 overflow-hidden">
         <Navbar />
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 lg:px-6 py-4 sm:py-6">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-primary-100 rounded-lg">
-                <Target className="w-7 h-7 text-primary-700" />
+        <div className="flex-1 flex flex-col min-h-0 w-full px-3 sm:px-4 lg:px-6">
+          {/* Cố định: tiêu đề, nút, banner, filter */}
+          <div className="flex-shrink-0 z-20 bg-gray-50 pt-2 pb-2 space-y-2 border-b border-gray-200/80">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="p-1.5 bg-primary-100 rounded-lg shrink-0">
+                <Target className="w-6 h-6 text-primary-700" />
               </div>
-              <div>
-                  <h1 className="text-2xl font-bold text-gray-900">KPI tháng</h1>
-                <p className="text-sm text-gray-600">
+              <div className="min-w-0">
+                  <h1 className="text-2xl font-bold text-gray-900 leading-tight">KPI tháng</h1>
+                <p className="text-sm text-gray-600 line-clamp-2">
                   {assigner
                     ? showLockedBanner
-                      ? 'Kỳ đã chốt (sau hạn ngày 5 tháng kế tiếp) — chỉ Admin chỉnh chỉ tiêu; thực tế không còn đồng bộ tự động.'
+                      ? 'Kỳ đã chốt (sau hạn ngày 5 tháng kế tiếp) — chỉ Admin chỉnh kế hoạch; thực tế không còn đồng bộ tự động.'
                       : isPastPeriod(period)
-                        ? `Tháng cũ — chỉnh chỉ tiêu đến hết ngày ${confirmationDeadlineDdMmYyyy || '5 / tháng kế tiếp'} (giờ VN).`
-                        : 'Giao chỉ tiêu: doanh thu VNĐ (tập mới / hiện hữu), tiếp cận theo lần.'
-                    : 'Mục tiêu tháng: doanh thu (VNĐ), tiếp cận (lần).'}
+                        ? `Tháng cũ — chỉnh kế hoạch đến hết ngày ${confirmationDeadlineDdMmYyyy || '5 / tháng kế tiếp'} (giờ VN).`
+                        : 'Giao kế hoạch: doanh thu VNĐ (tập mới / hiện hữu), hợp đồng, tiếp cận theo lần.'
+                    : 'Kế hoạch tháng: doanh thu (VNĐ), hợp đồng, tiếp cận (lần).'}
                 </p>
               </div>
             </div>
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
               <label className="text-sm font-medium text-gray-700">Kỳ</label>
               <input
                 type="month"
@@ -426,13 +585,13 @@ export default function KpiPage() {
                 className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary-500"
               />
               <div
-                className="inline-flex items-center bg-gray-100 rounded-lg p-1"
+                className="inline-flex items-center bg-gray-100 rounded-lg p-0.5"
                 title="Đổi cách hiển thị kết quả thực hiện"
               >
                 <button
                   type="button"
                   onClick={() => setDisplayMode('number')}
-                  className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium transition ${
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-sm font-medium transition ${
                     displayMode === 'number'
                       ? 'bg-white shadow text-primary-700'
                       : 'text-gray-600 hover:text-gray-900'
@@ -444,44 +603,102 @@ export default function KpiPage() {
                 <button
                   type="button"
                   onClick={() => setDisplayMode('percent')}
-                  className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium transition ${
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-sm font-medium transition ${
                     displayMode === 'percent'
                       ? 'bg-white shadow text-primary-700'
                       : 'text-gray-600 hover:text-gray-900'
                   }`}
                 >
-                  <Percent className="w-4 h-4" />
+                  <Percent className="w-3.5 h-3.5" />
                   %
                 </button>
               </div>
+              {admin && (
+                <div className="relative" ref={columnConfigRef}>
+                  <button
+                    type="button"
+                    onClick={() => setColumnConfigOpen((o) => !o)}
+                    className="inline-flex items-center gap-1.5 border border-gray-300 bg-white text-gray-800 px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50"
+                    title="Ẩn/hiện các cột trong bảng KPI"
+                  >
+                    <SlidersHorizontal className="w-4 h-4" />
+                    Cấu hình cột
+                    {hiddenColumnCount > 0 && (
+                      <span className="inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1 rounded-full bg-primary-100 text-primary-700 text-xs font-bold">
+                        {hiddenColumnCount}
+                      </span>
+                    )}
+                  </button>
+                  {columnConfigOpen && (
+                    <div className="absolute right-0 mt-2 w-64 bg-white border border-gray-200 rounded-lg shadow-lg z-30 p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
+                          Hiển thị cột
+                        </span>
+                        <button
+                          type="button"
+                          onClick={resetColumns}
+                          disabled={savingColumnConfig}
+                          className="text-xs font-medium text-primary-600 hover:text-primary-700 disabled:opacity-50"
+                        >
+                          Mặc định
+                        </button>
+                      </div>
+                      <div className="space-y-1">
+                        {COLUMN_OPTIONS.map((opt) => (
+                          <label
+                            key={opt.key}
+                            className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-gray-50 cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={columnVisibility[opt.key]}
+                              onChange={() => toggleColumn(opt.key)}
+                              disabled={savingColumnConfig}
+                              className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500 disabled:opacity-50"
+                            />
+                            <span className="text-sm text-gray-700">{opt.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <p className="mt-2 text-xs text-gray-400 leading-snug">
+                        Cấu hình áp dụng cho toàn bộ người dùng trong đơn vị.
+                        {savingColumnConfig && (
+                          <span className="block mt-1 text-primary-600">Đang lưu...</span>
+                        )}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
               <button
                 type="button"
                 onClick={handleExportReport}
                 disabled={loading || displayRows.length === 0 || exportingReport}
-                className="inline-flex items-center gap-2 border border-gray-300 bg-white text-gray-800 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 border border-gray-300 bg-white text-gray-800 px-3 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50 disabled:opacity-50"
               >
                 {exportingReport ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <Download className="w-4 h-4" />
+                  <Download className="w-3.5 h-3.5" />
                 )}
-                Xuất báo cáo
+                Xuất BC
               </button>
               {canEditTargets && (
                 <button
                   type="button"
                   onClick={handleSave}
                   disabled={saving || loading || rows.length === 0}
-                  className="inline-flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-primary-700 disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 bg-primary-600 text-white px-3 py-2 rounded-lg text-sm font-semibold hover:bg-primary-700 disabled:opacity-50"
                 >
-                  {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                  Lưu chỉ tiêu
+                  {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                  Lưu KH
                 </button>
               )}
               {assigner && showLockedBanner && (
                 <span
-                  className="inline-flex items-center gap-1 text-xs font-semibold bg-gray-100 text-gray-600 border border-gray-300 px-2.5 py-1.5 rounded-lg"
-                  title="Hết hạn ngày 5 (VN) tháng kế sau kỳ. Chỉ Admin mới chỉnh chỉ tiêu."
+                  className="inline-flex items-center gap-1.5 text-sm font-semibold bg-gray-100 text-gray-600 border border-gray-300 px-3 py-2 rounded-lg"
+                  title="Hết hạn ngày 5 (VN) tháng kế sau kỳ. Chỉ Admin mới chỉnh kế hoạch."
                 >
                   <Lock className="w-3.5 h-3.5" />
                   Kỳ đã chốt
@@ -491,11 +708,11 @@ export default function KpiPage() {
           </div>
 
           {showDeadlineBanner && confirmationDeadlineDdMmYyyy && (
-            <div className="mb-4 flex items-start gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+            <div className="flex items-start gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
               <Target className="w-4 h-4 mt-0.5 flex-shrink-0" />
               <div>
                 <strong>Hạn xác nhận kỳ {period}:</strong> đến hết ngày{' '}
-                <strong>{confirmationDeadlineDdMmYyyy}</strong> (giờ Việt Nam). Trước hạn, chỉ tiêu có thể
+                <strong>{confirmationDeadlineDdMmYyyy}</strong> (giờ Việt Nam). Trước hạn, kế hoạch có thể
                 chỉnh sửa và số liệu thực tế vẫn đồng bộ từ deal/CBS. Sau hạn, kỳ được chốt để báo cáo quý/năm
                 không thay đổi ngược.
               </div>
@@ -503,26 +720,26 @@ export default function KpiPage() {
           )}
 
           {showLockedBanner && (
-            <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
               <Lock className="w-4 h-4 mt-0.5 flex-shrink-0" />
               <div>
                 <strong>Kỳ {period} đã chốt</strong> (quá hạn ngày 5 tháng kế tiếp kỳ). Chỉ{' '}
-                <strong>Admin</strong> được phép chỉnh chỉ tiêu. Thực tế (doanh thu, tiếp cận) không còn
+                <strong>Admin</strong> được phép chỉnh kế hoạch. Thực tế (doanh thu, tiếp cận) không còn
                 cập nhật tự động — tổng hợp quý/năm từ các tháng đã chốt giữ nguyên.
               </div>
             </div>
           )}
 
           {/* Thanh filter / sort */}
-          <div className="bg-white rounded-xl shadow border border-gray-200 p-3 mb-3 flex flex-col sm:flex-row gap-3 sm:items-center">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-3 flex flex-col sm:flex-row gap-3 sm:items-center">
             <div className="relative flex-1 min-w-0">
               <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="search"
                 value={employeeFilter}
                 onChange={(e) => setEmployeeFilter(e.target.value)}
-                placeholder="Tìm nhân viên theo tên, username, địa bàn..."
-                className="w-full border border-gray-300 rounded-lg pl-9 pr-8 py-2 text-sm focus:ring-2 focus:ring-primary-500"
+                placeholder="Tìm nhân viên..."
+                className="w-full border border-gray-300 rounded-lg pl-9 pr-9 py-2 text-sm focus:ring-2 focus:ring-primary-500"
               />
               {employeeFilter && (
                 <button
@@ -539,7 +756,7 @@ export default function KpiPage() {
               <select
                 value={departmentFilter}
                 onChange={(e) => setDepartmentFilter(e.target.value)}
-                className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 min-w-[200px]"
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:ring-2 focus:ring-primary-500 min-w-[160px]"
                 title="Lọc theo phòng/tổ"
               >
                 <option value="">Tất cả phòng/tổ</option>
@@ -551,7 +768,7 @@ export default function KpiPage() {
                 ))}
               </select>
             )}
-            <div className="text-xs text-gray-500 flex items-center gap-2">
+            <div className="text-sm text-gray-500 flex items-center gap-2">
               <span>
                 Hiển thị <strong className="text-gray-900">{displayRows.length}</strong>
                 /{rows.length} nhân viên
@@ -560,7 +777,7 @@ export default function KpiPage() {
                 <button
                   type="button"
                   onClick={clearSort}
-                  className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-700 border border-gray-300 bg-white hover:bg-gray-50 px-2 py-1 rounded-md"
+                  className="inline-flex items-center gap-1 text-xs font-medium text-gray-700 border border-gray-300 bg-white hover:bg-gray-50 px-2.5 py-1.5 rounded-lg"
                   title="Huỷ sắp xếp, về thứ tự mặc định"
                 >
                   <X className="w-3 h-3" />
@@ -569,122 +786,182 @@ export default function KpiPage() {
               )}
             </div>
           </div>
+          </div>
 
-          <div className="bg-white rounded-xl shadow border border-gray-200 overflow-hidden">
+          {/* Bảng — scroll dọc, header sticky trong vùng scroll */}
+          <div className="flex-1 min-h-0 flex flex-col pt-1 pb-1">
+          <div className="flex-1 min-h-0 bg-white rounded-lg shadow border border-gray-200 overflow-hidden flex flex-col">
             {loading ? (
               <div className="flex justify-center py-16">
                 <Loader2 className="w-10 h-10 animate-spin text-primary-600" />
               </div>
             ) : rows.length === 0 ? (
-              <p className="p-8 text-center text-gray-500">Không có dữ liệu Sales cho kỳ này.</p>
+              <p className="p-8 text-center text-gray-500 text-sm">Không có dữ liệu Sales cho kỳ này.</p>
             ) : displayRows.length === 0 ? (
-              <p className="p-8 text-center text-gray-500">
+              <p className="p-8 text-center text-gray-500 text-sm">
                 Không có nhân viên khớp từ khoá{' '}
                 <strong className="text-gray-800">&quot;{employeeFilter}&quot;</strong>.
               </p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full divide-y divide-gray-200 text-sm border-collapse">
-                  <thead className="sticky top-0 z-10">
+              <div className="flex-1 min-h-0 overflow-auto">
+                <table className="min-w-full w-max divide-y divide-gray-200 text-xs border-collapse">
+                  {tableColGroup}
+                  <thead className="sticky top-0 z-10 shadow-sm">
                     {/* Group header row */}
                     <tr className="bg-gray-100 border-b border-gray-300">
                       <th
                         rowSpan={2}
-                        className="px-3 py-2 text-left text-xs font-semibold text-gray-700 align-middle border-r border-gray-200 cursor-pointer hover:text-primary-700 select-none"
+                        className="px-1 py-1.5 text-center text-xs font-semibold text-gray-700 align-middle border-r border-gray-200 bg-gray-100 w-11"
+                        title="Số thứ tự"
+                      >
+                        STT
+                      </th>
+                      <th
+                        rowSpan={2}
+                        className="px-2 py-1.5 text-left text-xs font-semibold text-gray-700 align-middle border-r border-gray-200 bg-gray-100 cursor-pointer hover:text-primary-700 select-none"
                         onClick={() => toggleSort('name')}
                         title="Sắp xếp theo tên"
                       >
                         <span className="inline-flex items-center gap-1">
                           Nhân viên
-                          {sortKey === 'name' && (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                          {sortKey === 'name' && (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />)}
                         </span>
                       </th>
+                      {columnVisibility.territory && (
                       <th
                         rowSpan={2}
-                        className="px-3 py-2 text-left text-xs font-semibold text-gray-700 align-middle border-r border-gray-200 cursor-pointer hover:text-primary-700 select-none"
+                        className="px-2 py-1.5 text-left text-xs font-semibold text-gray-700 align-middle border-r border-gray-200 bg-gray-100 cursor-pointer hover:text-primary-700 select-none"
                         onClick={() => toggleSort('territory')}
                         title="Sắp xếp theo địa bàn"
                       >
                         <span className="inline-flex items-center gap-1">
                           Địa bàn
-                          {sortKey === 'territory' && (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                          {sortKey === 'territory' && (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />)}
                         </span>
                       </th>
+                      )}
+                      {columnVisibility.contracts && (
                       <th
                         colSpan={2}
-                        className="px-3 py-2 text-center text-xs font-semibold text-gray-700 border-r border-gray-200 cursor-pointer hover:text-primary-700 select-none"
-                        onClick={() => toggleSort('actual_new')}
-                        title="Sắp xếp theo DT mới"
+                        className="px-2 py-1.5 text-center text-xs font-semibold text-emerald-800 bg-emerald-50 border-r border-gray-200 cursor-pointer hover:text-emerald-900 select-none"
+                        onClick={() => toggleSort('actual_contract_total')}
+                        title="Sắp xếp theo hợp đồng"
                       >
                         <span className="inline-flex items-center gap-1 justify-center">
-                          Doanh thu — KH mới
-                          {sortKey === 'actual_new' && (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                          Hợp đồng
+                          {sortKey === 'actual_contract_total' && (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />)}
                         </span>
                       </th>
+                      )}
+                      {columnVisibility.revenueTotal && (
                       <th
                         colSpan={2}
-                        className="px-3 py-2 text-center text-xs font-semibold text-gray-700 border-r border-gray-200 cursor-pointer hover:text-primary-700 select-none"
-                        onClick={() => toggleSort('actual_existing')}
-                        title="Sắp xếp theo DT hiện hữu"
-                      >
-                        <span className="inline-flex items-center gap-1 justify-center">
-                          Doanh thu — KH hiện hữu
-                          {sortKey === 'actual_existing' && (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
-                        </span>
-                      </th>
-                      <th
-                        colSpan={2}
-                        className="px-3 py-2 text-center text-xs font-bold text-primary-700 bg-primary-50/60 border-r border-gray-200 cursor-pointer hover:text-primary-800 select-none"
+                        className="px-2 py-1.5 text-center text-xs font-bold text-primary-700 bg-primary-50 border-r border-gray-200 cursor-pointer hover:text-primary-800 select-none"
                         onClick={() => toggleSort('actual_total')}
                         title="Sắp xếp theo DT tổng"
                       >
                         <span className="inline-flex items-center gap-1 justify-center">
-                          Doanh thu — Tổng
-                          {sortKey === 'actual_total' && (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                          DT Tổng
+                          {sortKey === 'actual_total' && (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />)}
                         </span>
                       </th>
+                      )}
+                      {columnVisibility.revenueNew && (
                       <th
                         colSpan={2}
-                        className="px-3 py-2 text-center text-xs font-semibold text-gray-700 cursor-pointer hover:text-primary-700 select-none"
+                        className="px-2 py-1.5 text-center text-xs font-semibold text-gray-700 border-r border-gray-200 bg-gray-100 cursor-pointer hover:text-primary-700 select-none"
+                        onClick={() => toggleSort('actual_new')}
+                        title="Sắp xếp theo DT mới"
+                      >
+                        <span className="inline-flex items-center gap-1 justify-center">
+                          DT mới
+                          {sortKey === 'actual_new' && (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />)}
+                        </span>
+                      </th>
+                      )}
+                      {columnVisibility.revenueExisting && (
+                      <th
+                        colSpan={2}
+                        className="px-2 py-1.5 text-center text-xs font-semibold text-gray-700 border-r border-gray-200 bg-gray-100 cursor-pointer hover:text-primary-700 select-none"
+                        onClick={() => toggleSort('actual_existing')}
+                        title="Sắp xếp theo DT hiện hữu"
+                      >
+                        <span className="inline-flex items-center gap-1 justify-center">
+                          DT HH
+                          {sortKey === 'actual_existing' && (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />)}
+                        </span>
+                      </th>
+                      )}
+                      {columnVisibility.approach && (
+                      <th
+                        colSpan={2}
+                        className="px-2 py-1.5 text-center text-xs font-semibold text-gray-700 bg-gray-100 cursor-pointer hover:text-primary-700 select-none"
                         onClick={() => toggleSort('actual_approach')}
                         title="Sắp xếp theo tiếp cận"
                       >
                         <span className="inline-flex items-center gap-1 justify-center">
                           Tiếp cận
-                          {sortKey === 'actual_approach' && (sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />)}
+                          {sortKey === 'actual_approach' && (sortDir === 'asc' ? <ArrowUp className="w-3.5 h-3.5" /> : <ArrowDown className="w-3.5 h-3.5" />)}
                         </span>
                       </th>
+                      )}
                     </tr>
                     {/* Sub-column header row */}
                     <tr className="bg-gray-50 border-b border-gray-200">
-                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-gray-500 border-r border-gray-100">
-                        Chỉ tiêu
-                      </th>
-                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-gray-500 border-r border-gray-200">
-                        Thực hiện
-                      </th>
-                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-gray-500 border-r border-gray-100">
-                        Chỉ tiêu
-                      </th>
-                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-gray-500 border-r border-gray-200">
-                        Thực hiện
-                      </th>
-                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-primary-600 bg-primary-50/40 border-r border-gray-100">
-                        Chỉ tiêu
-                      </th>
-                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-primary-600 bg-primary-50/40 border-r border-gray-200">
-                        Thực hiện
-                      </th>
-                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-gray-500 border-r border-gray-100">
-                        Mục tiêu
-                      </th>
-                      <th className="px-2 py-1.5 text-right text-[11px] font-medium text-gray-500">
-                        Thực hiện
-                      </th>
+                      {columnVisibility.contracts && (
+                        <>
+                          <th className="px-2 py-1 text-right text-xs font-medium text-emerald-700 bg-emerald-50 border-r border-gray-100">
+                            KH
+                          </th>
+                          <th className="px-2 py-1 text-right text-xs font-medium text-emerald-700 bg-emerald-50 border-r border-gray-200">
+                            TH
+                          </th>
+                        </>
+                      )}
+                      {columnVisibility.revenueTotal && (
+                        <>
+                          <th className="px-2 py-1 text-right text-xs font-medium text-primary-600 bg-primary-50 border-r border-gray-100">
+                            KH
+                          </th>
+                          <th className="px-2 py-1 text-right text-xs font-medium text-primary-600 bg-primary-50 border-r border-gray-200">
+                            TH
+                          </th>
+                        </>
+                      )}
+                      {columnVisibility.revenueNew && (
+                        <>
+                          <th className="px-2 py-1 text-right text-xs font-medium text-gray-500 border-r border-gray-100 bg-gray-50">
+                            KH
+                          </th>
+                          <th className="px-2 py-1 text-right text-xs font-medium text-gray-500 border-r border-gray-200 bg-gray-50">
+                            TH
+                          </th>
+                        </>
+                      )}
+                      {columnVisibility.revenueExisting && (
+                        <>
+                          <th className="px-2 py-1 text-right text-xs font-medium text-gray-500 border-r border-gray-100 bg-gray-50">
+                            KH
+                          </th>
+                          <th className="px-2 py-1 text-right text-xs font-medium text-gray-500 border-r border-gray-200 bg-gray-50">
+                            TH
+                          </th>
+                        </>
+                      )}
+                      {columnVisibility.approach && (
+                        <>
+                          <th className="px-2 py-1 text-right text-xs font-medium text-gray-500 border-r border-gray-100 bg-gray-50">
+                            KH
+                          </th>
+                          <th className="px-2 py-1.5 text-right text-xs font-medium text-gray-500">
+                            TH
+                          </th>
+                        </>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {displayRows.map((r) => {
+                    {displayRows.map((r, rowIdx) => {
                       const targetNew = num(r.target_revenue_new)
                       const targetExisting = num(r.target_revenue_existing)
                       const actualNew = num(r.actual_revenue_new)
@@ -693,18 +970,23 @@ export default function KpiPage() {
                       const totalActual = actualNew + actualExisting
                       const approachTarget = Math.floor(num(r.approach_count))
                       const approachActual = Math.floor(num(r.actual_approach_count))
+                      const contractTarget = contractTargetFromRow(r)
+                      const contractActual = contractActualFromRow(r)
                       return (
                       <tr key={r.employee_id} className="hover:bg-gray-50/80 transition-colors">
-                        <td className="px-3 py-1.5 align-middle border-r border-gray-100">
+                        <td className="px-1 py-1.5 text-center align-middle border-r border-gray-100 text-xs tabular-nums text-gray-500">
+                          {rowIdx + 1}
+                        </td>
+                        <td className="px-2 py-1.5 align-middle border-r border-gray-100">
                           <div className="flex items-center gap-2">
                             <div className="min-w-0 flex-1">
                               <div
-                                className="font-semibold text-gray-900 text-sm leading-snug truncate max-w-[14rem]"
+                                className="font-semibold text-gray-900 text-sm leading-snug whitespace-normal break-words"
                                 title={r.full_name}
                               >
                                 {r.full_name}
                               </div>
-                              <div className="text-xs text-gray-500 truncate max-w-[14rem]">
+                              <div className="text-xs text-gray-500 break-all">
                                 @{r.username}
                               </div>
                             </div>
@@ -728,10 +1010,11 @@ export default function KpiPage() {
                             )}
                           </div>
                         </td>
-                        <td className="px-3 py-1.5 align-middle border-r border-gray-100">
+                        {columnVisibility.territory && (
+                        <td className="px-2 py-1.5 align-middle border-r border-gray-100">
                           {r.territory && String(r.territory).trim() ? (
                             <span
-                              className="inline-flex items-center rounded-full bg-primary-50 text-primary-700 border border-primary-200 px-2 py-0.5 text-xs font-medium max-w-[10rem] truncate"
+                              className="inline-flex items-center rounded-full bg-primary-50 text-primary-700 border border-primary-200 px-2 py-0.5 text-xs font-medium whitespace-normal break-words"
                               title={String(r.territory).trim()}
                             >
                               {String(r.territory).trim()}
@@ -740,62 +1023,109 @@ export default function KpiPage() {
                             <span className="text-xs text-gray-400 italic">Chưa gán</span>
                           )}
                         </td>
-                        {/* DT mới — Chỉ tiêu */}
-                        <td className="px-3 py-1.5 text-right align-middle border-r border-gray-50">
+                        )}
+                        {columnVisibility.contracts && (
+                        <>
+                        <td className="px-2 py-1.5 text-right align-middle border-r border-gray-50 bg-emerald-50/20">
                           {canEditTargets ? (
-                            <div className="relative ml-auto w-32">
+                            <input
+                              type="number"
+                              min={0}
+                              step={1}
+                              value={r.target_contract_count ?? ''}
+                              onChange={(e) =>
+                                updateRow(r.employee_id, 'target_contract_count', e.target.value)
+                              }
+                              title="Kế hoạch số lượng hợp đồng"
+                              className="w-full border border-gray-300 rounded px-2 py-1 text-xs text-right tabular-nums block focus:ring-1 focus:ring-primary-500 bg-white"
+                            />
+                          ) : (
+                            <span className="text-xs font-medium text-gray-900 tabular-nums">
+                              {contractTarget}{' '}
+                              <span className="text-gray-400 font-normal text-xs">HĐ</span>
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-2 py-1.5 text-right align-middle border-r border-gray-200 bg-emerald-50/20">
+                          <AchievementCountCell
+                            actual={contractActual}
+                            target={contractTarget}
+                            mode={displayMode}
+                            unit="HĐ"
+                          />
+                        </td>
+                        </>
+                        )}
+                        {columnVisibility.revenueTotal && (
+                        <>
+                        {/* DT tổng — Kế hoạch */}
+                        <td className="px-2 py-1.5 text-right align-middle bg-primary-50/30 border-r border-gray-50">
+                          <span className="text-xs font-bold text-gray-900 tabular-nums break-all">{formatVND(totalTarget)}</span>
+                        </td>
+                        {/* DT tổng — Thực hiện */}
+                        <td className="px-2 py-1.5 text-right align-middle bg-primary-50/30 border-r border-gray-200">
+                          <AchievementCell actual={totalActual} target={totalTarget} mode={displayMode} bold />
+                        </td>
+                        </>
+                        )}
+                        {columnVisibility.revenueNew && (
+                        <>
+                        {/* DT mới — Kế hoạch */}
+                        <td className="px-2 py-1.5 text-right align-middle border-r border-gray-50">
+                          {canEditTargets ? (
+                            <div className="relative w-full">
                               <input
                                 type="text"
                                 inputMode="numeric"
                                 autoComplete="off"
                                 value={formatThousandsVN(String(r.target_revenue_new ?? ''))}
-                                title="Chỉ tiêu DT mới (VNĐ)"
+                                title="Kế hoạch DT mới (VNĐ)"
                                 onChange={(e) => updateRow(r.employee_id, 'target_revenue_new', digitsOnly(e.target.value))}
-                                className="w-full border border-gray-300 rounded-lg pl-2 pr-6 py-1.5 text-sm text-right tabular-nums focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                                className="w-full border border-gray-300 rounded px-2 pr-6 py-1 text-xs text-right tabular-nums focus:ring-1 focus:ring-primary-500"
                               />
                               <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs text-gray-400">₫</span>
                             </div>
                           ) : (
-                            <span className="text-sm font-medium text-gray-900 tabular-nums">{formatVND(targetNew)}</span>
+                            <span className="text-xs font-medium text-gray-900 tabular-nums break-all">{formatVND(targetNew)}</span>
                           )}
                         </td>
                         {/* DT mới — Thực hiện */}
-                        <td className="px-3 py-1.5 text-right align-middle border-r border-gray-200">
+                        <td className="px-2 py-1.5 text-right align-middle border-r border-gray-200">
                           <AchievementCell actual={actualNew} target={targetNew} mode={displayMode} />
                         </td>
-                        {/* DT hiện hữu — Chỉ tiêu */}
-                        <td className="px-3 py-1.5 text-right align-middle border-r border-gray-50">
+                        </>
+                        )}
+                        {columnVisibility.revenueExisting && (
+                        <>
+                        {/* DT hiện hữu — Kế hoạch */}
+                        <td className="px-2 py-1.5 text-right align-middle border-r border-gray-50">
                           {canEditTargets ? (
-                            <div className="relative ml-auto w-32">
+                            <div className="relative w-full">
                               <input
                                 type="text"
                                 inputMode="numeric"
                                 autoComplete="off"
                                 value={formatThousandsVN(String(r.target_revenue_existing ?? ''))}
-                                title="Chỉ tiêu DT hiện hữu (VNĐ)"
+                                title="Kế hoạch DT hiện hữu (VNĐ)"
                                 onChange={(e) => updateRow(r.employee_id, 'target_revenue_existing', digitsOnly(e.target.value))}
-                                className="w-full border border-gray-300 rounded-lg pl-2 pr-6 py-1.5 text-sm text-right tabular-nums focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                                className="w-full border border-gray-300 rounded px-2 pr-6 py-1 text-xs text-right tabular-nums focus:ring-1 focus:ring-primary-500"
                               />
                               <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs text-gray-400">₫</span>
                             </div>
                           ) : (
-                            <span className="text-sm font-medium text-gray-900 tabular-nums">{formatVND(targetExisting)}</span>
+                            <span className="text-xs font-medium text-gray-900 tabular-nums break-all">{formatVND(targetExisting)}</span>
                           )}
                         </td>
                         {/* DT hiện hữu — Thực hiện */}
-                        <td className="px-3 py-1.5 text-right align-middle border-r border-gray-200">
+                        <td className="px-2 py-1.5 text-right align-middle border-r border-gray-200">
                           <AchievementCell actual={actualExisting} target={targetExisting} mode={displayMode} />
                         </td>
-                        {/* DT tổng — Chỉ tiêu */}
-                        <td className="px-3 py-1.5 text-right align-middle bg-primary-50/20 border-r border-gray-50">
-                          <span className="text-sm font-bold text-gray-900 tabular-nums">{formatVND(totalTarget)}</span>
-                        </td>
-                        {/* DT tổng — Thực hiện */}
-                        <td className="px-3 py-1.5 text-right align-middle bg-primary-50/20 border-r border-gray-200">
-                          <AchievementCell actual={totalActual} target={totalTarget} mode={displayMode} bold />
-                        </td>
-                        {/* Tiếp cận — Mục tiêu */}
-                        <td className="px-3 py-1.5 text-right align-middle border-r border-gray-50">
+                        </>
+                        )}
+                        {columnVisibility.approach && (
+                        <>
+                        {/* Tiếp cận — Kế hoạch */}
+                        <td className="px-2 py-1.5 text-right align-middle border-r border-gray-50">
                           {canEditTargets ? (
                             <input
                               type="number"
@@ -803,8 +1133,8 @@ export default function KpiPage() {
                               step={1}
                               value={r.approach_count ?? ''}
                               onChange={(e) => updateRow(r.employee_id, 'approach_count', e.target.value)}
-                              title="Mục tiêu tiếp cận (lần)"
-                              className="w-20 ml-auto border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-right tabular-nums block focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                              title="Kế hoạch tiếp cận (lần)"
+                              className="w-full border border-gray-300 rounded px-2 py-1 text-xs text-right tabular-nums block focus:ring-1 focus:ring-primary-500"
                             />
                           ) : (
                             <span className="text-sm font-medium text-gray-900 tabular-nums">
@@ -813,9 +1143,11 @@ export default function KpiPage() {
                           )}
                         </td>
                         {/* Tiếp cận — Thực hiện */}
-                        <td className="px-3 py-1.5 text-right align-middle">
+                        <td className="px-2 py-1.5 text-right align-middle">
                           <AchievementCountCell actual={approachActual} target={approachTarget} mode={displayMode} />
                         </td>
+                        </>
+                        )}
                       </tr>
                     )
                     })}
@@ -824,49 +1156,32 @@ export default function KpiPage() {
               </div>
             )}
           </div>
+          </div>
 
-          <p className="mt-4 text-xs text-gray-500 space-y-1">
+          <details className="flex-shrink-0 mt-2 px-1 text-xs text-gray-500">
+            <summary className="cursor-pointer text-sm text-gray-600 font-medium py-1 select-none">
+              Hướng dẫn đọc bảng KPI
+            </summary>
+            <div className="space-y-1 pb-1 max-h-32 overflow-y-auto">
+            <p className="space-y-1">
             <span className="block">
-              <strong>Cách đọc ô:</strong> dòng trên là <em>chỉ tiêu</em> (có thể sửa nếu được phân
-              quyền), dòng dưới là <em>thực hiện</em> (kèm % đạt). Cột <strong>tổng</strong> (tô
-              nền) tính trên tổng chỉ tiêu + tổng thực hiện.
+              <strong>Cách đọc ô:</strong> KH = kế hoạch (có thể sửa), TH = thực hiện (kèm % đạt). Cột tổng (tô nền) tự cộng.
             </span>
             <span className="block">
-              <strong>Đơn vị doanh thu:</strong> VNĐ — nhập số tiền trực tiếp, hệ thống tự định dạng (vd: 1.000.000 ₫).
+              <strong>Đơn vị doanh thu:</strong> VNĐ — nhập số tiền trực tiếp (vd: 1.000.000 ₫).
             </span>
             <span className="block">
-              <strong>Địa bàn:</strong> lấy từ hồ sơ nhân viên — giúp phân bổ chỉ tiêu theo khu vực.
+              <strong>Hợp đồng:</strong> 1 kế hoạch số lượng HĐ (KH) — TH = tổng HĐ thực tế trong kỳ.
             </span>
             <span className="block">
-              <strong>Tiếp cận:</strong> lần — mỗi deal tạo trong kỳ; cộng thêm mỗi khách có CBS
-              đã duyệt trong kỳ nếu <em>chưa</em> trùng khách trên deal (theo mã KH, MST, SĐT
-              hoặc tên DN).
-            </span>
-            <span className="block">
-              <strong>Hiển thị kết quả:</strong> chuyển giữa <em>Số</em> (VNĐ thực thu) và{' '}
-              <em>%</em> (tỉ lệ đạt chỉ tiêu). Màu xanh ≥ 100%, vàng ≥ 70%, đỏ &lt; 70%.
+              <strong>Tiếp cận:</strong> lần — deal trong kỳ + khách CBS đã duyệt (loại trùng).
             </span>
             <span className="block text-gray-400">
-              Thực tế doanh thu (mới / hiện hữu) được đồng bộ tự động từ:
-              <br />
-              (1) Các deal <strong>Thành công</strong> (won) trong kỳ — phân nhóm theo loại khách NEW /
-              hiện hữu trên hồ sơ khách hàng; và
-              <br />
-              Trong tháng có deal thắng hoặc CBS duyệt, hồ sơ khách vẫn là <em>NEW</em> cho tới hết tháng
-              đó; từ <strong>tháng kế tiếp</strong> mới tự đổi <em>EXISTING</em>.
-              <br />
-              (2) Đơn CBS đã <strong>duyệt người bán</strong> — phân loại dựa vào{' '}
-              <em>externalId1</em> trên đơn CBS: chỉ cần khớp <strong>một trong hai</strong> với
-              khách hàng có trong CRM (mã số thuế <em>hoặc</em> số điện thoại — 9 số cuối, bỏ qua
-              prefix "0" / "+84") là tính vào <em>tập hiện hữu</em>; không khớp → mặc định{' '}
-              <em>tập mới</em>. Doanh thu CBS dùng giá trị hợp đồng{' '}
-              <strong>trước thuế (làm tròn)</strong>.
-              <br />
-              <strong>Chốt kỳ:</strong> đến hết ngày 5 (giờ VN) của tháng sau kỳ đang xem, chỉ tiêu có thể sửa
-              và thực tế vẫn đồng bộ; sau đó kỳ bị khóa — tổng quý/năm cộng các tháng đã chốt sẽ không đổi ngược
-              do tính lại tự động.
+              TH doanh thu đồng bộ từ deal Thành công + CBS đã duyệt. Chốt kỳ: hết ngày 5 (VN) tháng kế tiếp.
             </span>
-          </p>
+            </p>
+            </div>
+          </details>
         </div>
       </div>
     </ProtectedRoute>
@@ -892,7 +1207,7 @@ function AchievementCell({
       ? formatVND(actual)
       : target > 0
       ? formatPercent(actual, target)
-      : 'Chưa có CT'
+      : 'Chưa có KH'
   return (
     <div className="flex flex-col items-end leading-tight">
       <span
@@ -902,7 +1217,7 @@ function AchievementCell({
       >
         {primary}
       </span>
-      <span className="text-[10px] text-gray-400 tabular-nums mt-0.5">
+      <span className="text-xs text-gray-500 tabular-nums mt-0.5 break-all">
         {secondary}
       </span>
     </div>
@@ -914,23 +1229,30 @@ function AchievementCountCell({
   actual,
   target,
   mode,
+  unit = 'lần',
+  bold,
 }: {
   actual: number
   target: number
   mode: DisplayMode
+  unit?: string
+  bold?: boolean
 }) {
   const tone = achievementTone(actual, target)
-  const primary = mode === 'percent' ? formatPercent(actual, target) : formatCount(actual)
+  const formatVal = (n: number) => formatCount(n, unit)
+  const primary = mode === 'percent' ? formatPercent(actual, target) : formatVal(actual)
   const secondary =
     mode === 'percent'
-      ? formatCount(actual)
+      ? formatVal(actual)
       : target > 0
       ? formatPercent(actual, target)
-      : 'Chưa có MT'
+      : 'Chưa có KH'
   return (
     <div className="flex flex-col items-end leading-tight">
-      <span className={`tabular-nums text-xs font-semibold ${tone}`}>{primary}</span>
-      <span className="text-[10px] text-gray-400 tabular-nums mt-0.5">{secondary}</span>
+      <span className={`tabular-nums text-xs ${bold ? 'font-bold' : 'font-semibold'} ${tone}`}>
+        {primary}
+      </span>
+      <span className="text-xs text-gray-500 tabular-nums mt-0.5 break-all">{secondary}</span>
     </div>
   )
 }
