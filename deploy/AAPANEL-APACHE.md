@@ -1,4 +1,4 @@
-# Triển khai NhiCRM trên aaPanel (Apache)
+# Triển khai TNiCRM trên aaPanel (Apache)
 
 Hướng dẫn deploy **crm-backend** + **crm-frontend** khi server dùng **[aaPanel](https://www.aapanel.com/)** với **Apache** làm web server (reverse proxy). Tên menu có thể khác một chút theo ngôn ngữ/phiên bản panel (Tiếng Anh / Tiếng Trung).
 

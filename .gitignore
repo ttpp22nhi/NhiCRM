@@ -1,4 +1,4 @@
-# ===== Root .gitignore - NhiCRM =====
+# ===== Root .gitignore - TNiCRM =====
 
 # Environment / secrets (all subprojects)
 .env

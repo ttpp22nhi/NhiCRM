@@ -1,10 +1,12 @@
 'use client'
 
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from 'react'
 import { createPortal } from 'react-dom'
 import { apiClient } from '@/lib/api'
 import { useAuth } from '@/contexts/AuthContext'
 import { Users, Mail, Phone, Shield, AlertCircle, Key, Copy, X, CheckCircle, Edit, Eye, MoreVertical, ArrowRightLeft, Filter, Trash2, Loader2 } from 'lucide-react'
+import * as XLSX from 'xlsx'
+import { saveAs } from 'file-saver'
 import { EditEmployeeForm } from './EditEmployeeForm'
 import { EmployeeDetailView } from './EmployeeDetailView'
 import { TransferCustomersModal } from './TransferCustomersModal'
@@ -39,7 +41,14 @@ interface EmployeeListProps {
   refreshKey?: number
 }
 
-export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
+export type EmployeeListHandle = {
+  exportExcel: () => void
+}
+
+export const EmployeeList = forwardRef<EmployeeListHandle, EmployeeListProps>(function EmployeeList(
+  { refreshKey = 0 },
+  ref
+) {
   const { user } = useAuth()
   const { showConfirm, AlertComponent } = useAlert()
   const [employees, setEmployees] = useState<Employee[]>([])
@@ -290,6 +299,90 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
     }
   }
 
+  const formatDateForExcel = (timestamp: number | string) => {
+    const formatted = formatDate(timestamp)
+    if (formatted === 'N/A') return ''
+    return formatted.split(' ')[0] ?? formatted
+  }
+
+  const handleExportExcel = () => {
+    if (filteredEmployees.length === 0) {
+      toast.error('Không có dữ liệu để xuất Excel')
+      return
+    }
+
+    const filterNotes: string[] = []
+    if (roleFilter) {
+      filterNotes.push(`Vai trò: ${getRoleLabel(roleFilter)}`)
+    }
+    if (departmentFilter === '__unassigned__') {
+      filterNotes.push('Phòng/Tổ: Chưa gán')
+    } else if (departmentFilter) {
+      const dept = departments.find((d) => d.id === departmentFilter)
+      filterNotes.push(`Phòng/Tổ: ${dept ? (dept.type === 'team' ? `└ ${dept.name}` : dept.name) : departmentFilter}`)
+    }
+
+    const excelData = filteredEmployees.map((employee, index) => {
+      const deptLabel = formatDepartmentCell(employee)
+      return {
+        STT: index + 1,
+        'Họ và tên': employee.full_name,
+        'Tên đăng nhập': employee.username,
+        Email: employee.email || '',
+        'Số điện thoại': employee.phone?.trim() ? String(employee.phone).trim() : '',
+        'Vai trò': getRoleLabel(employee.role),
+        'Phòng/Tổ': deptLabel === '—' ? '' : deptLabel,
+        'Chức danh': employee.title?.trim() || '',
+        'Cấp bậc': employee.rank?.trim() || '',
+        'Địa bàn': employee.territory?.trim() || '',
+        'Trạng thái': employee.is_active ? 'Hoạt động' : 'Đã khóa',
+        'Ngày tạo': formatDateForExcel(employee.created_at),
+        'Mã nhân viên': employee.employee_id,
+      }
+    })
+
+    const worksheet = XLSX.utils.json_to_sheet(excelData)
+    worksheet['!cols'] = [
+      { wch: 6 },
+      { wch: 28 },
+      { wch: 18 },
+      { wch: 32 },
+      { wch: 16 },
+      { wch: 22 },
+      { wch: 24 },
+      { wch: 18 },
+      { wch: 14 },
+      { wch: 20 },
+      { wch: 12 },
+      { wch: 14 },
+      { wch: 38 },
+    ]
+
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Nhân viên')
+
+    const today = new Date()
+    const y = today.getFullYear()
+    const m = String(today.getMonth() + 1).padStart(2, '0')
+    const d = String(today.getDate()).padStart(2, '0')
+    const fileName = `Danh_sach_nhan_vien_${y}${m}${d}.xlsx`
+
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' })
+    const blob = new Blob([excelBuffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    })
+    saveAs(blob, fileName)
+
+    const filterHint = filterNotes.length ? ` (đã lọc: ${filterNotes.join('; ')})` : ''
+    toast.success(`Đã xuất Excel (${filteredEmployees.length} nhân viên)${filterHint}`)
+  }
+
+  const exportExcelRef = useRef(handleExportExcel)
+  exportExcelRef.current = handleExportExcel
+  useImperativeHandle(ref, () => ({
+    exportExcel: () => exportExcelRef.current(),
+  }))
+
   const formatDate = (timestamp: number | string) => {
     // Chuyển đổi sang number nếu là string
     const ts = typeof timestamp === 'string' ? parseInt(timestamp, 10) : timestamp
@@ -402,15 +495,15 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
           </div>
         </div>
         <p className="text-xs text-gray-500 lg:ml-auto">
-          Hiển thị{' '}
-          <span className="font-semibold text-gray-700">{filteredEmployees.length}</span>
-          {employees.length !== filteredEmployees.length && (
-            <>
-              {' '}
-              / {employees.length}
-            </>
-          )}{' '}
-          nhân viên
+            Hiển thị{' '}
+            <span className="font-semibold text-gray-700">{filteredEmployees.length}</span>
+            {employees.length !== filteredEmployees.length && (
+              <>
+                {' '}
+                / {employees.length}
+              </>
+            )}{' '}
+            nhân viên
         </p>
       </div>
       {filteredEmployees.length === 0 ? (
@@ -740,5 +833,5 @@ export function EmployeeList({ refreshKey = 0 }: EmployeeListProps) {
       {AlertComponent}
     </div>
   )
-}
+})
 

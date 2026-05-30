@@ -263,6 +263,7 @@ CREATE TABLE IF NOT EXISTS public.cbs_config (
   unit INTEGER NOT NULL DEFAULT 880,
   report_config_code VARCHAR(100) NOT NULL DEFAULT 'REPORT_INVOICING_PREPAID',
   auto_sync BOOLEAN NOT NULL DEFAULT TRUE,
+  sales_claim_auto_approve BOOLEAN NOT NULL DEFAULT FALSE,
   last_synced_at BIGINT NULL,
   last_sync_status VARCHAR(20) NULL,
   last_sync_message TEXT NULL,

@@ -31,6 +31,7 @@ import {
 import { saveAs } from 'file-saver'
 import toast from 'react-hot-toast'
 import { CbsConfigModal } from '@/components/CbsConfigModal'
+import { CbsClaimPolicyModal } from '@/components/CbsClaimPolicyModal'
 import { CbsOrderDetailModal } from '@/components/CbsOrderDetailModal'
 import {
   groupCbsOrdersByContract,
@@ -62,6 +63,9 @@ interface ListResp {
     inserted: number
     updated: number
   } | null
+  claim_policy?: {
+    sales_claim_auto_approve: boolean
+  }
 }
 
 interface SalesEmployee {
@@ -202,6 +206,7 @@ function CbsRevenuePageContent() {
   const [recomputing, setRecomputing] = useState(false)
   const [resp, setResp] = useState<ListResp | null>(null)
   const [configOpen, setConfigOpen] = useState(false)
+  const [claimPolicyOpen, setClaimPolicyOpen] = useState(false)
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
   const [salesList, setSalesList] = useState<SalesEmployee[]>([])
   const [detailOrder, setDetailOrder] = useState<CbsOrderGroup | null>(null)
@@ -445,10 +450,16 @@ function CbsRevenuePageContent() {
     }
   }
 
+  const salesClaimAutoApprove = resp?.claim_policy?.sales_claim_auto_approve === true
+
   const claimSelf = (group: CbsOrderGroup) =>
-    runOnGroup(group, async (id) => {
-      await apiClient.post(`/api/cbs/revenue/${id}/claim`)
-    }, 'Đã gửi yêu cầu, chờ duyệt.')
+    runOnGroup(
+      group,
+      async (id) => {
+        await apiClient.post(`/api/cbs/revenue/${id}/claim`)
+      },
+      salesClaimAutoApprove ? 'Đã tích và duyệt đơn hàng.' : 'Đã gửi yêu cầu, chờ duyệt.'
+    )
 
   const assignSeller = (group: CbsOrderGroup, sellerId: string) =>
     runOnGroup(group, async (id) => {
@@ -629,8 +640,13 @@ function CbsRevenuePageContent() {
                 <p className="text-sm text-gray-600">
                   Đồng bộ định kỳ 06:00 và 18:00 (giờ VN) theo <strong>tháng hiện tại</strong>. Nút{' '}
                   <strong>Đồng bộ ngay</strong> lấy đúng <strong>Kỳ</strong> bạn chọn ở ô tháng bên cạnh (ví dụ
-                  tháng 4). Sales tích đơn của mình ở trạng thái <strong>chờ duyệt</strong>; quản lý xác nhận
-                  người bán. Các dòng cùng <strong>số hợp đồng</strong> hiển thị gộp một dòng (tiền
+                  tháng 4). Sales tích đơn của mình
+                  {salesClaimAutoApprove ? (
+                    <> được <strong>tự động duyệt</strong> và tính vào KPI ngay</>
+                  ) : (
+                    <> ở trạng thái <strong>chờ duyệt</strong>; quản lý xác nhận người bán</>
+                  )}
+                  . Các dòng cùng <strong>số hợp đồng</strong> hiển thị gộp một dòng (tiền
                   cộng dồn; KPI tiếp cận: <strong>1 lần / khách CBS</strong> (không trùng deal
                   cùng kỳ); sản phẩm: <strong>1 / hợp đồng</strong> khi đã duyệt).
                 </p>
@@ -686,14 +702,25 @@ function CbsRevenuePageContent() {
                 Xuất Excel
               </button>
               {canManage && (
-                <button
-                  type="button"
-                  onClick={() => setConfigOpen(true)}
-                  className="inline-flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50"
-                >
-                  <Settings className="w-4 h-4" />
-                  Cấu hình CBS
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setClaimPolicyOpen(true)}
+                    className="inline-flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50"
+                    title="Thiết lập tự động duyệt hoặc cần kiểm duyệt khi Sales tích đơn"
+                  >
+                    <ShieldCheck className="w-4 h-4" />
+                    Cấu hình duyệt đơn
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfigOpen(true)}
+                    className="inline-flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-semibold hover:bg-gray-50"
+                  >
+                    <Settings className="w-4 h-4" />
+                    Cấu hình CBS
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -1095,7 +1122,15 @@ function CbsRevenuePageContent() {
           </div>
 
           <p className="mt-4 text-xs text-gray-500">
-            Sales tự tích đơn thì đơn ở trạng thái <strong>chờ duyệt</strong>.
+            {salesClaimAutoApprove ? (
+              <>
+                Sales tự tích đơn thì đơn được <strong>duyệt ngay</strong> và tính vào KPI.
+              </>
+            ) : (
+              <>
+                Sales tự tích đơn thì đơn ở trạng thái <strong>chờ duyệt</strong>.
+              </>
+            )}{' '}
             Admin / Lãnh đạo / Quản lý / Leader có thể gán trực tiếp người bán
             hoặc duyệt các đơn đang chờ. Dữ liệu được đồng bộ định kỳ bằng tài
             khoản CBS của công ty (Admin đặt tại <strong>Cấu hình CBS</strong>).
@@ -1103,14 +1138,23 @@ function CbsRevenuePageContent() {
         </div>
 
         {canManage && (
-          <CbsConfigModal
-            open={configOpen}
-            onClose={() => setConfigOpen(false)}
-            onSaved={() => {
-              setConfigOpen(false)
-              load()
-            }}
-          />
+          <>
+            <CbsClaimPolicyModal
+              open={claimPolicyOpen}
+              onClose={() => setClaimPolicyOpen(false)}
+              onSaved={load}
+              cbsConfigured={lastSync != null}
+              initialAutoApprove={salesClaimAutoApprove}
+            />
+            <CbsConfigModal
+              open={configOpen}
+              onClose={() => setConfigOpen(false)}
+              onSaved={() => {
+                setConfigOpen(false)
+                load()
+              }}
+            />
+          </>
         )}
 
         <CbsOrderDetailModal

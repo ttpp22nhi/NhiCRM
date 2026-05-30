@@ -1,4 +1,4 @@
-# Hướng dẫn triển khai NhiCRM lên server và gắn domain
+# Hướng dẫn triển khai TNiCRM lên server và gắn domain
 
 Tài liệu mô tả cách deploy **crm-frontend** (Next.js) và **crm-backend** (Node/Express) cùng **PostgreSQL** (và tùy chọn **Redis**) lên Linux, gắn **một domain + HTTPS** theo kiểu **cùng host**: trang web và API (`/api/...`) đi chung hostname; **Nginx** hoặc **Apache** làm reverse proxy tới hai process nội bộ (`127.0.0.1`). File mẫu: `deploy/nhicrm.conf` (Nginx), `deploy/nhicrm-apache.conf` (Apache 2.4). **aaPanel + Apache:** xem **`deploy/AAPANEL-APACHE.md`**.
 

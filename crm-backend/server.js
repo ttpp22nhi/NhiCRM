@@ -42,6 +42,7 @@ import {
 import {
   getCbsConfig,
   upsertCbsConfig,
+  updateCbsClaimPolicy,
   listCbsOrders,
   listCbsOrdersByDeal,
   claimCbsOrder,
@@ -845,6 +846,7 @@ app.put('/api/kpis', verifyToken, extractTenant, requireTenant, checkTenantSubsc
  */
 app.get('/api/cbs/config', verifyToken, extractTenant, requireTenant, checkTenantSubscription, getCbsConfig);
 app.put('/api/cbs/config', verifyToken, extractTenant, requireTenant, checkTenantSubscription, upsertCbsConfig);
+app.patch('/api/cbs/config/claim-policy', verifyToken, extractTenant, requireTenant, checkTenantSubscription, updateCbsClaimPolicy);
 app.post('/api/cbs/sync', verifyToken, extractTenant, requireTenant, checkTenantSubscription, cbsSyncNow);
 app.get('/api/cbs/revenue', verifyToken, extractTenant, requireTenant, checkTenantSubscription, listCbsOrders);
 app.post('/api/cbs/revenue/:id/claim', verifyToken, extractTenant, requireTenant, checkTenantSubscription, claimCbsOrder);

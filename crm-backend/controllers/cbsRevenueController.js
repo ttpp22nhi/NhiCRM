@@ -3,7 +3,7 @@
  * - Cấu hình CBS (username/password/unit) cho tenant: admin tenant hoặc super admin
  * - Danh sách đơn doanh thu CBS đã đồng bộ: mọi nhân viên trong tenant
  * - Quy trình xác nhận người bán:
- *     + Sales: POST /claim (không có seller_id) → đặt claim_status='pending', chờ duyệt.
+ *     + Sales: POST /claim (không có seller_id) → pending hoặc auto-approve (theo cbs_config.sales_claim_auto_approve).
  *     + Non-sales (admin/director/manager/leader): POST /claim với seller_id → gán & auto approve.
  *     + Non-sales: POST /approve → duyệt đơn đang pending.
  *     + Sales: POST /unclaim để huỷ request của chính mình khi còn pending.
@@ -203,6 +203,15 @@ function canApproveClaim(role) {
   return String(role || '').toLowerCase() !== 'sales'
 }
 
+async function getSalesClaimAutoApprove(tenantId) {
+  const r = await pool.query(
+    `SELECT COALESCE(sales_claim_auto_approve, false) AS sales_claim_auto_approve
+       FROM cbs_config WHERE tenant_id = $1 LIMIT 1`,
+    [tenantId]
+  )
+  return r.rows[0]?.sales_claim_auto_approve === true
+}
+
 function maskedConfig(row) {
   if (!row) return null
   const hasPass = !!row.password
@@ -214,6 +223,7 @@ function maskedConfig(row) {
     unit: row.unit,
     report_config_code: row.report_config_code,
     auto_sync: row.auto_sync,
+    sales_claim_auto_approve: row.sales_claim_auto_approve === true,
     last_synced_at: row.last_synced_at,
     last_sync_status: row.last_sync_status,
     last_sync_message: row.last_sync_message,
@@ -233,7 +243,8 @@ export async function getCbsConfig(req, res) {
     }
     const r = await pool.query(
       `SELECT tenant_id, base_url, username, password, unit, report_config_code,
-              auto_sync, last_synced_at, last_sync_status, last_sync_message, updated_at, updated_by
+              auto_sync, sales_claim_auto_approve,
+              last_synced_at, last_sync_status, last_sync_message, updated_at, updated_by
          FROM cbs_config WHERE tenant_id = $1 LIMIT 1`,
       [tenantId]
     )
@@ -265,7 +276,12 @@ export async function upsertCbsConfig(req, res) {
     }
 
     const now = Date.now()
-    const existing = await pool.query(`SELECT password FROM cbs_config WHERE tenant_id = $1`, [tenantId])
+    const existing = await pool.query(
+      `SELECT password, sales_claim_auto_approve FROM cbs_config WHERE tenant_id = $1`,
+      [tenantId]
+    )
+    const salesClaimAutoApproveOnInsert =
+      body.sales_claim_auto_approve == null ? false : !!body.sales_claim_auto_approve
 
     if (existing.rows.length === 0) {
       if (!password) {
@@ -274,8 +290,8 @@ export async function upsertCbsConfig(req, res) {
       await pool.query(
         `INSERT INTO cbs_config (
           tenant_id, base_url, username, password, unit, report_config_code, auto_sync,
-          updated_at, updated_by
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          sales_claim_auto_approve, updated_at, updated_by
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           tenantId,
           baseUrl || 'https://cbs.mobifone.vn',
@@ -284,12 +300,18 @@ export async function upsertCbsConfig(req, res) {
           unit,
           reportCode || 'REPORT_INVOICING_PREPAID',
           autoSync,
+          salesClaimAutoApproveOnInsert,
           now,
           req.user?.id || null,
         ]
       )
     } else {
       const finalPassword = password ? password : existing.rows[0].password
+      const keepClaimPolicy = existing.rows[0].sales_claim_auto_approve === true
+      const salesClaimAutoApproveOnUpdate =
+        body.sales_claim_auto_approve == null
+          ? keepClaimPolicy
+          : !!body.sales_claim_auto_approve
       await pool.query(
         `UPDATE cbs_config
            SET base_url = $2,
@@ -298,8 +320,9 @@ export async function upsertCbsConfig(req, res) {
                unit = $5,
                report_config_code = $6,
                auto_sync = $7,
-               updated_at = $8,
-               updated_by = $9
+               sales_claim_auto_approve = $8,
+               updated_at = $9,
+               updated_by = $10
          WHERE tenant_id = $1`,
         [
           tenantId,
@@ -309,6 +332,7 @@ export async function upsertCbsConfig(req, res) {
           unit,
           reportCode || 'REPORT_INVOICING_PREPAID',
           autoSync,
+          salesClaimAutoApproveOnUpdate,
           now,
           req.user?.id || null,
         ]
@@ -317,7 +341,8 @@ export async function upsertCbsConfig(req, res) {
 
     const after = await pool.query(
       `SELECT tenant_id, base_url, username, password, unit, report_config_code,
-              auto_sync, last_synced_at, last_sync_status, last_sync_message, updated_at, updated_by
+              auto_sync, sales_claim_auto_approve,
+              last_synced_at, last_sync_status, last_sync_message, updated_at, updated_by
          FROM cbs_config WHERE tenant_id = $1`,
       [tenantId]
     )
@@ -325,6 +350,57 @@ export async function upsertCbsConfig(req, res) {
   } catch (err) {
     console.error('upsertCbsConfig:', err)
     return res.status(500).json({ success: false, message: 'Không lưu được cấu hình CBS.' })
+  }
+}
+
+/**
+ * PATCH /api/cbs/config/claim-policy
+ * Admin đặt quy trình khi Sales tự tích đơn: tự duyệt hay chờ kiểm duyệt.
+ */
+export async function updateCbsClaimPolicy(req, res) {
+  try {
+    const tenantId = getTenantId(req)
+    const role = String(req.user?.role || '').toLowerCase()
+    if (!isTenantAdminRole(role)) {
+      return res.status(403).json({ success: false, message: 'Chỉ Admin mới thay đổi quy trình duyệt đơn CBS.' })
+    }
+
+    if (req.body?.sales_claim_auto_approve == null) {
+      return res.status(400).json({
+        success: false,
+        message: 'Thiếu sales_claim_auto_approve (true | false).',
+      })
+    }
+    const salesClaimAutoApprove = !!req.body.sales_claim_auto_approve
+    const now = Date.now()
+
+    const existing = await pool.query(`SELECT tenant_id FROM cbs_config WHERE tenant_id = $1`, [tenantId])
+    if (existing.rows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cần cấu hình CBS trước (Cấu hình CBS) rồi mới đặt quy trình duyệt đơn.',
+      })
+    }
+
+    await pool.query(
+      `UPDATE cbs_config
+          SET sales_claim_auto_approve = $2,
+              updated_at = $3,
+              updated_by = $4
+        WHERE tenant_id = $1`,
+      [tenantId, salesClaimAutoApprove, now, req.user?.id || null]
+    )
+
+    return res.json({
+      success: true,
+      message: salesClaimAutoApprove
+        ? 'Đã bật tự động duyệt đơn khi Sales tự tích.'
+        : 'Đã bật kiểm duyệt đơn — Sales tích đơn sẽ chờ xác nhận.',
+      data: { sales_claim_auto_approve: salesClaimAutoApprove },
+    })
+  } catch (err) {
+    console.error('updateCbsClaimPolicy:', err)
+    return res.status(500).json({ success: false, message: 'Không cập nhật được quy trình duyệt đơn.' })
   }
 }
 
@@ -439,7 +515,8 @@ export async function listCbsOrders(req, res) {
     const r = await pool.query(sql, params)
 
     const cfg = await pool.query(
-      `SELECT last_synced_at, last_sync_status, last_sync_message
+      `SELECT last_synced_at, last_sync_status, last_sync_message,
+              COALESCE(sales_claim_auto_approve, false) AS sales_claim_auto_approve
          FROM cbs_config WHERE tenant_id = $1`,
       [tenantId]
     )
@@ -472,6 +549,9 @@ export async function listCbsOrders(req, res) {
       summary: agg,
       last_sync: cfg.rows[0] || null,
       last_sync_batch: parseCbsLastSyncBatch(cfg.rows[0]?.last_sync_message),
+      claim_policy: {
+        sales_claim_auto_approve: cfg.rows[0]?.sales_claim_auto_approve === true,
+      },
     })
   } catch (err) {
     console.error('listCbsOrders:', err)
@@ -481,7 +561,7 @@ export async function listCbsOrders(req, res) {
 
 /**
  * POST /api/cbs/revenue/:id/claim
- *   - Sales: tự claim đơn của mình → claim_status = 'pending' (chờ duyệt).
+ *   - Sales: tự claim đơn của mình → pending hoặc approved (theo sales_claim_auto_approve).
  *   - Non-sales: body.seller_id = employee_id của Sales cần gán → claim_status = 'approved' luôn.
  *     Nếu không truyền seller_id thì mặc định gán cho bản thân & auto-approve.
  */
@@ -509,7 +589,7 @@ export async function claimCbsOrder(req, res) {
     const period = current.period_ym
     const now = Date.now()
 
-    // Nhánh Sales: chỉ được tự claim, status = pending, không ghi đè người khác.
+    // Nhánh Sales: chỉ được tự claim, không ghi đè người khác.
     if (!canApproveClaim(role)) {
       if (requestedSellerId && requestedSellerId !== myId) {
         return res.status(403).json({
@@ -520,7 +600,54 @@ export async function claimCbsOrder(req, res) {
       if (current.claimed_by && current.claimed_by !== myId) {
         return res.status(409).json({ success: false, message: 'Đơn hàng đã được người khác tích.' })
       }
-      // Đã pending của chính mình → coi như no-op
+
+      const autoApprove = await getSalesClaimAutoApprove(tenantId)
+
+      if (autoApprove) {
+        const client = await pool.connect()
+        let data, linkInfo
+        try {
+          await client.query('BEGIN')
+          const r = await client.query(
+            `UPDATE cbs_revenue_orders
+                SET claimed_by    = $3,
+                    claimed_at    = $4,
+                    claim_status  = 'approved',
+                    approved_by   = $3,
+                    approved_at   = $4,
+                    updated_at    = $4
+              WHERE id = $1 AND tenant_id = $2
+              RETURNING id, claimed_by, claimed_at, claim_status, approved_by, approved_at`,
+            [id, tenantId, myId, now]
+          )
+          data = r.rows[0]
+          linkInfo = await linkAndSnapshotApprovedOrder(client, tenantId, id, myId)
+          await client.query('COMMIT')
+        } catch (err) {
+          await client.query('ROLLBACK').catch(() => {})
+          throw err
+        } finally {
+          client.release()
+        }
+
+        if (oldOwner && oldOwner !== myId) kickRecomputeKpi(tenantId, oldOwner, period)
+        kickRecomputeKpi(tenantId, myId, period)
+        afterPromoteSideEffects(tenantId, period, linkInfo?.promotionInfo, myId)
+
+        const extraParts = []
+        if (linkInfo?.createdCustomer) extraParts.push('Đã tạo khách hàng mới từ đơn CBS.')
+        else if (linkInfo?.customer_id) extraParts.push('Đã liên kết khách hàng tương ứng.')
+        if (linkInfo?.promotedDeal) extraParts.push('Deal liên quan đã được đẩy sang "Thành công".')
+        const extraMsg = extraParts.length ? ' ' + extraParts.join(' ') : ''
+
+        return res.json({
+          success: true,
+          message: 'Đã tích và duyệt đơn hàng.' + extraMsg,
+          data: { ...data, ...(linkInfo || {}) },
+        })
+      }
+
+      // Cần kiểm duyệt: đặt pending
       const r = await pool.query(
         `UPDATE cbs_revenue_orders
             SET claimed_by    = $3,

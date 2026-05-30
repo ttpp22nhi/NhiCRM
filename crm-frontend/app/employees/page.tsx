@@ -1,15 +1,15 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { ProtectedRoute } from '@/components/ProtectedRoute'
 import { Navbar } from '@/components/Navbar'
-import { EmployeeList } from '@/components/EmployeeList'
+import { EmployeeList, type EmployeeListHandle } from '@/components/EmployeeList'
 import { EmployeeForm } from '@/components/EmployeeForm'
 import { EmployeeImportModal } from '@/components/EmployeeImportModal'
 import { useAuth } from '@/contexts/AuthContext'
 import { useSubscription } from '@/contexts/SubscriptionContext'
 import { useRouter } from 'next/navigation'
-import { Plus, X, Shield, FileSpreadsheet } from 'lucide-react'
+import { Plus, X, Shield, FileSpreadsheet, Download } from 'lucide-react'
 import { isExecutive, canCreateEmployees } from '@/lib/rbac'
 
 export default function EmployeesPage() {
@@ -19,6 +19,7 @@ export default function EmployeesPage() {
   const [showForm, setShowForm] = useState(false)
   const [showImport, setShowImport] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
+  const listRef = useRef<EmployeeListHandle>(null)
   const canManageEmployees = canCreateEmployees(user?.role)
   const canViewEmployees = isExecutive(user?.role)
 
@@ -49,45 +50,59 @@ export default function EmployeesPage() {
                   : 'Xem danh sách nhân viên (theo phạm vi tenant)'}
               </p>
             </div>
-            {canManageEmployees && (
+            {canViewEmployees && (
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => !expired && setShowImport(true)}
-                  disabled={expired}
-                  title={
-                    expired
-                      ? 'Gói dịch vụ đã hết hạn. Vui lòng gia hạn để import nhân viên.'
-                      : 'Import danh sách từ file Excel mẫu'
-                  }
-                  className={`flex items-center space-x-1 sm:space-x-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg transition font-medium text-sm sm:text-base border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 ${
-                    expired ? 'opacity-50 cursor-not-allowed' : ''
-                  }`}
+                  onClick={() => listRef.current?.exportExcel()}
+                  title="Xuất danh sách đang hiển thị (theo bộ lọc) ra file Excel"
+                  className="flex items-center space-x-1 sm:space-x-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg transition font-medium text-sm sm:text-base border border-gray-300 text-gray-700 bg-white hover:bg-gray-50"
                 >
-                  <FileSpreadsheet className="w-4 h-4 sm:w-5 sm:h-5" />
-                  <span className="hidden sm:inline">Import Excel</span>
-                  <span className="sm:hidden">Import</span>
+                  <Download className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <span className="hidden sm:inline">Xuất Excel</span>
+                  <span className="sm:hidden">Xuất</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => !expired && setShowForm(true)}
-                  disabled={expired}
-                  title={expired ? 'Gói dịch vụ đã hết hạn. Vui lòng gia hạn để thêm nhân viên.' : undefined}
-                  className={`flex items-center space-x-1 sm:space-x-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg transition font-medium text-sm sm:text-base ${
-                    expired
-                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                      : 'bg-primary-600 text-white hover:bg-primary-700'
-                  }`}
-                >
-                  <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
-                  <span className="hidden sm:inline">Thêm nhân viên</span>
-                  <span className="sm:hidden">Thêm</span>
-                </button>
+                {canManageEmployees && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => !expired && setShowImport(true)}
+                      disabled={expired}
+                      title={
+                        expired
+                          ? 'Gói dịch vụ đã hết hạn. Vui lòng gia hạn để import nhân viên.'
+                          : 'Import danh sách từ file Excel mẫu'
+                      }
+                      className={`flex items-center space-x-1 sm:space-x-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg transition font-medium text-sm sm:text-base border border-gray-300 text-gray-700 bg-white hover:bg-gray-50 ${
+                        expired ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
+                    >
+                      <FileSpreadsheet className="w-4 h-4 sm:w-5 sm:h-5" />
+                      <span className="hidden sm:inline">Import Excel</span>
+                      <span className="sm:hidden">Import</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => !expired && setShowForm(true)}
+                      disabled={expired}
+                      title={expired ? 'Gói dịch vụ đã hết hạn. Vui lòng gia hạn để thêm nhân viên.' : undefined}
+                      className={`flex items-center space-x-1 sm:space-x-2 px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg transition font-medium text-sm sm:text-base ${
+                        expired
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-primary-600 text-white hover:bg-primary-700'
+                      }`}
+                    >
+                      <Plus className="w-4 h-4 sm:w-5 sm:h-5" />
+                      <span className="hidden sm:inline">Thêm nhân viên</span>
+                      <span className="sm:hidden">Thêm</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
 
-          <EmployeeList key={refreshKey} />
+          <EmployeeList ref={listRef} key={refreshKey} />
 
           {showImport && canManageEmployees && (
             <EmployeeImportModal

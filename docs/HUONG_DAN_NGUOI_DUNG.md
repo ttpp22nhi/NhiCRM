@@ -1,11 +1,11 @@
-# CẨM NANG SỬ DỤNG NhiCRM
+# CẨM NANG SỬ DỤNG TNiCRM
 ### Dành cho người dùng cuối — viết thật đơn giản, dễ làm theo
 
 ---
 
 Chào bạn!
 
-Nếu bạn vừa được cấp tài khoản NhiCRM và chưa biết bắt đầu từ đâu, tài liệu này sẽ dắt bạn đi từng bước — giống như một người đồng nghiệp ngồi bên cạnh chỉ cho bạn vậy.
+Nếu bạn vừa được cấp tài khoản TNiCRM và chưa biết bắt đầu từ đâu, tài liệu này sẽ dắt bạn đi từng bước — giống như một người đồng nghiệp ngồi bên cạnh chỉ cho bạn vậy.
 
 Bạn không cần biết gì về công nghệ. Chỉ cần đọc phần **vai trò của bạn** là đủ.
 
@@ -22,7 +22,7 @@ Bạn không cần biết gì về công nghệ. Chỉ cần đọc phần **vai
 
 ## Bạn là ai trong hệ thống?
 
-NhiCRM có 5 nhóm người dùng. Hãy chọn đúng vai trò của bạn để đọc phần hướng dẫn phù hợp:
+TNiCRM có 5 nhóm người dùng. Hãy chọn đúng vai trò của bạn để đọc phần hướng dẫn phù hợp:
 
 | Vai trò | Bạn là ai? | Đọc phần |
 |---|---|---|
@@ -336,11 +336,11 @@ Tiếp cận → Tư vấn → Báo giá → Thương thảo → THÀNH CÔNG
 
 ### Việc 4: Theo dõi doanh thu CBS
 
-CBS là hệ thống ghi nhận hoá đơn thực tế của công ty. NhiCRM tự động đồng bộ 2 lần/ngày (sáng 6h, chiều 6h).
+CBS là hệ thống ghi nhận hoá đơn thực tế của công ty. TNiCRM tự động đồng bộ 2 lần/ngày (sáng 6h, chiều 6h).
 
 **Kịch bản 1 — Đơn của bạn tự chảy về**
 
-Khi khách thanh toán, CBS ghi nhận → NhiCRM kéo về → tự nhận ra "đây là khách của bạn" → tự cộng vào KPI. **Bạn không cần làm gì.**
+Khi khách thanh toán, CBS ghi nhận → TNiCRM kéo về → tự nhận ra "đây là khách của bạn" → tự cộng vào KPI. **Bạn không cần làm gì.**
 
 **Kịch bản 2 — Có đơn chưa có người bán**
 
@@ -452,7 +452,7 @@ Còn lại hệ thống lo hết.
 
 ## Lời nhắn cuối
 
-NhiCRM được xây để giúp bạn làm việc **nhàn hơn**, không phải để làm bạn bận thêm.
+TNiCRM được xây để giúp bạn làm việc **nhàn hơn**, không phải để làm bạn bận thêm.
 
 - Nếu thấy thao tác nào lặp đi lặp lại nhiều lần → có thể hệ thống đã có cách tự động. Hãy hỏi sếp.
 - Nếu thấy một tính năng nào đó "chỉ giá như có..." → góp ý với Quản lý, có thể bản cập nhật sau sẽ thêm.

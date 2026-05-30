@@ -1,4 +1,4 @@
-# HƯỚNG DẪN SỬ DỤNG — NhiCRM
+# HƯỚNG DẪN SỬ DỤNG — TNiCRM
 
 > Tài liệu dành cho người dùng **trong tenant**: Admin tenant, Giám đốc, Quản lý, Leader, Sales.
 > (Vai trò _Super Admin_ thuộc phạm vi vận hành nền tảng — không đề cập trong tài liệu này.)
@@ -7,7 +7,7 @@
 
 ## 1. Tổng quan hệ thống
 
-NhiCRM là hệ thống CRM đa chi nhánh (multi-tenant) dành cho đội kinh doanh B2B / B2C, gồm 6 module chính:
+TNiCRM là hệ thống CRM đa chi nhánh (multi-tenant) dành cho đội kinh doanh B2B / B2C, gồm 6 module chính:
 
 | Module | Chức năng |
 |---|---|
@@ -372,7 +372,7 @@ CBS duyệt (manager/admin)
 
 - **Vấn đề tài khoản / quyền**: Admin tenant của công ty bạn.
 - **Cấu hình CBS không kết nối**: Admin tenant kiểm tra lại username/password tại `/cbs-revenue` → **Cấu hình CBS**.
-- **Lỗi hệ thống nghiêm trọng**: Admin liên hệ đội vận hành NhiCRM.
+- **Lỗi hệ thống nghiêm trọng**: Admin liên hệ đội vận hành TNiCRM.
 
 ---
 

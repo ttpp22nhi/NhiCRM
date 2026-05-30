@@ -1,4 +1,4 @@
-# Đặc tả tính năng hiện tại — NhiCRM / CRM MobiFone
+# Đặc tả tính năng hiện tại — TNiCRM / CRM MobiFone
 
 **English:** This document describes **behaviour implemented in the codebase today** (backend + Next.js frontend). It replaces aspirational “100% manifest” items with what is actually wired.
 
