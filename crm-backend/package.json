@@ -6,7 +6,10 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "reset-admin": "node reset-admin-password.js"
+    "reset-admin": "node reset-admin-password.js",
+    "seed:local": "node scripts/seed-local-demo.js",
+    "seed:local:fresh": "node scripts/seed-local-demo.js --fresh",
+    "bootstrap:local": "node scripts/bootstrap-local-db.js"
   },
   "keywords": [],
   "author": "",

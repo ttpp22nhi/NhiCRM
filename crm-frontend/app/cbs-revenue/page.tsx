@@ -27,6 +27,7 @@ import {
   FilterX,
   Info,
   Download,
+  CheckSquare,
 } from 'lucide-react'
 import { saveAs } from 'file-saver'
 import toast from 'react-hot-toast'
@@ -208,6 +209,8 @@ function CbsRevenuePageContent() {
   const [configOpen, setConfigOpen] = useState(false)
   const [claimPolicyOpen, setClaimPolicyOpen] = useState(false)
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
+  const [selectedGroupKeys, setSelectedGroupKeys] = useState<Set<string>>(new Set())
+  const [bulkClaiming, setBulkClaiming] = useState(false)
   const [salesList, setSalesList] = useState<SalesEmployee[]>([])
   const [detailOrder, setDetailOrder] = useState<CbsOrderGroup | null>(null)
 
@@ -348,6 +351,42 @@ function CbsRevenuePageContent() {
     })
   }, [groupedAll, columnFilters])
 
+  const claimableGroups = useMemo(
+    () => filteredData.filter((g) => !g.claimed_by),
+    [filteredData]
+  )
+
+  const selectedClaimCount = useMemo(
+    () =>
+      claimableGroups.filter((g) => selectedGroupKeys.has(g._groupKey)).length,
+    [claimableGroups, selectedGroupKeys]
+  )
+
+  const allClaimableSelected =
+    claimableGroups.length > 0 &&
+    claimableGroups.every((g) => selectedGroupKeys.has(g._groupKey))
+
+  useEffect(() => {
+    setSelectedGroupKeys(new Set())
+  }, [period, owner, q, columnFilters])
+
+  const toggleGroupSelection = (groupKey: string) => {
+    setSelectedGroupKeys((prev) => {
+      const next = new Set(prev)
+      if (next.has(groupKey)) next.delete(groupKey)
+      else next.add(groupKey)
+      return next
+    })
+  }
+
+  const toggleSelectAllClaimable = () => {
+    if (allClaimableSelected) {
+      setSelectedGroupKeys(new Set())
+    } else {
+      setSelectedGroupKeys(new Set(claimableGroups.map((g) => g._groupKey)))
+    }
+  }
+
   const hasActiveColumnFilter = useMemo(() => {
     const f = columnFilters
     return !!(
@@ -460,6 +499,48 @@ function CbsRevenuePageContent() {
       },
       salesClaimAutoApprove ? 'Đã tích và duyệt đơn hàng.' : 'Đã gửi yêu cầu, chờ duyệt.'
     )
+
+  const bulkClaimSelf = async () => {
+    const groups = filteredData.filter(
+      (g) => selectedGroupKeys.has(g._groupKey) && !g.claimed_by
+    )
+    if (groups.length === 0) {
+      toast.error('Chưa chọn đơn chưa có người bán.')
+      return
+    }
+    setBulkClaiming(true)
+    let okLines = 0
+    let failLines = 0
+    try {
+      for (const g of groups) {
+        for (const id of g._childIds) {
+          try {
+            await apiClient.post(`/api/cbs/revenue/${id}/claim`)
+            okLines++
+          } catch {
+            failLines++
+          }
+        }
+      }
+      const msg = salesClaimAutoApprove
+        ? 'Đã tích và duyệt đơn hàng.'
+        : 'Đã gửi yêu cầu, chờ duyệt.'
+      if (okLines > 0) {
+        toast.success(`${msg} (${groups.length} đơn, ${okLines} dòng)`)
+        setSelectedGroupKeys(new Set())
+        await load()
+      }
+      if (failLines > 0) {
+        toast.error(
+          okLines === 0
+            ? 'Thao tác thất bại.'
+            : `${failLines} dòng không xử lý được (có thể đã được gán trước đó).`
+        )
+      }
+    } finally {
+      setBulkClaiming(false)
+    }
+  }
 
   const assignSeller = (group: CbsOrderGroup, sellerId: string) =>
     runOnGroup(group, async (id) => {
@@ -901,7 +982,24 @@ function CbsRevenuePageContent() {
                       <th className="px-3 py-3 text-left">NV CBS</th>
                       <th className="px-3 py-3 text-right whitespace-nowrap">Giá (VAT)</th>
                       <th className="px-3 py-3 text-center whitespace-nowrap min-w-[14rem]">
-                        Người bán
+                        {!canAssignSeller ? (
+                          <div className="inline-flex items-center justify-center gap-2 normal-case">
+                            <input
+                              type="checkbox"
+                              className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                              checked={allClaimableSelected}
+                              disabled={
+                                claimableGroups.length === 0 || bulkClaiming
+                              }
+                              onChange={toggleSelectAllClaimable}
+                              title="Chọn tất cả đơn chưa có người bán"
+                              aria-label="Chọn tất cả đơn chưa có người bán"
+                            />
+                            <span>Người bán</span>
+                          </div>
+                        ) : (
+                          'Người bán'
+                        )}
                       </th>
                       <th className="px-3 py-3 text-center whitespace-nowrap">Xem</th>
                     </tr>
@@ -1005,6 +1103,34 @@ function CbsRevenuePageContent() {
                             <option value="pending">Chờ duyệt</option>
                             <option value="approved">Đã duyệt</option>
                           </select>
+                          {!canAssignSeller && selectedClaimCount > 0 && (
+                            <div className="flex flex-col gap-1 pt-0.5 border-t border-primary-100 mt-0.5">
+                              <span className="text-[10px] text-primary-800 font-medium">
+                                Đã chọn {selectedClaimCount} đơn
+                              </span>
+                              <button
+                                type="button"
+                                disabled={bulkClaiming}
+                                onClick={bulkClaimSelf}
+                                className="w-full inline-flex items-center justify-center gap-1 text-[11px] font-semibold text-white bg-primary-600 hover:bg-primary-700 disabled:opacity-50 px-2 py-1 rounded"
+                              >
+                                {bulkClaiming ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <CheckSquare className="w-3 h-3" />
+                                )}
+                                Tích {selectedClaimCount} đơn
+                              </button>
+                              <button
+                                type="button"
+                                disabled={bulkClaiming}
+                                onClick={() => setSelectedGroupKeys(new Set())}
+                                className="text-[10px] text-gray-600 hover:text-gray-900 underline disabled:opacity-50"
+                              >
+                                Bỏ chọn
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </th>
                       <th className="px-2 py-1.5" />
@@ -1088,9 +1214,13 @@ function CbsRevenuePageContent() {
                             <SellerCell
                               order={o}
                               busy={busy}
+                              bulkClaiming={bulkClaiming}
                               myId={user.id}
                               canAssignSeller={canAssignSeller}
+                              salesClaimAutoApprove={salesClaimAutoApprove}
                               sellerOptions={sellerOptions}
+                              selected={selectedGroupKeys.has(o._groupKey)}
+                              onToggleSelect={() => toggleGroupSelection(o._groupKey)}
                               onClaimSelf={() => claimSelf(o)}
                               onAssign={(sid) => assignSeller(o, sid)}
                               onApprove={() => approve(o)}
@@ -1124,11 +1254,18 @@ function CbsRevenuePageContent() {
           <p className="mt-4 text-xs text-gray-500">
             {salesClaimAutoApprove ? (
               <>
-                Sales tự tích đơn thì đơn được <strong>duyệt ngay</strong> và tính vào KPI.
+                Sales tự tích đơn thì đơn được <strong>duyệt ngay</strong> và tính vào KPI; có thể{' '}
+                <strong>gỡ</strong> đơn tích nhầm của mình.
               </>
             ) : (
               <>
                 Sales tự tích đơn thì đơn ở trạng thái <strong>chờ duyệt</strong>.
+              </>
+            )}{' '}
+            {!canAssignSeller && (
+              <>
+                Có thể <strong>chọn nhiều đơn</strong> (ô tick cột Người bán) rồi bấm{' '}
+                <strong>Tích … đơn</strong> ngay dưới bộ lọc cột đó.
               </>
             )}{' '}
             Admin / Lãnh đạo / Quản lý / Leader có thể gán trực tiếp người bán
@@ -1191,9 +1328,13 @@ export default function CbsRevenuePage() {
 function SellerCell({
   order,
   busy,
+  bulkClaiming,
   myId,
   canAssignSeller,
+  salesClaimAutoApprove,
   sellerOptions,
+  selected,
+  onToggleSelect,
   onClaimSelf,
   onAssign,
   onApprove,
@@ -1201,9 +1342,13 @@ function SellerCell({
 }: {
   order: CbsOrderGroup
   busy: boolean
+  bulkClaiming: boolean
   myId: string
   canAssignSeller: boolean
+  salesClaimAutoApprove: boolean
   sellerOptions: { id: string; label: string }[]
+  selected: boolean
+  onToggleSelect: () => void
   onClaimSelf: () => void
   onAssign: (sellerId: string) => void
   onApprove: () => void
@@ -1327,10 +1472,23 @@ function SellerCell({
   // ------ Sales ------
   if (!order.claimed_by) {
     return (
-      <div className="flex justify-center">
+      <div
+        className={`flex items-center justify-center gap-2 ${
+          selected ? 'rounded-lg bg-primary-50/80 px-1 py-0.5' : ''
+        }`}
+      >
+        <input
+          type="checkbox"
+          className="rounded border-gray-300 text-primary-600 focus:ring-primary-500 flex-shrink-0"
+          checked={selected}
+          disabled={bulkClaiming || busy}
+          onChange={onToggleSelect}
+          aria-label={`Chọn đơn ${order.contract_no || order.customer_name || ''}`}
+          title="Chọn để tích nhiều đơn"
+        />
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || bulkClaiming}
           onClick={onClaimSelf}
           className="inline-flex items-center gap-1 text-xs font-semibold text-gray-700 border border-gray-300 bg-white px-2.5 py-1 rounded-full hover:bg-primary-50 hover:text-primary-700 hover:border-primary-300 disabled:opacity-50"
         >
@@ -1370,13 +1528,35 @@ function SellerCell({
               Huỷ
             </button>
           </>
+        ) : isApproved ? (
+          <>
+            <span
+              className="inline-flex items-center gap-1 text-xs font-semibold bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded-full"
+              title={
+                salesClaimAutoApprove
+                  ? 'Đã tự duyệt — có thể gỡ nếu tích nhầm'
+                  : 'Đã được quản lý duyệt'
+              }
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Của tôi — đã duyệt
+            </span>
+            {salesClaimAutoApprove && order.approved_by === myId && (
+              <button
+                type="button"
+                disabled={busy || bulkClaiming}
+                onClick={onUnclaim}
+                className="text-[11px] text-red-600 hover:underline disabled:opacity-50 inline-flex items-center gap-0.5"
+                title="Gỡ đơn tích nhầm"
+              >
+                <XCircle className="w-3 h-3" />
+                Gỡ
+              </button>
+            )}
+          </>
         ) : (
-          <span
-            className="inline-flex items-center gap-1 text-xs font-semibold bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded-full"
-            title="Đã được quản lý duyệt"
-          >
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            Của tôi — đã duyệt
+          <span className="inline-flex items-center gap-1 text-xs font-medium text-gray-700 bg-gray-100 px-2 py-1 rounded-full">
+            Của tôi
           </span>
         )}
       </div>

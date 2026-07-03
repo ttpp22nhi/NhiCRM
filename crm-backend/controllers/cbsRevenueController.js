@@ -6,7 +6,8 @@
  *     + Sales: POST /claim (không có seller_id) → pending hoặc auto-approve (theo cbs_config.sales_claim_auto_approve).
  *     + Non-sales (admin/director/manager/leader): POST /claim với seller_id → gán & auto approve.
  *     + Non-sales: POST /approve → duyệt đơn đang pending.
- *     + Sales: POST /unclaim để huỷ request của chính mình khi còn pending.
+ *     + Sales: POST /unclaim để huỷ request của chính mình khi còn pending;
+ *       khi bật sales_claim_auto_approve còn được gỡ đơn đã tự duyệt (approved_by = chính mình).
  *     + Non-sales: POST /unclaim để gỡ người bán (pending hoặc approved).
  * - Manual sync: executive roles
  */
@@ -824,7 +825,7 @@ export async function unclaimCbsOrder(req, res) {
     if (!id) return res.status(400).json({ success: false, message: 'Thiếu id.' })
 
     const cur = await pool.query(
-      `SELECT id, claimed_by, claim_status, period_ym
+      `SELECT id, claimed_by, claim_status, approved_by, period_ym
          FROM cbs_revenue_orders WHERE id = $1 AND tenant_id = $2`,
       [id, tenantId]
     )
@@ -836,7 +837,7 @@ export async function unclaimCbsOrder(req, res) {
     const period = cur.rows[0].period_ym
     if (!owner) return res.json({ success: true, message: 'Đơn hàng hiện chưa được tích.' })
 
-    // Sales: chỉ được huỷ request của chính mình, và chỉ khi còn pending.
+    // Sales: huỷ request pending của mình; hoặc gỡ đơn đã tự duyệt khi bật auto-approve.
     if (!canApproveClaim(role)) {
       if (owner !== myId) {
         return res
@@ -844,10 +845,14 @@ export async function unclaimCbsOrder(req, res) {
           .json({ success: false, message: 'Bạn không có quyền gỡ tích đơn của người khác.' })
       }
       if (status === 'approved') {
-        return res.status(409).json({
-          success: false,
-          message: 'Đơn đã được duyệt, liên hệ quản lý để gỡ.',
-        })
+        const autoApprove = await getSalesClaimAutoApprove(tenantId)
+        const selfAutoApproved = cur.rows[0].approved_by === myId
+        if (!autoApprove || !selfAutoApproved) {
+          return res.status(409).json({
+            success: false,
+            message: 'Đơn đã được duyệt, liên hệ quản lý để gỡ.',
+          })
+        }
       }
     }
 
