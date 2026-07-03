@@ -106,6 +106,13 @@ function formatProductSummary(children: CbsOrderRow[]): {
   }
 }
 
+function formatSerialSummary(children: CbsOrderRow[]): { serial: string | null } {
+  const serials = uniqueStrings(children.map((c) => c.serial))
+  if (serials.length === 0) return { serial: null }
+  if (serials.length === 1) return { serial: serials[0] }
+  return { serial: `${serials[0]} (+${serials.length - 1})` }
+}
+
 /** Gộp các dòng cùng số hợp đồng; cột tiền cộng dồn. Không có HĐ → giữ từng dòng. */
 export function groupCbsOrdersByContract(orders: CbsOrderRow[]): CbsOrderGroup[] {
   const buckets = new Map<string, CbsOrderRow[]>()
@@ -122,11 +129,13 @@ export function groupCbsOrdersByContract(orders: CbsOrderRow[]): CbsOrderGroup[]
     const primary = sorted[0]
     const claim = mergeClaimState(children)
     const products = formatProductSummary(children)
+    const serialSummary = formatSerialSummary(children)
 
     groups.push({
       ...primary,
       ...claim,
       ...products,
+      serial: serialSummary.serial,
       price_vat: children.reduce((s, c) => s + num(c.price_vat), 0),
       price_not_vat: children.reduce((s, c) => s + num(c.price_not_vat), 0),
       price_not_vat_round: children.reduce((s, c) => s + num(c.price_not_vat_round), 0),

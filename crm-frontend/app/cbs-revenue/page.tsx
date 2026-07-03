@@ -149,6 +149,7 @@ interface ColumnFilters {
   customer: string
   product: string
   contract: string
+  serial: string
   cbsStaff: string
   priceMin: string
   priceMax: string
@@ -162,6 +163,7 @@ const EMPTY_COL_FILTERS: ColumnFilters = {
   customer: '',
   product: '',
   contract: '',
+  serial: '',
   cbsStaff: '',
   priceMin: '',
   priceMax: '',
@@ -281,6 +283,7 @@ function CbsRevenuePageContent() {
     const nCustomer = normalizeVN(f.customer)
     const nProduct = normalizeVN(f.product)
     const nContract = normalizeVN(f.contract)
+    const nSerial = normalizeVN(f.serial)
     const nCbsStaff = normalizeVN(f.cbsStaff)
     const nSeller = normalizeVN(f.seller)
 
@@ -310,6 +313,10 @@ function CbsRevenuePageContent() {
       if (nContract) {
         const hay = normalizeVN(`${g.contract_no || ''} ${g.contract_type || ''}`)
         if (!hay.includes(nContract)) return false
+      }
+      if (nSerial) {
+        const match = g._children.some((c) => normalizeVN(c.serial || '').includes(nSerial))
+        if (!match) return false
       }
       if (nCbsStaff) {
         const match = g._children.some((c) => {
@@ -395,6 +402,7 @@ function CbsRevenuePageContent() {
       f.customer ||
       f.product ||
       f.contract ||
+      f.serial ||
       f.cbsStaff ||
       f.priceMin ||
       f.priceMax ||
@@ -923,7 +931,7 @@ function CbsRevenuePageContent() {
                 type="search"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
-                placeholder="Tìm theo khách hàng, hợp đồng, sản phẩm, mã thuê bao, nhân viên CBS..."
+                placeholder="Tìm theo khách hàng, hợp đồng, serial, sản phẩm, mã thuê bao, nhân viên CBS..."
                 className="w-full border border-gray-300 rounded-lg pl-9 pr-3 py-2 text-sm focus:ring-2 focus:ring-primary-500"
               />
             </div>
@@ -971,7 +979,7 @@ function CbsRevenuePageContent() {
                 className="overflow-auto"
                 style={{ maxHeight: 'calc(100vh - 380px)', minHeight: '320px' }}
               >
-                <table className="min-w-[1240px] w-full divide-y divide-gray-200">
+                <table className="min-w-[1320px] w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50 sticky top-0 z-10 shadow-sm">
                     <tr className="text-xs font-semibold text-gray-600 uppercase">
                       <th className="px-2 py-3 text-center whitespace-nowrap w-12">STT</th>
@@ -979,6 +987,7 @@ function CbsRevenuePageContent() {
                       <th className="px-3 py-3 text-left">Khách hàng</th>
                       <th className="px-3 py-3 text-left">Sản phẩm</th>
                       <th className="px-3 py-3 text-left">Hợp đồng</th>
+                      <th className="px-3 py-3 text-left whitespace-nowrap">Serial</th>
                       <th className="px-3 py-3 text-left">NV CBS</th>
                       <th className="px-3 py-3 text-right whitespace-nowrap">Giá (VAT)</th>
                       <th className="px-3 py-3 text-center whitespace-nowrap min-w-[14rem]">
@@ -1048,6 +1057,15 @@ function CbsRevenuePageContent() {
                           value={columnFilters.contract}
                           onChange={(e) => updateFilter('contract', e.target.value)}
                           placeholder="Số / loại HĐ..."
+                          className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-primary-500 font-normal normal-case"
+                        />
+                      </th>
+                      <th className="px-2 py-1.5 align-top">
+                        <input
+                          type="search"
+                          value={columnFilters.serial}
+                          onChange={(e) => updateFilter('serial', e.target.value)}
+                          placeholder="Serial..."
                           className="w-full text-xs border border-gray-200 rounded px-2 py-1 focus:ring-1 focus:ring-primary-500 font-normal normal-case"
                         />
                       </th>
@@ -1188,6 +1206,21 @@ function CbsRevenuePageContent() {
                             </div>
                             <div className="text-gray-400">
                               {o.contract_type || ''}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-xs text-gray-600 font-mono">
+                            <div
+                              className="truncate max-w-[12rem]"
+                              title={
+                                o._childCount > 1
+                                  ? o._children
+                                      .map((c) => c.serial)
+                                      .filter(Boolean)
+                                      .join(', ')
+                                  : o.serial || ''
+                              }
+                            >
+                              {o.serial || '—'}
                             </div>
                           </td>
                           <td className="px-3 py-2 text-xs text-gray-600">

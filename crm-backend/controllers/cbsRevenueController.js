@@ -482,6 +482,7 @@ export async function listCbsOrders(req, res) {
           OR LOWER(COALESCE(o.contract_no, '')) LIKE $${idx}
           OR LOWER(COALESCE(o.product_name, '')) LIKE $${idx}
           OR LOWER(COALESCE(o.external_id1, '')) LIKE $${idx}
+          OR LOWER(COALESCE(o.serial, '')) LIKE $${idx}
           OR LOWER(COALESCE(o.cbs_staff, '')) LIKE $${idx})`
       )
     }
