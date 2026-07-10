@@ -159,8 +159,12 @@ function dedupePairs(pairs) {
  * cho (tenant × user × period). Luôn UPSERT vào kpis kể cả khi 0 — để UI hiển
  * thị đúng "0 VNĐ" thay vì rỗng.
  */
-export async function recomputeKpiActuals(tenantId, userId, period) {
-  if (isKpiPeriodActualsLocked(period)) return
+/**
+ * @param {{ force?: boolean }} [options] — force=true: ghi đè actuals cả khi kỳ đã chốt (admin).
+ */
+export async function recomputeKpiActuals(tenantId, userId, period, options = {}) {
+  const force = options.force === true
+  if (!force && isKpiPeriodActualsLocked(period)) return false
 
   // (1) Doanh thu từ Deal thắng — phân loại theo kpi_customer_kind của customer.
      //     Đồng thời đếm số hợp đồng (deal thắng = 1 HĐ) tách theo loại KH NEW/EXISTING.
@@ -316,14 +320,16 @@ export async function recomputeKpiActuals(tenantId, userId, period) {
       productCountNew, productCountExisting, now
     ]
   )
+  return true
 }
 
 /**
  * Chỉ tính lại actual_approach_count (deals + CBS đã duyệt theo khách).
  */
-export async function recomputeKpiApproach(tenantId, userId, period) {
+export async function recomputeKpiApproach(tenantId, userId, period, options = {}) {
   if (!tenantId || !userId || !period) return
-  if (isKpiPeriodActualsLocked(period)) return
+  const force = options.force === true
+  if (!force && isKpiPeriodActualsLocked(period)) return
   try {
     const cnt = await computeActualApproachCount(tenantId, userId, period)
     const now = Date.now()

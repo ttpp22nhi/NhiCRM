@@ -1,9 +1,10 @@
 /**
  * Đồng bộ doanh thu CBS → bảng cbs_revenue_orders.
- *  - syncTenant(tenantId, { range?, period? }): login CBS → fetch báo cáo theo range hoặc period (YYYY-MM) → upsert theo fingerprint.
- *  - Sau khi upsert: xóa đơn cùng kỳ có fingerprint không có trong gói CBS (trừ claim_status = approved).
+ *  - syncTenant(tenantId, { range?, period? }): login CBS → fetch báo cáo → upsert theo
+ *    khóa nghiệp vụ (HĐ + mã SP + ngày kích hoạt [+ serial nếu có]). Đổi giá → UPDATE, không INSERT.
+ *  - fingerprint chỉ dùng phụ (legacy / unique index), không phải khóa chính khi sync.
+ *  - Sau upsert: gỡ orphan fingerprint + gỡ unclaimed trùng business key với bản approved.
  *  - syncAllTenants(): quét mọi cấu hình auto_sync=true (luôn dùng tháng hiện tại VN).
- * Lưu ý: CBS yêu cầu đăng nhập lần gọi → đơn giản hoá bằng cách login mỗi lần.
  */
 
 import crypto from 'crypto'
@@ -76,6 +77,42 @@ function periodYmFromMs(ms) {
   return `${y}-${m}`
 }
 
+/** Ngày lịch (YYYY-MM-DD) theo giờ VN — dùng trong khóa nghiệp vụ, bỏ phần giờ. */
+function vnDayKeyFromMs(ms) {
+  if (ms == null || !Number.isFinite(Number(ms))) return null
+  const d = new Date(Number(ms) + CBS_TZ_OFFSET_MS)
+  const y = d.getUTCFullYear()
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(d.getUTCDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function vnDayKeyFromRaw(value) {
+  return vnDayKeyFromMs(toMs(value))
+}
+
+function resolveProductCode(item) {
+  return String(item.productCode || item.primaryProductCode || '').trim()
+}
+
+/**
+ * Khóa nghiệp vụ ổn định (không gồm giá):
+ *   HĐ + mã SP + ngày kích hoạt (+ serial nếu có)
+ * Fallback ngày: paymentDate / firstDateRevenue nếu thiếu activeDate.
+ */
+function businessKeyParts(item) {
+  const contractNo = String(item.contractNo || '').trim()
+  const productCode = resolveProductCode(item)
+  const serial = String(item.serial || '').trim()
+  const activeDay =
+    vnDayKeyFromRaw(item.activeDate) ||
+    vnDayKeyFromRaw(item.paymentDate) ||
+    vnDayKeyFromRaw(item.firstDateRevenue)
+  if (!contractNo || !productCode || !activeDay) return null
+  return { contractNo, productCode, activeDay, serial: serial || null }
+}
+
+/** Fingerprint phụ — vẫn gồm giá để unique index; không dùng làm khóa upsert chính. */
 function fingerprintFor(item) {
   const key = [
     item.contractNo || '',
@@ -93,6 +130,125 @@ function fingerprintFor(item) {
     .map((v) => String(v).trim())
     .join('|')
   return crypto.createHash('sha1').update(key).digest('hex')
+}
+
+/**
+ * Tìm dòng CRM theo khóa nghiệp vụ (ưu tiên approved / đã claim).
+ * SQL so sánh active_date theo ngày VN (UTC+7).
+ */
+async function findExistingByBusinessKey(tenantId, periodYm, item) {
+  if (!periodYm) return null
+  const parts = businessKeyParts(item)
+  if (!parts) return null
+
+  const params = [tenantId, periodYm, parts.contractNo, parts.productCode, parts.activeDay]
+  let serialClause = ''
+  if (parts.serial) {
+    params.push(parts.serial)
+    serialClause = `AND TRIM(COALESCE(serial, '')) = $${params.length}`
+  }
+
+  const r = await pool.query(
+    `SELECT id, fingerprint, claim_status, claimed_by
+       FROM cbs_revenue_orders
+      WHERE tenant_id = $1
+        AND period_ym = $2
+        AND TRIM(COALESCE(contract_no, '')) = $3
+        AND LOWER(TRIM(COALESCE(product_code, primary_product_code, ''))) = LOWER($4)
+        AND to_char(
+              to_timestamp(
+                COALESCE(active_date, payment_date, first_date_revenue) / 1000.0
+              ) AT TIME ZONE 'Asia/Ho_Chi_Minh',
+              'YYYY-MM-DD'
+            ) = $5
+        ${serialClause}
+      ORDER BY
+        CASE WHEN claim_status = 'approved' THEN 0
+             WHEN claimed_by IS NOT NULL THEN 1
+             ELSE 2 END,
+        COALESCE(price_vat, 0) DESC,
+        id
+      LIMIT 1`,
+    params
+  )
+  return r.rows[0] || null
+}
+
+/**
+ * Gỡ unclaimed trùng khóa nghiệp vụ với bản đã approved
+ * (cùng HĐ + SP + ngày kích hoạt [+ serial]).
+ */
+async function removeDuplicateUnclaimedByBusinessKey(tenantId, periodYm) {
+  if (!tenantId || !periodYm) return 0
+  try {
+    const del = await pool.query(
+      `DELETE FROM cbs_revenue_orders o
+        WHERE o.tenant_id = $1
+          AND o.period_ym = $2
+          AND COALESCE(LOWER(TRIM(o.claim_status)), '') <> 'approved'
+          AND o.claimed_by IS NULL
+          AND EXISTS (
+            SELECT 1 FROM cbs_revenue_orders a
+             WHERE a.tenant_id = o.tenant_id
+               AND a.period_ym = o.period_ym
+               AND a.claim_status = 'approved'
+               AND a.id <> o.id
+               AND TRIM(COALESCE(a.contract_no, '')) = TRIM(COALESCE(o.contract_no, ''))
+               AND LOWER(TRIM(COALESCE(a.product_code, a.primary_product_code, '')))
+                 = LOWER(TRIM(COALESCE(o.product_code, o.primary_product_code, '')))
+               AND to_char(
+                     to_timestamp(
+                       COALESCE(a.active_date, a.payment_date, a.first_date_revenue) / 1000.0
+                     ) AT TIME ZONE 'Asia/Ho_Chi_Minh',
+                     'YYYY-MM-DD'
+                   )
+                 = to_char(
+                     to_timestamp(
+                       COALESCE(o.active_date, o.payment_date, o.first_date_revenue) / 1000.0
+                     ) AT TIME ZONE 'Asia/Ho_Chi_Minh',
+                     'YYYY-MM-DD'
+                   )
+               AND TRIM(COALESCE(a.serial, '')) = TRIM(COALESCE(o.serial, ''))
+          )`,
+      [tenantId, periodYm]
+    )
+    return del.rowCount || 0
+  } catch (err) {
+    if (err?.code !== '42P01' && err?.code !== '42703') {
+      console.error('removeDuplicateUnclaimedByBusinessKey:', err)
+    }
+    return 0
+  }
+}
+
+function buildOrderFieldParams(item, periodYm, priceNotVat, priceNotVatRound, priceVat, vat, paymentMs, rawItem, now) {
+  return {
+    periodYm,
+    contractNo: item.contractNo || null,
+    contractType: item.contractType || null,
+    productName: item.productName || null,
+    productCode: item.productCode || null,
+    primaryProductCode: item.primaryProductCode || null,
+    masp: item.masp || null,
+    externalId1: item.externalId1 || null,
+    serial: item.serial || null,
+    customerName: item.name || null,
+    customerType: item.customerType || null,
+    partner: item.partner || null,
+    cenCodeDev: item.cenCodeDev || null,
+    cbsStaff: item.staff || null,
+    paymentType: item.paymentType || null,
+    priceNotVat,
+    priceNotVatRound,
+    priceVat,
+    vat,
+    subStartDate: toMs(item.subStartDate),
+    firstDateRevenue: toMs(item.firstDateRevenue),
+    activeDate: toMs(item.activeDate),
+    paymentDate: paymentMs,
+    raw: JSON.stringify(rawItem),
+    now,
+  }
 }
 
 async function getCbsConfigRow(tenantId) {
@@ -152,79 +308,108 @@ async function upsertOrder(tenantId, rawItem, now, options = {}) {
   const priceNotVatRound = toMoneyNumber(item.priceNotVatRound ?? item.priceNotVat)
   const priceVat = toMoneyNumber(item.priceVat)
   const vat = toMoneyNumber(item.vat)
-
-  const existing = await pool.query(
-    `SELECT id, claimed_by FROM cbs_revenue_orders WHERE tenant_id = $1 AND fingerprint = $2 LIMIT 1`,
-    [tenantId, fp]
+  const fields = buildOrderFieldParams(
+    item, periodYm, priceNotVat, priceNotVatRound, priceVat, vat, paymentMs, rawItem, now
   )
 
-  if (existing.rows.length === 0) {
+  /** UPDATE CBS fields + fingerprint; giữ claim/approve. */
+  const updateExistingRow = async (rowId) => {
+    // Tránh conflict unique (tenant_id, fingerprint) khi giá đổi tạo fp mới
+    // mà bản unclaimed trùng fp đã tồn tại.
     await pool.query(
-      `INSERT INTO cbs_revenue_orders (
-        id, tenant_id, fingerprint, period_ym,
-        contract_no, contract_type, product_name, product_code, primary_product_code,
-        masp, external_id1, serial,
-        customer_name, customer_type, partner, cen_code_dev,
-        cbs_staff, payment_type,
-        price_not_vat, price_not_vat_round, price_vat, vat,
-        sub_start_date, first_date_revenue, active_date, payment_date,
-        raw, synced_at, created_at, updated_at
-      ) VALUES (
-        $1, $2, $3, $4,
-        $5, $6, $7, $8, $9,
-        $10, $11, $12,
-        $13, $14, $15, $16,
-        $17, $18,
-        $19, $20, $21, $22,
-        $23, $24, $25, $26,
-        $27::jsonb, $28, $28, $28
-      )`,
+      `DELETE FROM cbs_revenue_orders
+        WHERE tenant_id = $1
+          AND fingerprint = $2
+          AND id <> $3
+          AND claimed_by IS NULL
+          AND COALESCE(LOWER(TRIM(claim_status)), '') <> 'approved'`,
+      [tenantId, fp, rowId]
+    )
+    await pool.query(
+      `UPDATE cbs_revenue_orders SET
+        fingerprint = $3,
+        period_ym = $4,
+        contract_no = $5, contract_type = $6, product_name = $7, product_code = $8, primary_product_code = $9,
+        masp = $10, external_id1 = $11, serial = $12,
+        customer_name = $13, customer_type = $14, partner = $15, cen_code_dev = $16,
+        cbs_staff = $17, payment_type = $18,
+        price_not_vat = $19, price_not_vat_round = $20, price_vat = $21, vat = $22,
+        sub_start_date = $23, first_date_revenue = $24, active_date = $25, payment_date = $26,
+        raw = $27::jsonb, synced_at = $28, updated_at = $28
+       WHERE tenant_id = $1 AND id = $2`,
       [
-        uuidv4(),
         tenantId,
+        rowId,
         fp,
-        periodYm,
-        item.contractNo || null,
-        item.contractType || null,
-        item.productName || null,
-        item.productCode || null,
-        item.primaryProductCode || null,
-        item.masp || null,
-        item.externalId1 || null,
-        item.serial || null,
-        item.name || null,
-        item.customerType || null,
-        item.partner || null,
-        item.cenCodeDev || null,
-        item.staff || null,
-        item.paymentType || null,
-        priceNotVat,
-        priceNotVatRound,
-        priceVat,
-        vat,
-        toMs(item.subStartDate),
-        toMs(item.firstDateRevenue),
-        toMs(item.activeDate),
-        paymentMs,
-        JSON.stringify(rawItem),
-        now,
+        fields.periodYm,
+        fields.contractNo,
+        fields.contractType,
+        fields.productName,
+        fields.productCode,
+        fields.primaryProductCode,
+        fields.masp,
+        fields.externalId1,
+        fields.serial,
+        fields.customerName,
+        fields.customerType,
+        fields.partner,
+        fields.cenCodeDev,
+        fields.cbsStaff,
+        fields.paymentType,
+        fields.priceNotVat,
+        fields.priceNotVatRound,
+        fields.priceVat,
+        fields.vat,
+        fields.subStartDate,
+        fields.firstDateRevenue,
+        fields.activeDate,
+        fields.paymentDate,
+        fields.raw,
+        fields.now,
       ]
     )
-    return 'inserted'
   }
 
+  // 1) Khóa nghiệp vụ trước (HĐ + SP + ngày kích hoạt [+ serial]) → đổi giá = UPDATE
+  const byBiz = await findExistingByBusinessKey(tenantId, periodYm, item)
+  if (byBiz) {
+    await updateExistingRow(byBiz.id)
+    return 'updated'
+  }
+
+  // 2) Legacy: khớp fingerprint cũ (cùng giá/ngày)
+  const byFp = await pool.query(
+    `SELECT id FROM cbs_revenue_orders WHERE tenant_id = $1 AND fingerprint = $2 LIMIT 1`,
+    [tenantId, fp]
+  )
+  if (byFp.rows.length > 0) {
+    await updateExistingRow(byFp.rows[0].id)
+    return 'updated'
+  }
+
+  // 3) INSERT mới
   await pool.query(
-    `UPDATE cbs_revenue_orders SET
-      period_ym = $3,
-      contract_no = $4, contract_type = $5, product_name = $6, product_code = $7, primary_product_code = $8,
-      masp = $9, external_id1 = $10, serial = $11,
-      customer_name = $12, customer_type = $13, partner = $14, cen_code_dev = $15,
-      cbs_staff = $16, payment_type = $17,
-      price_not_vat = $18, price_not_vat_round = $19, price_vat = $20, vat = $21,
-      sub_start_date = $22, first_date_revenue = $23, active_date = $24, payment_date = $25,
-      raw = $26::jsonb, synced_at = $27, updated_at = $27
-     WHERE tenant_id = $1 AND fingerprint = $2`,
+    `INSERT INTO cbs_revenue_orders (
+      id, tenant_id, fingerprint, period_ym,
+      contract_no, contract_type, product_name, product_code, primary_product_code,
+      masp, external_id1, serial,
+      customer_name, customer_type, partner, cen_code_dev,
+      cbs_staff, payment_type,
+      price_not_vat, price_not_vat_round, price_vat, vat,
+      sub_start_date, first_date_revenue, active_date, payment_date,
+      raw, synced_at, created_at, updated_at
+    ) VALUES (
+      $1, $2, $3, $4,
+      $5, $6, $7, $8, $9,
+      $10, $11, $12,
+      $13, $14, $15, $16,
+      $17, $18,
+      $19, $20, $21, $22,
+      $23, $24, $25, $26,
+      $27::jsonb, $28, $28, $28
+    )`,
     [
+      uuidv4(),
       tenantId,
       fp,
       periodYm,
@@ -254,7 +439,7 @@ async function upsertOrder(tenantId, rawItem, now, options = {}) {
       now,
     ]
   )
-  return 'updated'
+  return 'inserted'
 }
 
 /**
@@ -349,9 +534,11 @@ export async function syncTenant(tenantId, { range, period } = {}) {
       }
     }
 
+    let removedDupes = 0
     let remainingInPeriod = 0
     let approvedOrphansKept = 0
     if (syncedForPeriod) {
+      removedDupes = await removeDuplicateUnclaimedByBusinessKey(tenantId, syncedForPeriod)
       try {
         const cnt = await pool.query(
           `SELECT COUNT(*)::int AS n
@@ -380,10 +567,14 @@ export async function syncTenant(tenantId, { range, period } = {}) {
     }
 
     const msg =
-      syncedForPeriod && (removedOrphans > 0 || remainingInPeriod > 0 || items.length > 0)
+      syncedForPeriod && (removedOrphans > 0 || removedDupes > 0 || remainingInPeriod > 0 || items.length > 0)
         ? `Đồng bộ CBS (kỳ ${syncedForPeriod}): nhận ${items.length}, thêm ${inserted}, cập nhật ${updated}${
             removedOrphans > 0
               ? `, gỡ ${removedOrphans} dòng thừa (không còn trong CBS, chưa duyệt)`
+              : ''
+          }${
+            removedDupes > 0
+              ? `, gỡ ${removedDupes} dòng trùng khóa nghiệp vụ (đã có bản duyệt)`
               : ''
           }. Trong CRM kỳ này còn ${remainingInPeriod} đơn.${
             approvedOrphansKept > 0

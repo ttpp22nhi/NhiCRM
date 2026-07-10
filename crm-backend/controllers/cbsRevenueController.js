@@ -886,8 +886,9 @@ export async function unclaimCbsOrder(req, res) {
 
 /**
  * POST /api/cbs/revenue/recompute-kpi
- * Backfill KPI actuals từ toàn bộ đơn CBS đã duyệt trong tenant.
- * Dùng khi admin muốn đồng bộ lại KPI mà không cần re-sync dữ liệu CBS.
+ * Body/query: { force?: boolean, period?: 'YYYY-MM', user_id?: uuid }
+ * - force=true: Admin ghi đè actuals kể cả kỳ đã chốt (sau hạn ngày 05).
+ * - period / user_id: giới hạn phạm vi tính lại (tùy chọn).
  */
 export async function recomputeKpiFromApprovedOrders(req, res) {
   try {
@@ -900,21 +901,50 @@ export async function recomputeKpiFromApprovedOrders(req, res) {
       })
     }
 
+    const body = req.body || {}
+    const force =
+      body.force === true ||
+      String(req.query.force || '').toLowerCase() === 'true'
+    if (force && !isTenantAdminRole(role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Chỉ Admin mới được tính lại KPI kỳ đã chốt (force).',
+      })
+    }
+
+    const periodFilter = String(body.period || req.query.period || '').trim()
+    const userFilter = String(body.user_id || req.query.user_id || '').trim()
+
+    const params = [tenantId]
+    const where = [
+      `tenant_id = $1`,
+      `claim_status = 'approved'`,
+      `claimed_by IS NOT NULL`,
+      `period_ym IS NOT NULL`,
+    ]
+    if (periodFilter) {
+      params.push(periodFilter)
+      where.push(`period_ym = $${params.length}`)
+    }
+    if (userFilter) {
+      params.push(userFilter)
+      where.push(`claimed_by = $${params.length}`)
+    }
+
     const pairs = await pool.query(
       `SELECT DISTINCT claimed_by, period_ym
          FROM cbs_revenue_orders
-        WHERE tenant_id    = $1
-          AND claim_status = 'approved'
-          AND claimed_by   IS NOT NULL
-          AND period_ym    IS NOT NULL`,
-      [tenantId]
+        WHERE ${where.join(' AND ')}`,
+      params
     )
     let processed = 0
+    let skipped = 0
     let failed = 0
     for (const p of pairs.rows) {
       try {
-        await recomputeKpiActuals(tenantId, p.claimed_by, p.period_ym)
-        processed++
+        const ok = await recomputeKpiActuals(tenantId, p.claimed_by, p.period_ym, { force })
+        if (ok) processed++
+        else skipped++
       } catch (err) {
         failed++
         if (err?.code !== '42P01' && err?.code !== '42703') {
@@ -925,9 +955,11 @@ export async function recomputeKpiFromApprovedOrders(req, res) {
     return res.json({
       success: true,
       message: `Đã tính lại KPI cho ${processed}/${pairs.rows.length} (nhân viên × kỳ).${
-        failed ? ` Lỗi ${failed}.` : ''
+        force ? ' (force — kể cả kỳ đã chốt)' : ''
+      }${failed ? ` Lỗi ${failed}.` : ''}${
+        skipped ? ` Bỏ qua ${skipped} do kỳ đã chốt — dùng force=true (Admin).` : ''
       }`,
-      data: { processed, failed, total: pairs.rows.length },
+      data: { processed, failed, skipped, total: pairs.rows.length, force },
     })
   } catch (err) {
     console.error('recomputeKpiFromApprovedOrders outer:', err)

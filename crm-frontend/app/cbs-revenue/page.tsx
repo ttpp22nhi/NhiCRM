@@ -171,6 +171,72 @@ const EMPTY_COL_FILTERS: ColumnFilters = {
   sellerStatus: 'all',
 }
 
+function moneyNum(v: string | number | null | undefined): number {
+  const n = Number(v ?? 0)
+  return Number.isFinite(n) ? n : 0
+}
+
+/** Tổng doanh thu theo bộ lọc cột — kpiNotVat khớp công thức KPI (chưa VAT, đã duyệt, chưa link deal). */
+function computeFilteredRevenueSummary(groups: CbsOrderGroup[]) {
+  let totalVat = 0
+  let totalNotVat = 0
+  let lineCount = 0
+  let kpiNotVat = 0
+  let kpiLineCount = 0
+
+  for (const g of groups) {
+    totalVat += moneyNum(g.price_vat)
+    totalNotVat += moneyNum(g.price_not_vat_round ?? g.price_not_vat)
+    lineCount += g._childCount
+
+    for (const c of g._children) {
+      if (c.claim_status !== 'approved' || !c.claimed_by) continue
+      if (c.deal_id) continue
+      kpiNotVat += moneyNum(c.price_not_vat_round ?? c.price_not_vat)
+      kpiLineCount++
+    }
+  }
+
+  return {
+    contractCount: groups.length,
+    lineCount,
+    totalVat,
+    totalNotVat,
+    kpiNotVat,
+    kpiLineCount,
+  }
+}
+
+/** Tổng mọi dòng CRM cùng serial với bộ lọc — khớp cách cộng file CBS export (có thể gồm bản trùng). */
+function computeSerialScopeSummary(
+  allRows: CbsOrderRow[],
+  groups: CbsOrderGroup[]
+) {
+  const serials = new Set<string>()
+  for (const g of groups) {
+    for (const c of g._children) {
+      const s = String(c.serial || '').trim()
+      if (s) serials.add(s)
+    }
+  }
+  if (serials.size === 0) return null
+
+  let notVat = 0
+  let vat = 0
+  let lineCount = 0
+  let unclaimedNotVat = 0
+  for (const row of allRows) {
+    const s = String(row.serial || '').trim()
+    if (!serials.has(s)) continue
+    lineCount++
+    const nv = moneyNum(row.price_not_vat_round ?? row.price_not_vat)
+    notVat += nv
+    vat += moneyNum(row.price_vat)
+    if (!row.claimed_by) unclaimedNotVat += nv
+  }
+  return { notVat, vat, lineCount, unclaimedNotVat, serialCount: serials.size }
+}
+
 function CbsRevenuePageContent() {
   const { user } = useAuth()
   const router = useRouter()
@@ -357,6 +423,26 @@ function CbsRevenuePageContent() {
       return true
     })
   }, [groupedAll, columnFilters])
+
+  const filteredRevenueSummary = useMemo(
+    () => computeFilteredRevenueSummary(filteredData),
+    [filteredData]
+  )
+
+  const serialScopeSummary = useMemo(() => {
+    if (!resp?.data?.length) return null
+    return computeSerialScopeSummary(resp.data as CbsOrderRow[], filteredData)
+  }, [resp?.data, filteredData])
+
+  const showRevenueReconcile = useMemo(
+    () =>
+      !!(
+        columnFilters.seller.trim() ||
+        columnFilters.sellerStatus === 'approved' ||
+        owner === 'mine'
+      ),
+    [columnFilters.seller, columnFilters.sellerStatus, owner]
+  )
 
   const claimableGroups = useMemo(
     () => filteredData.filter((g) => !g.claimed_by),
@@ -867,6 +953,88 @@ function CbsRevenuePageContent() {
               clickHint="Bấm để lọc Chưa có người bán"
             />
           </div>
+
+          {showRevenueReconcile && resp && resp.data.length > 0 && !loading && (
+            <div className="mb-4 rounded-xl border border-primary-200 bg-primary-50/50 px-4 py-3">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-primary-900">
+                    <Wallet className="w-4 h-4 shrink-0" />
+                    Đối chiếu KPI — kỳ {period}
+                  </div>
+                  <p className="text-xs text-primary-900/75 mt-1">
+                    Theo bộ lọc cột:{' '}
+                    <strong>{filteredRevenueSummary.contractCount}</strong> HĐ,{' '}
+                    <strong>{filteredRevenueSummary.lineCount}</strong> dòng CBS.
+                    KPI tháng dùng đơn vị <strong>chưa VAT</strong>.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-x-6 gap-y-2 sm:justify-end">
+                  <div className="text-right">
+                    <div className="text-xs text-gray-600">Tổng chưa VAT (đang lọc)</div>
+                    <div className="text-lg font-bold text-primary-900 tabular-nums">
+                      {formatVND(filteredRevenueSummary.totalNotVat)}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-xs text-gray-600">Tổng VAT (đang lọc)</div>
+                    <div className="text-sm font-semibold text-gray-800 tabular-nums">
+                      {formatVND(filteredRevenueSummary.totalVat)}
+                    </div>
+                  </div>
+                  <div className="text-right sm:border-l sm:border-primary-200 sm:pl-6">
+                    <div
+                      className="text-xs text-gray-600 inline-flex items-center justify-end gap-1"
+                      title="Đã duyệt, chưa gắn deal — cùng công thức tính KPI tháng"
+                    >
+                      Khớp KPI tháng (TH)
+                      <Info className="w-3.5 h-3.5" />
+                    </div>
+                    <div className="text-lg font-bold text-emerald-800 tabular-nums">
+                      {formatVND(filteredRevenueSummary.kpiNotVat)}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {filteredRevenueSummary.kpiLineCount} dòng đã duyệt
+                    </div>
+                  </div>
+                </div>
+              </div>
+              {serialScopeSummary &&
+                serialScopeSummary.notVat !== filteredRevenueSummary.kpiNotVat && (
+                  <div className="mt-2 text-xs border-t border-primary-100 pt-2 space-y-1">
+                    <p className="text-amber-900">
+                      <strong>File CBS export</strong> (cộng mọi dòng cùng serial):{' '}
+                      <span className="font-semibold tabular-nums">
+                        {formatVND(serialScopeSummary.notVat)}
+                      </span>{' '}
+                      — {serialScopeSummary.lineCount} dòng / {serialScopeSummary.serialCount}{' '}
+                      serial.
+                      {serialScopeSummary.unclaimedNotVat > 0 && (
+                        <>
+                          {' '}
+                          Trong đó{' '}
+                          <span className="font-semibold tabular-nums">
+                            {formatVND(serialScopeSummary.unclaimedNotVat)}
+                          </span>{' '}
+                          là bản <strong>trùng chưa claim</strong> (không tính KPI).
+                        </>
+                      )}
+                    </p>
+                    <p className="text-gray-600">
+                      KPI chỉ tính mỗi đơn <strong>đã duyệt một lần</strong> → dùng ô{' '}
+                      <strong>Khớp KPI tháng (TH)</strong>, không cộng dòng trùng từ file CBS.
+                    </p>
+                  </div>
+                )}
+              {columnFilters.sellerStatus !== 'approved' &&
+                filteredRevenueSummary.kpiNotVat !== filteredRevenueSummary.totalNotVat && (
+                  <p className="mt-2 text-xs text-amber-800 border-t border-primary-100 pt-2">
+                    Gợi ý: lọc trạng thái người bán <strong>Đã duyệt</strong> để tổng
+                    chưa VAT khớp cột <strong>DT Tổng — TH</strong> trên trang KPI tháng.
+                  </p>
+                )}
+            </div>
+          )}
 
           {lastSync?.last_synced_at && (
             <div className="text-xs text-gray-500 mb-3">
