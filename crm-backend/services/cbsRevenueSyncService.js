@@ -14,6 +14,7 @@ import { currentVNMonthRange, fetchMonthlyReport, loginCbs, vnMonthRangeFromYyyy
 import { recomputeKpiActuals } from './kpiFromDealsSyncService.js'
 import { refreshKpiCustomerKindForTenant } from './customerKindRefreshService.js'
 import { createAutoTasksForPendingCbsOrders } from './cbsAutoTaskService.js'
+import { logInfo, logError } from './appLogger.js'
 
 const CBS_TZ_OFFSET_MS = 7 * 60 * 60 * 1000 // Asia/Ho_Chi_Minh = UTC+7
 const PERIOD_YM_RE = /^\d{4}-(0[1-9]|1[0-2])$/
@@ -583,6 +584,16 @@ export async function syncTenant(tenantId, { range, period } = {}) {
           }`
         : `Đồng bộ CBS (kỳ ${syncedForPeriod || '—'}): nhận ${items.length}, thêm ${inserted}, cập nhật ${updated}.`
     await updateSyncStatus(tenantId, 'success', msg, Date.now())
+    logInfo('CBS sync success', {
+      tenant_id: tenantId,
+      period: syncedForPeriod,
+      total: items.length,
+      inserted,
+      updated,
+      removed_orphans: removedOrphans,
+      removed_dupes: removedDupes,
+      remaining: remainingInPeriod,
+    })
 
     // Backfill KPI actuals cho tất cả (claimed_by, period_ym) có đơn đã duyệt trong tenant.
     // Không chặn luồng sync: log lỗi thầm lặng.
@@ -639,6 +650,11 @@ export async function syncTenant(tenantId, { range, period } = {}) {
   } catch (err) {
     const message = err?.message || 'Lỗi không xác định'
     await updateSyncStatus(tenantId, 'error', message, Date.now())
+    logError('CBS sync failed', {
+      tenant_id: tenantId,
+      err_message: message,
+      stack: err?.stack ? String(err.stack).slice(0, 2000) : null,
+    })
     throw err
   }
 }

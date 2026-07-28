@@ -15,6 +15,20 @@ PORT=3000
 # production: bật SSL client DB trong database.js; ẩn chi tiết lỗi ở một số chỗ
 # NODE_ENV=production
 
+# Số hop proxy (Nginx) để lấy đúng ip_client — mặc định 1
+# TRUST_PROXY_HOPS=1
+
+# === File logs (theo ngày + tenant, tự xóa sau 60 ngày) ===
+# Đường dẫn TƯƠNG ĐỐI so với thư mục chạy process (cwd = crm-backend khi npm start).
+# Mặc định: logs  →  ./logs/system , ./logs/tenants/<tenantId>
+# LOG_DIR=logs
+# info | debug | warn | error
+# LOG_LEVEL=info
+# Giữ file: 60d = ~2 tháng (winston-daily-rotate-file)
+# LOG_RETENTION=60d
+# Tắt log ra console: LOG_CONSOLE=0
+# LOG_CONSOLE=1
+
 # === Redis (tùy chọn) ===
 # redis://127.0.0.1:6379 — để trống thì không dùng cache
 REDIS_URL=

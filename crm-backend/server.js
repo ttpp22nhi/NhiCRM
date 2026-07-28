@@ -54,23 +54,32 @@ import {
 import { startCbsScheduler } from './scheduler/cbsRevenueScheduler.js';
 import { swaggerSpec, swaggerServe, swaggerSetup } from './swagger.js';
 import './listeners/dealStageChangedListener.js'; // Đăng ký listener event-driven (deal stage → auto task)
+import { attachClientContext, requestAccessLogger } from './middleware/requestLogger.js';
+import { logError, systemLog, getLogDirRelative } from './services/appLogger.js';
 
 // Tải biến môi trường
 dotenv.config();
 
 const app = express();
 
+// Sau Nginx/proxy: tin 1 hop để req.ip / ip_client đúng
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1));
+
 // Middleware CORS - Cho phép mọi origin (domain hoặc IP) để truy cập từ mạng nội bộ không cần cấu hình.
 app.use(cors({
   origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-Id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-Id', 'X-Request-Id'],
 }));
 
 // Middleware xử lý JSON & Cookie
 app.use(express.json());
 app.use(cookieParser());
+
+// request_id + ip_client + access log (file theo ngày / tenant, giữ 60 ngày)
+app.use(attachClientContext);
+app.use(requestAccessLogger);
 
 /**
  * Swagger API Documentation
@@ -1185,15 +1194,23 @@ app.get('/health', (req, res) => {
   res.json({ status: 'UP', timestamp: Date.now() });
 });
 
+// 404 trước error handler
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: 'API Route không tìm thấy.' });
+});
+
 // Error handler middleware - phải đặt sau tất cả routes
 app.use((err, req, res, next) => {
-  console.error('=== Unhandled Error ===');
-  console.error('Error:', err);
-  console.error('Request URL:', req.url);
-  console.error('Request Method:', req.method);
-  console.error('Request Body:', req.body);
-  console.error('Stack:', err.stack);
-  
+  logError(
+    'Unhandled error',
+    {
+      err_message: err?.message || String(err),
+      stack: err?.stack ? String(err.stack).slice(0, 4000) : null,
+      status: err?.status || 500,
+    },
+    req
+  );
+
   res.status(err.status || 500).json({
     success: false,
     message: err.message || 'Lỗi hệ thống không xác định.',
@@ -1202,19 +1219,19 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Xử lý lỗi 404 - phải đặt sau error handler
-app.use((req, res) => {
-  res.status(404).json({ success: false, message: 'API Route không tìm thấy.' });
-});
-
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
+  systemLog().info('CRM Backend started', {
+    port: Number(PORT),
+    node_env: process.env.NODE_ENV || 'development',
+  });
   console.log('-------------------------------------------------------');
   console.log(`🚀 CRM Backend Server running: http://localhost:${PORT}`);
   console.log(`📚 Swagger API Docs: http://localhost:${PORT}/api-docs`);
   console.log('🔒 Authentication: JWT (Bearer Token)');
   console.log('📦 Database: PostgreSQL (UUID & Unix Timestamp)');
+  console.log(`📝 File logs: ./${getLogDirRelative()} (retention ${process.env.LOG_RETENTION || '60d'}, theo ngày + tenant)`);
   console.log('-------------------------------------------------------');
 
   // Bật scheduler đồng bộ CBS (06:00 & 18:00 giờ VN)
@@ -1222,6 +1239,7 @@ app.listen(PORT, () => {
     try {
       startCbsScheduler();
     } catch (e) {
+      logError('CBS scheduler start failed', { err_message: e?.message || String(e) });
       console.error('[CBS scheduler] Không khởi động được:', e);
     }
   } else {

@@ -12,6 +12,7 @@ import {
   EMPLOYEE_TARGET_ROLES_FOR_EXECUTIVE,
   EMPLOYEE_TARGET_ROLES_FOR_TENANT_ADMIN,
 } from '../config/rbac.js';
+import { logInfo, logWarn, logError } from '../services/appLogger.js';
 
 const VALID_ROLES_FOR_UPDATE = ['super_admin', 'admin', 'director', 'manager', 'leader', 'sales'];
 
@@ -218,6 +219,7 @@ export const login = async (req, res) => {
     }
 
     if (result.rows.length === 0) {
+      logWarn('Login failed: user not found or inactive', { username: usernameTrim, reason: 'not_found' }, req);
       return res.status(401).json({ success: false, message: 'Tài khoản không tồn tại hoặc bị khóa.' });
     }
 
@@ -226,6 +228,15 @@ export const login = async (req, res) => {
     // 2. Kiểm tra mật khẩu
     const isMatch = await bcrypt.compare(password, employee.password_hash);
     if (!isMatch) {
+      logWarn(
+        'Login failed: bad password',
+        {
+          username: usernameTrim,
+          tenant_id: employee.tenant_id || null,
+          reason: 'bad_password',
+        },
+        req
+      );
       return res.status(401).json({ success: false, message: 'Mật khẩu không chính xác.' });
     }
 
@@ -249,6 +260,17 @@ export const login = async (req, res) => {
       path: '/',
     });
 
+    logInfo(
+      'Login success',
+      {
+        username: employee.username,
+        user_id: employee.employee_id,
+        tenant_id: employee.tenant_id || null,
+        role: employee.role,
+      },
+      req
+    );
+
     res.json({
       success: true,
       message: 'Đăng nhập thành công!',
@@ -263,6 +285,7 @@ export const login = async (req, res) => {
       }
     });
   } catch (error) {
+    logError('Login error', { err_message: error?.message || String(error), stack: error?.stack?.slice?.(0, 2000) }, req);
     console.error('Lỗi Login:', error);
     res.status(500).json({ success: false, message: 'Lỗi hệ thống khi đăng nhập.' });
   }
