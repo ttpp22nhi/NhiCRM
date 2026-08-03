@@ -151,3 +151,27 @@ export function currentVNMonthRange(now = new Date()) {
   const to = new Date(Date.UTC(y, m + 1, 0))
   return { from, to, year: y, month: m + 1 }
 }
+
+/**
+ * Kỳ đồng bộ CBS mặc định theo giờ VN:
+ * - Ngày 1: tháng trước (CBS còn đổ nốt dữ liệu tháng cũ)
+ * - Từ ngày 2: tháng hiện tại
+ */
+export function defaultCbsSyncMonthRange(now = new Date()) {
+  const vnNow = new Date(now.getTime() + 7 * 60 * 60 * 1000)
+  let y = vnNow.getUTCFullYear()
+  let m = vnNow.getUTCMonth() // 0-based
+  const day = vnNow.getUTCDate()
+
+  if (day === 1) {
+    m -= 1
+    if (m < 0) {
+      m = 11
+      y -= 1
+    }
+  }
+
+  const from = new Date(Date.UTC(y, m, 1))
+  const to = new Date(Date.UTC(y, m + 1, 0))
+  return { from, to, year: y, month: m + 1 }
+}

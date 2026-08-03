@@ -4,13 +4,14 @@
  *    khóa nghiệp vụ (HĐ + mã SP + ngày kích hoạt [+ serial nếu có]). Đổi giá → UPDATE, không INSERT.
  *  - fingerprint chỉ dùng phụ (legacy / unique index), không phải khóa chính khi sync.
  *  - Sau upsert: gỡ orphan fingerprint + gỡ unclaimed trùng business key với bản approved.
- *  - syncAllTenants(): quét mọi cấu hình auto_sync=true (luôn dùng tháng hiện tại VN).
+ *  - syncAllTenants(): quét mọi cấu hình auto_sync=true.
+ *    Kỳ mặc định (giờ VN): ngày 1 = tháng trước; từ ngày 2 = tháng hiện tại.
  */
 
 import crypto from 'crypto'
 import { v4 as uuidv4 } from 'uuid'
 import pool from '../database.js'
-import { currentVNMonthRange, fetchMonthlyReport, loginCbs, vnMonthRangeFromYyyyMm } from './cbsClient.js'
+import { defaultCbsSyncMonthRange, fetchMonthlyReport, loginCbs, vnMonthRangeFromYyyyMm } from './cbsClient.js'
 import { recomputeKpiActuals } from './kpiFromDealsSyncService.js'
 import { refreshKpiCustomerKindForTenant } from './customerKindRefreshService.js'
 import { createAutoTasksForPendingCbsOrders } from './cbsAutoTaskService.js'
@@ -449,7 +450,7 @@ async function upsertOrder(tenantId, rawItem, now, options = {}) {
  * @param {{ range?: { from: Date, to: Date }, period?: string }} [opts]
  *        - period: YYYY-MM — fetch đúng kỳ đó (cho đồng bộ tay khi xem tháng cũ)
  *        - range: override from/to trực tiếp
- *        - mặc định: tháng hiện tại (giờ VN)
+ *        - mặc định (giờ VN): ngày 1 = tháng trước; từ ngày 2 = tháng hiện tại
  * Trả về { inserted, updated, total, synced_for_period, removed_orphans }.
  */
 export async function syncTenant(tenantId, { range, period } = {}) {
@@ -470,7 +471,7 @@ export async function syncTenant(tenantId, { range, period } = {}) {
     }
   }
   if (!resolvedRange) {
-    const cur = currentVNMonthRange()
+    const cur = defaultCbsSyncMonthRange()
     resolvedRange = { from: cur.from, to: cur.to }
     syncedForPeriod = `${cur.year}-${String(cur.month).padStart(2, '0')}`
   } else if (syncedForPeriod == null && resolvedRange.from) {
